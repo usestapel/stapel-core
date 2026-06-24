@@ -65,10 +65,10 @@ class JWTConfig:
     # Token lifetimes
     access_token_lifetime: timedelta = field(default_factory=lambda: timedelta(hours=1))
     refresh_token_lifetime: timedelta = field(default_factory=lambda: timedelta(days=7))
-    
+
     # Algorithm for signing: "HS256" (symmetric) or "RS256" (asymmetric)
     algorithm: str = "HS256"
-    
+
     # Cookie settings
     cookie_name: str = "iron_jwt"
     refresh_cookie_name: str = "iron_refresh_jwt"
@@ -77,29 +77,29 @@ class JWTConfig:
     cookie_secure: bool = False  # Set to True in production with HTTPS
     cookie_httponly: bool = True
     cookie_samesite: str = "Lax"  # "Strict", "Lax", or "None"
-    
+
     # Token settings
     token_type: str = "Bearer"
-    
+
     # Header settings
     auth_header_name: str = "Authorization"
     auth_header_prefix: str = "Bearer"
-    
+
     # User identifier field (used for matching users across services)
     user_identifier_field: str = "user_id"
-    
+
     # Refresh threshold - token is considered "near expiry" if less than this time remains
     refresh_threshold: timedelta = field(default_factory=lambda: timedelta(minutes=5))
-    
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         # Load keys from files if paths are provided
         if self.private_key_path and not self.private_key:
             self.private_key = self._load_key_file(self.private_key_path)
-        
+
         if self.public_key_path and not self.public_key:
             self.public_key = self._load_key_file(self.public_key_path)
-        
+
         # Validate key configuration based on algorithm
         if self.algorithm == "RS256":
             # RS256 requires at least public_key for verification
@@ -110,13 +110,13 @@ class JWTConfig:
                 raise ValueError("HS256 algorithm requires secret_key")
         else:
             raise ValueError(f"Unsupported algorithm: {self.algorithm}. Use 'HS256' or 'RS256'")
-        
+
         if self.access_token_lifetime >= self.refresh_token_lifetime:
             raise ValueError("refresh_token_lifetime must be greater than access_token_lifetime")
-        
+
         if self.cookie_samesite not in ["Strict", "Lax", "None"]:
             raise ValueError("cookie_samesite must be 'Strict', 'Lax', or 'None'")
-    
+
     def _load_key_file(self, path: str) -> str:
         """Load a key from a file path."""
         try:
@@ -124,19 +124,19 @@ class JWTConfig:
                 return f.read()
         except Exception as e:
             raise ValueError(f"Failed to load key from {path}: {e}")
-    
+
     def can_sign(self) -> bool:
         """Check if this config can sign tokens (generate new tokens)."""
         if self.algorithm == "RS256":
             return self.private_key is not None
         return bool(self.secret_key)
-    
+
     def can_verify(self) -> bool:
         """Check if this config can verify tokens."""
         if self.algorithm == "RS256":
             return self.public_key is not None or self.private_key is not None
         return bool(self.secret_key)
-    
+
     def get_signing_key(self):
         """Get the key used for signing tokens."""
         if self.algorithm == "RS256":
@@ -144,33 +144,33 @@ class JWTConfig:
                 raise ValueError("RS256 signing requires private_key")
             return self.private_key
         return self.secret_key
-    
+
     def get_verification_key(self):
         """Get the key used for verifying tokens."""
         if self.algorithm == "RS256":
             # Prefer public key, but private key can also verify
             return self.public_key or self.private_key
         return self.secret_key
-    
+
     @classmethod
     def from_dict(cls, config_dict: dict) -> "JWTConfig":
         """
         Create JWTConfig from a dictionary.
-        
+
         Useful for loading from environment variables or configuration files.
         """
         # Convert timedelta values if they're provided as seconds
         if "access_token_lifetime" in config_dict and isinstance(config_dict["access_token_lifetime"], (int, float)):
             config_dict["access_token_lifetime"] = timedelta(seconds=config_dict["access_token_lifetime"])
-        
+
         if "refresh_token_lifetime" in config_dict and isinstance(config_dict["refresh_token_lifetime"], (int, float)):
             config_dict["refresh_token_lifetime"] = timedelta(seconds=config_dict["refresh_token_lifetime"])
-        
+
         if "refresh_threshold" in config_dict and isinstance(config_dict["refresh_threshold"], (int, float)):
             config_dict["refresh_threshold"] = timedelta(seconds=config_dict["refresh_threshold"])
-        
+
         return cls(**config_dict)
-    
+
     def to_dict(self) -> dict:
         """Convert config to dictionary."""
         return {

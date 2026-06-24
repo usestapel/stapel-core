@@ -113,23 +113,23 @@ def prometheus_metrics(request):
     metrics = []
 
     # Service info
-    metrics.append(f'# HELP iron_service_info Service information')
-    metrics.append(f'# TYPE iron_service_info gauge')
+    metrics.append('# HELP iron_service_info Service information')
+    metrics.append('# TYPE iron_service_info gauge')
     metrics.append(f'iron_service_info{{service="{service_name}",version="{version}"}} 1')
 
     # Uptime
-    metrics.append(f'# HELP iron_uptime_seconds Service uptime in seconds')
-    metrics.append(f'# TYPE iron_uptime_seconds gauge')
+    metrics.append('# HELP iron_uptime_seconds Service uptime in seconds')
+    metrics.append('# TYPE iron_uptime_seconds gauge')
     metrics.append(f'iron_uptime_seconds{{service="{service_name}"}} {uptime:.2f}')
 
     # Database health
-    metrics.append(f'# HELP iron_database_up Database connection status')
-    metrics.append(f'# TYPE iron_database_up gauge')
+    metrics.append('# HELP iron_database_up Database connection status')
+    metrics.append('# TYPE iron_database_up gauge')
     metrics.append(f'iron_database_up{{service="{service_name}"}} {db_ok}')
 
     # Service up
-    metrics.append(f'# HELP iron_up Service is up')
-    metrics.append(f'# TYPE iron_up gauge')
+    metrics.append('# HELP iron_up Service is up')
+    metrics.append('# TYPE iron_up gauge')
     metrics.append(f'iron_up{{service="{service_name}"}} 1')
 
     # Append custom metrics from registered exporters

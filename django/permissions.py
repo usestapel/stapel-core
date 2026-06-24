@@ -10,10 +10,10 @@ from rest_framework import permissions
 class IsStaffUser(permissions.BasePermission):
     """
     Permission class that only allows staff users to access the API.
-    
+
     This ensures that DRF browsable API and Swagger documentation
     are only accessible to authenticated staff users (those logged into admin).
-    
+
     Usage:
         In settings.py:
         REST_FRAMEWORK = {
@@ -21,26 +21,26 @@ class IsStaffUser(permissions.BasePermission):
                 'stapel_core.django.permissions.IsStaffUser',
             ],
         }
-        
+
         Or in individual views:
         class MyViewSet(viewsets.ModelViewSet):
             permission_classes = [IsStaffUser]
     """
-    
+
     def has_permission(self, request, view):
         """
         Check if user is authenticated and is staff.
-        
+
         Args:
             request: Django request object
             view: DRF view object
-            
+
         Returns:
             bool: True if user is staff, False otherwise
         """
         return bool(
-            request.user and 
-            request.user.is_authenticated and 
+            request.user and
+            request.user.is_authenticated and
             (request.user.is_staff or request.user.is_superuser)
         )
 
@@ -48,26 +48,26 @@ class IsStaffUser(permissions.BasePermission):
 class IsSuperUser(permissions.BasePermission):
     """
     Permission class that only allows superusers to access the API.
-    
+
     Usage:
         class AdminOnlyViewSet(viewsets.ModelViewSet):
             permission_classes = [IsSuperUser]
     """
-    
+
     def has_permission(self, request, view):
         """
         Check if user is authenticated and is superuser.
-        
+
         Args:
             request: Django request object
             view: DRF view object
-            
+
         Returns:
             bool: True if user is superuser, False otherwise
         """
         return bool(
-            request.user and 
-            request.user.is_authenticated and 
+            request.user and
+            request.user.is_authenticated and
             request.user.is_superuser
         )
 

@@ -17,7 +17,7 @@ import jwt
 import logging
 import hashlib
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 
 from .config import JWTConfig
@@ -29,38 +29,38 @@ logger = logging.getLogger(__name__)
 class JWTHandler:
     """
     Pure Python JWT handler for generating and validating tokens.
-    
+
     This class has no framework dependencies and can be used with
     Django, Flask, FastAPI, or any other Python framework.
-    
+
     Supports both symmetric (HS256) and asymmetric (RS256) algorithms:
     - HS256: Uses shared secret_key for both signing and verification
     - RS256: Uses RSA key pair (private for signing, public for verification)
-    
+
     In RS256 mode, token generation requires private_key. Services without
     private_key can only validate tokens, not generate them.
     """
-    
+
     def __init__(self, config: JWTConfig):
         """
         Initialize JWT handler with configuration.
-        
+
         Args:
             config: JWTConfig instance with JWT settings
         """
         self.config = config
-    
+
     def generate_token_pair(self, user_data: Dict[str, Any]) -> Tuple[str, str]:
         """
         Generate access and refresh token pair.
-        
+
         Args:
             user_data: Dictionary containing user information to encode in tokens.
                       Should include user_identifier_field (e.g., 'email')
-        
+
         Returns:
             Tuple of (access_token, refresh_token)
-        
+
         Raises:
             ValueError: If required user data is missing or signing not available
         """
@@ -70,34 +70,34 @@ class JWTHandler:
                 f"For RS256, private_key is required. "
                 f"Current algorithm: {self.config.algorithm}"
             )
-        
+
         if self.config.user_identifier_field not in user_data:
             raise ValueError(f"user_data must contain '{self.config.user_identifier_field}'")
-        
+
         access_token = self.generate_access_token(user_data)
         refresh_token = self.generate_refresh_token(user_data)
-        
+
         return access_token, refresh_token
-    
+
     def generate_access_token(self, user_data: Dict[str, Any]) -> str:
         """
         Generate an access token.
-        
+
         Args:
             user_data: Dictionary containing user information
-        
+
         Returns:
             Encoded JWT access token string
-            
+
         Raises:
             ValueError: If signing is not available (RS256 without private_key)
         """
         if not self.config.can_sign():
             raise ValueError(
-                f"Token generation not available. "
-                f"For RS256, private_key is required."
+                "Token generation not available. "
+                "For RS256, private_key is required."
             )
-        
+
         now = datetime.utcnow()
         payload = {
             **user_data,
@@ -122,26 +122,26 @@ class JWTHandler:
 
         signing_key = self.config.get_signing_key()
         return jwt.encode(payload, signing_key, algorithm=self.config.algorithm, headers=headers if headers else None)
-    
+
     def generate_refresh_token(self, user_data: Dict[str, Any]) -> str:
         """
         Generate a refresh token.
-        
+
         Args:
             user_data: Dictionary containing user information
-        
+
         Returns:
             Encoded JWT refresh token string
-            
+
         Raises:
             ValueError: If signing is not available (RS256 without private_key)
         """
         if not self.config.can_sign():
             raise ValueError(
-                f"Token generation not available. "
-                f"For RS256, private_key is required."
+                "Token generation not available. "
+                "For RS256, private_key is required."
             )
-        
+
         now = datetime.utcnow()
         # Include all user data in refresh token so it can be used for token refresh
         # without needing to query database (important for cross-service auth)
@@ -168,7 +168,7 @@ class JWTHandler:
 
         signing_key = self.config.get_signing_key()
         return jwt.encode(payload, signing_key, algorithm=self.config.algorithm, headers=headers if headers else None)
-    
+
     def decode_token(self, token: str, verify: bool = True) -> Optional[Dict[str, Any]]:
         """
         Decode and validate a JWT token.
@@ -247,100 +247,100 @@ class JWTHandler:
             except Exception as parse_err:
                 logger.warning(f"[DEBUG] Invalid token: {e} | parse_error={parse_err}")
             return None
-    
+
     def is_token_expired(self, token: str) -> bool:
         """
         Check if token is expired without raising exception.
-        
+
         Args:
             token: JWT token string
-        
+
         Returns:
             True if token is expired, False otherwise
         """
         payload = self.decode_token(token, verify=False)
         if not payload:
             return True
-        
+
         exp = payload.get("exp")
         if not exp:
             return True
-        
+
         return datetime.utcnow().timestamp() >= exp
-    
+
     def get_token_expiration(self, token: str) -> Optional[datetime]:
         """
         Get token expiration datetime.
-        
+
         Args:
             token: JWT token string
-        
+
         Returns:
             Expiration datetime or None if token is invalid
         """
         payload = self.decode_token(token, verify=False)
         if not payload:
             return None
-        
+
         exp = payload.get("exp")
         if not exp:
             return None
-        
+
         return datetime.fromtimestamp(exp)
-    
+
     def is_token_near_expiry(self, token: str) -> bool:
         """
         Check if token is near expiration (within refresh threshold).
-        
+
         Args:
             token: JWT token string
-        
+
         Returns:
             True if token should be refreshed, False otherwise
         """
         expiration = self.get_token_expiration(token)
         if not expiration:
             return True
-        
+
         time_until_expiry = expiration - datetime.utcnow()
         return time_until_expiry <= self.config.refresh_threshold
-    
+
     def validate_token_type(self, token: str, expected_type: str) -> bool:
         """
         Validate that token is of expected type (access or refresh).
-        
+
         Args:
             token: JWT token string
             expected_type: Expected token type ("access" or "refresh")
-        
+
         Returns:
             True if token type matches, False otherwise
         """
         payload = self.decode_token(token, verify=False)
         if not payload:
             return False
-        
+
         return payload.get("token_type") == expected_type
-    
+
     def extract_user_data(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Extract user data from token payload.
-        
+
         Args:
             token: JWT token string
-        
+
         Returns:
             Dictionary with user data or None if token is invalid
         """
         if not payload:
             return None
-        
+
         # Remove JWT-specific claims
-        user_data = {k: v for k, v in payload.items() 
+        user_data = {k: v for k, v in payload.items()
                     if k not in ["exp", "iat", "jti", "token_type"]}
-        
+
         return user_data
-    
+
     @staticmethod
     def _generate_jti() -> str:
         """
