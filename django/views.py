@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 class JWTCookieLoginView(LoginView):
     """
     Custom login view that generates JWT tokens and sets them as HTTP-only cookies.
-    
+
     This view extends Django's standard LoginView and adds JWT token generation
     after successful authentication.
     """
-    
+
     template_name = 'admin/login.html'
 
     def dispatch(self, request, *args, **kwargs):
@@ -63,12 +63,12 @@ class JWTCookieLoginView(LoginView):
     def form_valid(self, form):
         """
         Handle valid form submission.
-        
+
         Authenticates user, generates JWT tokens, and sets them as cookies.
-        
+
         Args:
             form: Django authentication form
-        
+
         Returns:
             HTTP response with JWT cookies set
         """

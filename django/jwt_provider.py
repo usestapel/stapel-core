@@ -20,7 +20,6 @@ Usage:
 
 import logging
 from typing import Optional, Tuple, Dict, Any
-from functools import cached_property
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,6 @@ class JWTProvider:
         from .utils import load_jwt_config_from_settings
         from ..core.token_manager import TokenManager
         from ..core.jwt_handler import JWTHandler
-        from ..core.token_blacklist import TokenBlacklist
 
         self._config = load_jwt_config_from_settings()
         self._blacklist = self._init_blacklist()

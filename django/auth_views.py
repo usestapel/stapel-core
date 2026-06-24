@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 class JWTLogoutView(View):
     """
     View to handle JWT logout.
-    
+
     This view:
     1. Blacklists the current JWT tokens
     2. Clears JWT cookies
     3. Logs out Django session
     """
-    
+
     def _get_redis_client(self):
         """Get Redis client from Django cache."""
         try:
@@ -39,7 +39,7 @@ class JWTLogoutView(View):
         except Exception as e:
             logger.error(f"Error getting Redis client: {e}")
             return None
-    
+
     def post(self, request):
         """Handle POST logout request."""
         # Tell middleware to skip setting new cookies on response
@@ -92,7 +92,7 @@ class JWTLogoutView(View):
             response.delete_cookie(cookie_name, path='/', domain=cookie_domain, samesite=cookie_samesite)
             response.delete_cookie(refresh_cookie_name, path='/', domain=cookie_domain, samesite=cookie_samesite)
 
-            logger.info(f"User logged out successfully")
+            logger.info("User logged out successfully")
             return response
 
         except Exception as e:
@@ -101,7 +101,7 @@ class JWTLogoutView(View):
                 'status': 'error',
                 'message': 'Logout failed'
             }, status=500)
-    
+
     def get(self, request):
         """Handle GET logout request (for compatibility)."""
         return self.post(request)
@@ -110,10 +110,10 @@ class JWTLogoutView(View):
 class JWTRefreshView(View):
     """
     View to explicitly refresh JWT tokens.
-    
+
     Accepts refresh token and returns new access token.
     """
-    
+
     def post(self, request):
         """Handle POST refresh request."""
         try:
@@ -132,35 +132,35 @@ class JWTRefreshView(View):
                     'status': 'error',
                     'message': 'No refresh token provided'
                 }, status=400)
-            
+
             # Initialize JWT config and token manager
             config = load_jwt_config_from_settings()
-            
+
             token_manager = TokenManager(config)
-            
+
             # Refresh access token (preserves user data from refresh token)
             new_access_token = token_manager.refresh_access_token(refresh_token)
-            
+
             if not new_access_token:
                 return JsonResponse({
                     'status': 'error',
                     'message': 'Failed to refresh token'
                 }, status=401)
-            
+
             # Create response
             response = JsonResponse({
                 'status': 'success',
                 'message': 'Token refreshed successfully',
                 'access_token': new_access_token
             })
-            
+
             # Set new access token as cookie
             set_jwt_cookies(response, new_access_token)
-            
+
             logger.info("Token refreshed successfully")
-            
+
             return response
-            
+
         except Exception as e:
             logger.error(f"Error during token refresh: {e}", exc_info=True)
             return JsonResponse({
@@ -172,41 +172,41 @@ class JWTRefreshView(View):
 class JWTStatusView(View):
     """
     View to check JWT token status.
-    
+
     Returns information about current authentication state.
     """
-    
+
     def get(self, request):
         """Handle GET status request."""
         try:
             access_token, refresh_token = extract_jwt_from_request(request)
-            
+
             if not access_token and not refresh_token:
                 return JsonResponse({
                     'authenticated': False,
                     'message': 'No tokens found'
                 })
-            
+
             # Initialize JWT handler
             config = load_jwt_config_from_settings()
-            
+
             from ..core.jwt_handler import JWTHandler
             jwt_handler = JWTHandler(config)
-            
+
             # Check access token
             access_valid = False
             access_payload = None
             if access_token:
                 access_payload = jwt_handler.decode_token(access_token, verify=True)
                 access_valid = access_payload is not None
-            
+
             # Check refresh token
             refresh_valid = False
             refresh_payload = None
             if refresh_token:
                 refresh_payload = jwt_handler.decode_token(refresh_token, verify=True)
                 refresh_valid = refresh_payload is not None
-            
+
             return JsonResponse({
                 'authenticated': request.user.is_authenticated,
                 'user': {
@@ -223,7 +223,7 @@ class JWTStatusView(View):
                     'refresh_token_exp': refresh_payload.get('exp') if refresh_payload else None,
                 }
             })
-            
+
         except Exception as e:
             logger.error(f"Error checking status: {e}", exc_info=True)
             return JsonResponse({

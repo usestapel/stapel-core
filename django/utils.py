@@ -6,7 +6,6 @@ Provides helper functions for loading user data from Django User model.
 
 import logging
 from typing import Dict, Any, Optional
-from uuid import UUID
 from django.db import transaction, IntegrityError
 
 logger = logging.getLogger(__name__)

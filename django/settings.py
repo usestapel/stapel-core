@@ -157,7 +157,7 @@ SPECTACULAR_SETTINGS = {
     # Schema generation settings
     'COMPONENT_SPLIT_REQUEST': True,
     'SCHEMA_PATH_PREFIX': r'/api/',
-    
+
     # Tag extraction from URL path (first segment after /api/)
     # e.g., /api/auth/login/ -> "auth", /api/categories/ -> "categories"
     'PREPROCESSING_HOOKS': ['stapel_core.django.openapi.preprocess_exclude_schema_endpoints'],

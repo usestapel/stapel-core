@@ -7,7 +7,6 @@ and redirects them to the centralized auth service login with a 'next' parameter
 
 import logging
 from django.shortcuts import redirect
-from django.urls import resolve
 from urllib.parse import urlencode
 from django.utils.deprecation import MiddlewareMixin
 
@@ -17,12 +16,12 @@ logger = logging.getLogger(__name__)
 class AdminLoginRedirectMiddleware(MiddlewareMixin):
     """
     Middleware to redirect unauthenticated admin requests to centralized login.
-    
+
     When a user tries to access an admin page without being authenticated,
     this middleware redirects them to /auth/admin/login/ with a 'next' parameter
     pointing to the original requested URL.
     """
-    
+
     def process_request(self, request):
         """
         Check if request is for admin page and user is not authenticated.

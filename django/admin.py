@@ -129,7 +129,7 @@ class UserAdmin(BaseUserAdmin):
     list_filter = ['auth_type', 'is_anonymous', 'is_active', 'is_email_verified', 'is_phone_verified']
     search_fields = ['email', 'username', 'phone']
     ordering = ['-created_at']
-    
+
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         (_('Personal info'), {'fields': ('username', 'phone', 'avatar', 'bio')}),
@@ -138,9 +138,9 @@ class UserAdmin(BaseUserAdmin):
         (_('Permissions'), {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         (_('Important dates'), {'fields': ('last_login', 'created_at', 'updated_at')}),
     )
-    
+
     readonly_fields = ['id', 'created_at', 'updated_at']
-    
+
     add_fieldsets = (
         (None, {
             'classes': ('wide',),

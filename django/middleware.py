@@ -66,7 +66,7 @@ class JWTAuthMiddleware(MiddlewareMixin):
     def __init__(self, get_response):
         super().__init__(get_response)
         # Use unified JWT provider - single source of truth
-        logger.info(f"JWTAuthMiddleware initialized using jwt_provider")
+        logger.info("JWTAuthMiddleware initialized using jwt_provider")
 
     def _should_skip(self, path: str) -> bool:
         """Check if this path should skip JWT processing."""
@@ -118,12 +118,12 @@ class JWTAuthMiddleware(MiddlewareMixin):
 
         # Step 3: Check blacklist for BOTH tokens
         if access_token and jwt_provider.is_blacklisted(access_token):
-            logger.debug(f"Blacklisted access token rejected")
+            logger.debug("Blacklisted access token rejected")
             request._jwt_clear_cookies = True
             return None
 
         if refresh_token and jwt_provider.is_blacklisted(refresh_token):
-            logger.debug(f"Blacklisted refresh token rejected")
+            logger.debug("Blacklisted refresh token rejected")
             request._jwt_clear_cookies = True
             return None
 
@@ -188,7 +188,7 @@ class JWTAuthMiddleware(MiddlewareMixin):
         if new_access_token:
             request._jwt_refreshed = True
             request._new_access_token = new_access_token
-            logger.debug(f"Proactive token refresh")
+            logger.debug("Proactive token refresh")
 
     def _login_user(self, request, user_data: dict):
         """Get or create user and establish Django session."""
