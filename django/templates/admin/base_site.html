@@ -1,0 +1,229 @@
+{% extends "admin/base.html" %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% load static %}
+
+{% block extrahead %}
+{{ block.super }}
+{% if user.is_authenticated %}
+<script src="{% static 'admin/js/jwt_session.js' %}"></script>
+{% endif %}
+<style>
+.iron-nav {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 0;
+    font-size: 14px;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+.iron-nav a {
+    color: var(--header-link-color, #fff);
+    text-decoration: none;
+}
+.iron-nav a:hover {
+    text-decoration: underline;
+}
+.iron-dropdown {
+    position: relative;
+    display: inline-block;
+}
+.iron-dropdown-btn {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: var(--header-link-color, #fff);
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.iron-dropdown-btn:hover {
+    background: rgba(255,255,255,0.2);
+}
+.iron-dropdown-content {
+    display: none;
+    position: absolute;
+    top: calc(100% - 4px);
+    left: 0;
+    background: var(--body-bg, #fff);
+    min-width: 280px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    border-radius: 6px;
+    z-index: 1000;
+    padding-top: 8px;
+    border: 1px solid var(--hairline-color, #e8e8e8);
+}
+.iron-dropdown:hover .iron-dropdown-content,
+.iron-dropdown-content:hover {
+    display: block;
+}
+.iron-dropdown-section {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--hairline-color, #e8e8e8);
+}
+.iron-dropdown-section:last-child {
+    border-bottom: none;
+}
+.iron-dropdown-title {
+    padding: 4px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--body-quiet-color, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.iron-dropdown-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 16px;
+    color: var(--body-fg, #333);
+    text-decoration: none;
+}
+.iron-dropdown-item:hover {
+    background: var(--darkened-bg, #f5f5f5);
+    text-decoration: none;
+}
+.iron-dropdown-item.active {
+    background: var(--selected-bg, #e4e4e4);
+    font-weight: 600;
+}
+.iron-dropdown-item .links {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+}
+.iron-dropdown-item .links a {
+    color: var(--link-fg, #417690);
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: var(--darkened-bg, #f0f0f0);
+}
+.iron-dropdown-item .links a:hover {
+    background: var(--link-fg, #417690);
+    color: #fff;
+    text-decoration: none;
+}
+.iron-swagger-btn {
+    background: #85ea2d;
+    color: #173647 !important;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-weight: 500;
+    font-size: 13px;
+}
+.iron-swagger-btn:hover {
+    background: #6ecf1a;
+    text-decoration: none !important;
+}
+.iron-dashboard-btn {
+    background: #3b82f6;
+    color: #fff !important;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-weight: 500;
+    font-size: 13px;
+}
+.iron-dashboard-btn:hover {
+    background: #2563eb;
+    text-decoration: none !important;
+}
+/* Force filter sidebar on the right (Django 6.0 flex layout reinforcement) */
+#changelist .changelist-form-container {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: flex-start;
+}
+#changelist .changelist-form-container > search,
+#changelist .changelist-form-container > #changelist-filter {
+    display: block;
+    flex: 0 0 240px !important;
+    order: 1 !important;
+    margin: 0 0 0 30px !important;
+    width: 240px;
+}
+#changelist .changelist-form-container > div {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+@media (max-width: 767px) {
+    #changelist .changelist-form-container {
+        flex-direction: column !important;
+    }
+    #changelist .changelist-form-container > search,
+    #changelist .changelist-form-container > #changelist-filter {
+        flex: none !important;
+        width: 100% !important;
+        margin: 30px 0 0 0 !important;
+        order: 1;
+    }
+}
+</style>
+{% endblock %}
+
+{% block branding %}
+<h1 id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></h1>
+{% if iron_services and user.is_authenticated %}
+<div class="iron-nav">
+    <a href="{{ current_swagger_url }}" class="iron-swagger-btn">Swagger</a>
+    {% if current_dashboard_url %}
+    <a href="{{ current_dashboard_url }}" class="iron-dashboard-btn">Dashboard</a>
+    {% endif %}
+
+    <div class="iron-dropdown">
+        <button class="iron-dropdown-btn">
+            Services ▾
+        </button>
+        <div class="iron-dropdown-content">
+            <div class="iron-dropdown-section">
+                <div class="iron-dropdown-title">All Services</div>
+                {% for service in iron_services %}
+                <div class="iron-dropdown-item{% if service.is_active %} active{% endif %}">
+                    <span>{{ service.name }}</span>
+                    <span class="links">
+                        <a href="{{ service.admin_url }}">Admin</a>
+                        <a href="{{ service.swagger_url }}">API</a>
+                    </span>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="iron-dropdown-section">
+                <div class="iron-dropdown-title">Tools</div>
+                <div class="iron-dropdown-item">
+                    <span>Translator Dashboard</span>
+                    <span class="links">
+                        <a href="/translate/dashboard/">Open</a>
+                    </span>
+                </div>
+            </div>
+            <div class="iron-dropdown-section">
+                <div class="iron-dropdown-title">Monitoring</div>
+                <div class="iron-dropdown-item">
+                    <span>Grafana</span>
+                    <span class="links">
+                        <a href="/monitoring/grafana/d/iron-home/iron-system-overview" target="_blank">Open</a>
+                    </span>
+                </div>
+                <div class="iron-dropdown-item">
+                    <span>Prometheus</span>
+                    <span class="links">
+                        <a href="/monitoring/prometheus/" target="_blank">Open</a>
+                    </span>
+                </div>
+                <div class="iron-dropdown-item">
+                    <span>Kafka UI</span>
+                    <span class="links">
+                        <a href="/monitoring/kafka-ui/" target="_blank">Open</a>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
