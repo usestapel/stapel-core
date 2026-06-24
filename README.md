@@ -22,10 +22,6 @@ INSTALLED_APPS = [
 
 ## Bus events
 
-## Contributing
-
-The source for this package lives inside the [client-project-backend](https://github.com/UCSoftworks) monorepo as a git submodule.
-
 ## License
 
 MIT — see [LICENSE](LICENSE)
