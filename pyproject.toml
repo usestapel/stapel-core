@@ -39,4 +39,4 @@ all = [
 
 [tool.setuptools]
 package-dir = {"stapel_core" = "."}
-packages = ["stapel_core", "stapel_core.migrations"]
+packages = ["stapel_core"]
