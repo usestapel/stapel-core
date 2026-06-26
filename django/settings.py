@@ -424,7 +424,16 @@ JWT_PUBLIC_KEY = base64.b64decode(_jwt_public_key_b64).decode('utf-8') if _jwt_p
 JWT_ISSUER = os.getenv('JWT_ISSUER', f'https://{IRON_HOST}')
 JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'iron')
 
-# Kafka Configuration
+# Message bus backend
+# Options:
+#   stapel_core.bus.backends.kafka.KafkaBus   — production (default)
+#   stapel_core.bus.backends.memory.MemoryBus — tests / local dev without a broker
+STAPEL_BUS_BACKEND = os.getenv(
+    'STAPEL_BUS_BACKEND',
+    'stapel_core.bus.backends.kafka.KafkaBus',
+)
+
+# Kafka Configuration (used when STAPEL_BUS_BACKEND = KafkaBus)
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092')
 KAFKA_SECURITY_PROTOCOL = os.getenv('KAFKA_SECURITY_PROTOCOL', 'PLAINTEXT')
 KAFKA_SASL_MECHANISM = os.getenv('KAFKA_SASL_MECHANISM', '')

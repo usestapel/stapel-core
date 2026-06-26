@@ -39,4 +39,4 @@ all = [
 
 [tool.setuptools]
 package-dir = {"stapel_core" = "."}
-packages = ["stapel_core", "stapel_core.core", "stapel_core.django", "stapel_core.django.management", "stapel_core.django.management.commands", "stapel_core.django.users", "stapel_core.django.users.migrations", "stapel_core.kafka", "stapel_core.notifications"]
+packages = ["stapel_core", "stapel_core.bus", "stapel_core.bus.backends", "stapel_core.core", "stapel_core.django", "stapel_core.django.management", "stapel_core.django.management.commands", "stapel_core.django.users", "stapel_core.django.users.migrations", "stapel_core.kafka", "stapel_core.notifications"]
