@@ -1,10 +1,11 @@
 """
-Publish notification requests to Kafka.
+Publish notification requests to the bus.
 """
 
 import logging
 
-from stapel_core.kafka import publish_event, Event, EventType
+from stapel_core.bus import Event, publish
+from stapel_core.kafka.events import EventType
 from stapel_core.kafka.topics import TOPIC_NOTIFICATION_REQUESTED
 
 logger = logging.getLogger(__name__)
@@ -18,9 +19,9 @@ def request_notification(
     phone: str = None,
     language: str = None,
     source_service: str = "",
-) -> bool:
+) -> None:
     """
-    Publish a notification request to Kafka.
+    Publish a notification request to the bus.
 
     Args:
         notification_type: Type of notification (e.g. 'otp_code', 'new_message')
@@ -30,13 +31,10 @@ def request_notification(
         phone: Direct phone (for unauthenticated flows like OTP)
         language: Language from accept-language header of the originating request
         source_service: Name of the calling service (for tracing)
-
-    Returns:
-        True if the event was queued, False if Kafka is unavailable.
     """
     if not (user_id or email or phone):
         logger.error("request_notification called without user_id, email, or phone")
-        return False
+        return
 
     payload = {
         "notification_type": notification_type,
@@ -47,12 +45,12 @@ def request_notification(
         "variables": variables or {},
     }
 
-    return publish_event(
-        topic=TOPIC_NOTIFICATION_REQUESTED,
-        event=Event(
+    publish(
+        TOPIC_NOTIFICATION_REQUESTED,
+        Event(
             event_type=EventType.NOTIFICATION_REQUESTED,
             service=source_service or "unknown",
             payload=payload,
+            key=user_id or email or phone,
         ),
-        key=user_id or email or phone,
     )
