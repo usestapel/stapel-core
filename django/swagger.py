@@ -454,3 +454,11 @@ def get_dev_urls(url_prefix: str = '', mcp_schema_view=None):
         urls.append(path(f'{url_prefix}__debug__/', include(debug_toolbar.urls)))
 
     return urls
+
+
+def get_app_swagger_urls(url_prefix: str, existing_urlpatterns=None, title: str = ''):
+    """
+    Backward-compatible alias for get_swagger_urls.
+    Previously accepted (app_name, urlpatterns, title); prefix is all that's used.
+    """
+    return get_swagger_urls(url_prefix + '/' if not url_prefix.endswith('/') else url_prefix)

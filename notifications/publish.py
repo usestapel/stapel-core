@@ -19,9 +19,11 @@ def request_notification(
     phone: str = None,
     language: str = None,
     source_service: str = "",
-) -> None:
+) -> bool:
     """
     Publish a notification request to the bus.
+
+    Returns True if the event was queued, False on error.
 
     Args:
         notification_type: Type of notification (e.g. 'otp_code', 'new_message')
@@ -34,7 +36,7 @@ def request_notification(
     """
     if not (user_id or email or phone):
         logger.error("request_notification called without user_id, email, or phone")
-        return
+        return False
 
     payload = {
         "notification_type": notification_type,
@@ -45,12 +47,17 @@ def request_notification(
         "variables": variables or {},
     }
 
-    publish(
-        TOPIC_NOTIFICATION_REQUESTED,
-        Event(
-            event_type=EventType.NOTIFICATION_REQUESTED,
-            service=source_service or "unknown",
-            payload=payload,
-            key=user_id or email or phone,
-        ),
-    )
+    try:
+        publish(
+            TOPIC_NOTIFICATION_REQUESTED,
+            Event(
+                event_type=EventType.NOTIFICATION_REQUESTED,
+                service=source_service or "unknown",
+                payload=payload,
+                key=user_id or email or phone,
+            ),
+        )
+        return True
+    except Exception:
+        logger.exception("request_notification failed")
+        return False
