@@ -1,9 +1,9 @@
 """
-Token blacklist implementation using Redis.
+Token blacklist backed by Django's cache framework.
 
-Provides functionality to blacklist JWT tokens (for logout) and check if tokens are revoked.
+Uses whatever cache backend is configured (LocMemCache in tests, Redis in production).
+No raw Redis client needed — the Django cache layer handles backend selection.
 """
-
 import logging
 from datetime import timedelta
 
@@ -11,48 +11,18 @@ logger = logging.getLogger(__name__)
 
 
 class TokenBlacklist:
-    """
-    Token blacklist manager using Redis for distributed storage.
+    """Token blacklist manager using Django's cache framework."""
 
-    This allows tokens to be revoked across all services in the system.
-    """
-
-    def __init__(self, redis_client=None, key_prefix: str = "jwt_blacklist"):
-        """
-        Initialize token blacklist.
-
-        Args:
-            redis_client: Redis client instance (can be None for testing)
-            key_prefix: Prefix for Redis keys
-        """
-        self.redis_client = redis_client
+    def __init__(self, key_prefix: str = "jwt_blacklist"):
         self.key_prefix = key_prefix
-        self._enabled = redis_client is not None
+
+    def _key(self, jti: str) -> str:
+        return f"{self.key_prefix}:{jti}"
 
     def blacklist_token(self, jti: str, expires_in: timedelta) -> bool:
-        """
-        Add token to blacklist.
-
-        Args:
-            jti: Token identifier (jti claim from JWT)
-            expires_in: Time until token naturally expires
-
-        Returns:
-            True if successfully blacklisted, False otherwise
-        """
-        if not self._enabled:
-            logger.warning("Token blacklist not enabled (no Redis client)")
-            return False
-
+        from django.core.cache import cache
         try:
-            key = f"{self.key_prefix}:{jti}"
-            # Set with TTL matching token expiration
-            # After token expires naturally, no need to keep it in blacklist
-            self.redis_client.setex(
-                key,
-                int(expires_in.total_seconds()),
-                "1"
-            )
+            cache.set(self._key(jti), "1", int(expires_in.total_seconds()))
             logger.info(f"Token {jti[:8]}... blacklisted for {expires_in.total_seconds()}s")
             return True
         except Exception as e:
@@ -60,64 +30,26 @@ class TokenBlacklist:
             return False
 
     def is_blacklisted(self, jti: str) -> bool:
-        """
-        Check if token is blacklisted.
-
-        Args:
-            jti: Token identifier (jti claim from JWT)
-
-        Returns:
-            True if token is blacklisted, False otherwise
-        """
-        if not self._enabled:
-            return False
-
+        from django.core.cache import cache
         try:
-            key = f"{self.key_prefix}:{jti}"
-            return bool(self.redis_client.exists(key))
+            return bool(cache.get(self._key(jti)))
         except Exception as e:
             logger.error(f"Error checking blacklist: {e}")
-            # Fail open: if Redis is down, don't block valid tokens
             return False
 
     def remove_from_blacklist(self, jti: str) -> bool:
-        """
-        Remove token from blacklist (rarely needed).
-
-        Args:
-            jti: Token identifier (jti claim from JWT)
-
-        Returns:
-            True if successfully removed, False otherwise
-        """
-        if not self._enabled:
-            return False
-
+        from django.core.cache import cache
         try:
-            key = f"{self.key_prefix}:{jti}"
-            self.redis_client.delete(key)
-            logger.info(f"Token {jti[:8]}... removed from blacklist")
+            cache.delete(self._key(jti))
             return True
         except Exception as e:
             logger.error(f"Error removing from blacklist: {e}")
             return False
 
     def clear_all(self) -> bool:
-        """
-        Clear all blacklisted tokens (use with caution).
-
-        Returns:
-            True if successfully cleared, False otherwise
-        """
-        if not self._enabled:
-            return False
-
+        from django.core.cache import cache
         try:
-            pattern = f"{self.key_prefix}:*"
-            keys = self.redis_client.keys(pattern)
-            if keys:
-                self.redis_client.delete(*keys)
-                logger.warning(f"Cleared {len(keys)} blacklisted tokens")
+            cache.clear()
             return True
         except Exception as e:
             logger.error(f"Error clearing blacklist: {e}")
