@@ -4,7 +4,7 @@ from rest_framework.test import APIRequestFactory
 from rest_framework.exceptions import ValidationError as DRFValidationError, ErrorDetail
 from django.core.exceptions import ValidationError as DjangoValidationError
 
-from stapel_core.django.errors import (
+from stapel_core.django.api.errors import (
     IronResponse,
     IronErrorResponse,
     IronValidationError,
@@ -25,7 +25,7 @@ from stapel_core.django.errors import (
     ERR_429_RATE_LIMIT,
     ERR_500_INTERNAL,
 )
-from stapel_core.django.serializers import IronDataclassSerializer
+from stapel_core.django.api.serializers import IronDataclassSerializer
 
 _factory = APIRequestFactory()
 

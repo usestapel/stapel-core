@@ -4,6 +4,7 @@ from stapel_core.testing import configure_django
 configure_django(
     installed_apps=["stapel_core.django.users"],
     extra_settings={
+        "AUTH_USER_MODEL": "users.User",
         "CACHES": {
             "default": {
                 "BACKEND": "django.core.cache.backends.locmem.LocMemCache",

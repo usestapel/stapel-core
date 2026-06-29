@@ -16,7 +16,7 @@ from drf_spectacular.utils import (
 )
 from drf_spectacular.types import OpenApiTypes
 
-from stapel_core.django.errors import IronErrorSerializer
+from stapel_core.django.api.errors import IronErrorSerializer
 
 
 # =============================================================================

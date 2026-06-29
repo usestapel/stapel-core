@@ -16,8 +16,8 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from stapel_core.django.serializers import IronDataclassSerializer
-from stapel_core.django.permissions import IsServiceRequest, IsStaffUser
+from stapel_core.django.api.serializers import IronDataclassSerializer
+from stapel_core.django.api.permissions import IsServiceRequest, IsStaffUser
 
 
 # =============================================================================

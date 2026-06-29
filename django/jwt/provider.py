@@ -5,7 +5,7 @@ This module provides a SINGLE source of truth for JWT operations.
 All other code should use this module instead of creating JWTConfig/TokenManager directly.
 
 Usage:
-    from stapel_core.django.jwt_provider import jwt_provider
+    from stapel_core.django.jwt.provider import jwt_provider
 
     # Create tokens
     access, refresh = jwt_provider.create_tokens(user)
@@ -45,8 +45,8 @@ class JWTProvider:
             return
 
         from .utils import load_jwt_config_from_settings
-        from ..core.token_manager import TokenManager
-        from ..core.jwt_handler import JWTHandler
+        from stapel_core.core.token_manager import TokenManager
+        from stapel_core.core.jwt_handler import JWTHandler
 
         self._config = load_jwt_config_from_settings()
         self._blacklist = self._init_blacklist()
@@ -61,7 +61,7 @@ class JWTProvider:
 
     def _init_blacklist(self):
         """Initialize token blacklist with Redis client."""
-        from ..core.token_blacklist import TokenBlacklist
+        from stapel_core.core.token_blacklist import TokenBlacklist
         try:
             from django.core.cache import cache
             redis_client = None

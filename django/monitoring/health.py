@@ -28,7 +28,7 @@ def register_metrics_exporter(exporter):
     Register a callable that returns a Prometheus-formatted string.
 
     Usage:
-        from stapel_core.django.health import register_metrics_exporter
+        from stapel_core.django.monitoring.health import register_metrics_exporter
         register_metrics_exporter(my_export_func)
     """
     _custom_metrics_exporters.append(exporter)
@@ -152,7 +152,7 @@ def get_health_urls(prefix: str = ''):
     Get URL patterns for health endpoints.
 
     Usage in urls.py:
-        from stapel_core.django.health import get_health_urls
+        from stapel_core.django.monitoring.health import get_health_urls
 
         urlpatterns = [
             ...

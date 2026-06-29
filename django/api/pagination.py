@@ -5,7 +5,7 @@ Provides efficient pagination for large datasets using cursor/anchor approach
 instead of offset-based pagination. This is ideal for infinite scroll UIs.
 
 Usage:
-    from stapel_core.django.pagination import AnchorPagination
+    from stapel_core.django.api.pagination import AnchorPagination
 
     class MyViewSet(viewsets.ModelViewSet):
         pagination_class = AnchorPagination

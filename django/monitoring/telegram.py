@@ -10,7 +10,7 @@ Usage as logging handler (auto-sends ERROR+ to Telegram):
   Configured via LOGGING in common settings when env vars are set.
 
 Direct usage:
-  from stapel_core.django.telegram import send_alert
+  from stapel_core.django.monitoring.telegram import send_alert
   send_alert("Something broke: <details>")
 """
 
@@ -79,7 +79,7 @@ def send_alert(text: str, service: str = "") -> bool:
 
     Args:
         text: Alert text (HTML allowed)
-        service: Service name for context (e.g. "iron-auth")
+        service: Service name for context (e.g. "stapel-auth")
     """
     prefix = f"🚨 <b>{service}</b>\n" if service else "🚨 <b>Alert</b>\n"
     return send_message(f"{prefix}{text}")
@@ -105,7 +105,9 @@ class TelegramHandler(logging.Handler):
             # Truncate to Telegram's 4096 char limit
             if len(msg) > 3800:
                 msg = msg[:3800] + "\n… (truncated)"
-            escaped = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            escaped = (
+                msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            )
             prefix = f"🚨 <b>{self.service or record.name}</b> [{record.levelname}]\n"
             send_message(f"{prefix}<pre>{escaped}</pre>")
         except Exception:

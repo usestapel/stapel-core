@@ -10,7 +10,7 @@
 <script src="{% static 'admin/js/jwt_session.js' %}"></script>
 {% endif %}
 <style>
-.iron-nav {
+.stapel-nav {
     display: flex;
     align-items: center;
     gap: 16px;
@@ -18,18 +18,18 @@
     font-size: 14px;
     font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
-.iron-nav a {
+.stapel-nav a {
     color: var(--header-link-color, #fff);
     text-decoration: none;
 }
-.iron-nav a:hover {
+.stapel-nav a:hover {
     text-decoration: underline;
 }
-.iron-dropdown {
+.stapel-dropdown {
     position: relative;
     display: inline-block;
 }
-.iron-dropdown-btn {
+.stapel-dropdown-btn {
     background: rgba(255,255,255,0.1);
     border: 1px solid rgba(255,255,255,0.2);
     color: var(--header-link-color, #fff);
@@ -41,10 +41,10 @@
     align-items: center;
     gap: 6px;
 }
-.iron-dropdown-btn:hover {
+.stapel-dropdown-btn:hover {
     background: rgba(255,255,255,0.2);
 }
-.iron-dropdown-content {
+.stapel-dropdown-content {
     display: none;
     position: absolute;
     top: calc(100% - 4px);
@@ -57,18 +57,18 @@
     padding-top: 8px;
     border: 1px solid var(--hairline-color, #e8e8e8);
 }
-.iron-dropdown:hover .iron-dropdown-content,
-.iron-dropdown-content:hover {
+.stapel-dropdown:hover .stapel-dropdown-content,
+.stapel-dropdown-content:hover {
     display: block;
 }
-.iron-dropdown-section {
+.stapel-dropdown-section {
     padding: 8px 0;
     border-bottom: 1px solid var(--hairline-color, #e8e8e8);
 }
-.iron-dropdown-section:last-child {
+.stapel-dropdown-section:last-child {
     border-bottom: none;
 }
-.iron-dropdown-title {
+.stapel-dropdown-title {
     padding: 4px 16px;
     font-size: 11px;
     font-weight: 600;
@@ -76,7 +76,7 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
-.iron-dropdown-item {
+.stapel-dropdown-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -84,31 +84,31 @@
     color: var(--body-fg, #333);
     text-decoration: none;
 }
-.iron-dropdown-item:hover {
+.stapel-dropdown-item:hover {
     background: var(--darkened-bg, #f5f5f5);
     text-decoration: none;
 }
-.iron-dropdown-item.active {
+.stapel-dropdown-item.active {
     background: var(--selected-bg, #e4e4e4);
     font-weight: 600;
 }
-.iron-dropdown-item .links {
+.stapel-dropdown-item .links {
     display: flex;
     gap: 8px;
     font-size: 12px;
 }
-.iron-dropdown-item .links a {
+.stapel-dropdown-item .links a {
     color: var(--link-fg, #417690);
     padding: 2px 6px;
     border-radius: 3px;
     background: var(--darkened-bg, #f0f0f0);
 }
-.iron-dropdown-item .links a:hover {
+.stapel-dropdown-item .links a:hover {
     background: var(--link-fg, #417690);
     color: #fff;
     text-decoration: none;
 }
-.iron-swagger-btn {
+.stapel-swagger-btn {
     background: #85ea2d;
     color: #173647 !important;
     padding: 6px 12px;
@@ -116,11 +116,11 @@
     font-weight: 500;
     font-size: 13px;
 }
-.iron-swagger-btn:hover {
+.stapel-swagger-btn:hover {
     background: #6ecf1a;
     text-decoration: none !important;
 }
-.iron-dashboard-btn {
+.stapel-dashboard-btn {
     background: #3b82f6;
     color: #fff !important;
     padding: 6px 12px;
@@ -128,7 +128,7 @@
     font-weight: 500;
     font-size: 13px;
 }
-.iron-dashboard-btn:hover {
+.stapel-dashboard-btn:hover {
     background: #2563eb;
     text-decoration: none !important;
 }
@@ -168,22 +168,22 @@
 
 {% block branding %}
 <h1 id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></h1>
-{% if iron_services and user.is_authenticated %}
-<div class="iron-nav">
-    <a href="{{ current_swagger_url }}" class="iron-swagger-btn">Swagger</a>
+{% if stapel_services and user.is_authenticated %}
+<div class="stapel-nav">
+    <a href="{{ current_swagger_url }}" class="stapel-swagger-btn">Swagger</a>
     {% if current_dashboard_url %}
-    <a href="{{ current_dashboard_url }}" class="iron-dashboard-btn">Dashboard</a>
+    <a href="{{ current_dashboard_url }}" class="stapel-dashboard-btn">Dashboard</a>
     {% endif %}
 
-    <div class="iron-dropdown">
-        <button class="iron-dropdown-btn">
+    <div class="stapel-dropdown">
+        <button class="stapel-dropdown-btn">
             Services ▾
         </button>
-        <div class="iron-dropdown-content">
-            <div class="iron-dropdown-section">
-                <div class="iron-dropdown-title">All Services</div>
-                {% for service in iron_services %}
-                <div class="iron-dropdown-item{% if service.is_active %} active{% endif %}">
+        <div class="stapel-dropdown-content">
+            <div class="stapel-dropdown-section">
+                <div class="stapel-dropdown-title">All Services</div>
+                {% for service in stapel_services %}
+                <div class="stapel-dropdown-item{% if service.is_active %} active{% endif %}">
                     <span>{{ service.name }}</span>
                     <span class="links">
                         <a href="{{ service.admin_url }}">Admin</a>
@@ -192,30 +192,30 @@
                 </div>
                 {% endfor %}
             </div>
-            <div class="iron-dropdown-section">
-                <div class="iron-dropdown-title">Tools</div>
-                <div class="iron-dropdown-item">
+            <div class="stapel-dropdown-section">
+                <div class="stapel-dropdown-title">Tools</div>
+                <div class="stapel-dropdown-item">
                     <span>Translator Dashboard</span>
                     <span class="links">
                         <a href="/translate/dashboard/">Open</a>
                     </span>
                 </div>
             </div>
-            <div class="iron-dropdown-section">
-                <div class="iron-dropdown-title">Monitoring</div>
-                <div class="iron-dropdown-item">
+            <div class="stapel-dropdown-section">
+                <div class="stapel-dropdown-title">Monitoring</div>
+                <div class="stapel-dropdown-item">
                     <span>Grafana</span>
                     <span class="links">
-                        <a href="/monitoring/grafana/d/iron-home/iron-system-overview" target="_blank">Open</a>
+                        <a href="/monitoring/grafana/d/stapel-home/stapel-system-overview" target="_blank">Open</a>
                     </span>
                 </div>
-                <div class="iron-dropdown-item">
+                <div class="stapel-dropdown-item">
                     <span>Prometheus</span>
                     <span class="links">
                         <a href="/monitoring/prometheus/" target="_blank">Open</a>
                     </span>
                 </div>
-                <div class="iron-dropdown-item">
+                <div class="stapel-dropdown-item">
                     <span>Kafka UI</span>
                     <span class="links">
                         <a href="/monitoring/kafka-ui/" target="_blank">Open</a>

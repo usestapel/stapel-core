@@ -5,8 +5,9 @@ Provides helper functions for loading user data from Django User model.
 """
 
 import logging
-from typing import Dict, Any, Optional
-from django.db import transaction, IntegrityError
+from typing import Any, Dict, Optional
+
+from django.db import IntegrityError, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -25,58 +26,65 @@ def load_jwt_config_from_settings():
     Returns:
         JWTConfig instance configured from Django settings
     """
-    from django.conf import settings
     from datetime import timedelta
-    from ..core.config import JWTConfig
 
-    algorithm = getattr(settings, 'JWT_ALGORITHM', 'HS256')
+    from django.conf import settings
 
-    issuer = getattr(settings, 'JWT_ISSUER', 'iron-auth')
+    from stapel_core.core.config import JWTConfig
+
+    algorithm = getattr(settings, "JWT_ALGORITHM", "HS256")
+
+    issuer = getattr(settings, "JWT_ISSUER", "stapel-auth")
     # JWKS URL for jku header - derive from issuer if not explicitly set
-    jwks_url = getattr(settings, 'JWT_JWKS_URL', None)
-    if not jwks_url and issuer.startswith('http'):
+    jwks_url = getattr(settings, "JWT_JWKS_URL", None)
+    if not jwks_url and issuer.startswith("http"):
         jwks_url = f"{issuer}/auth/.well-known/jwks.json"
 
     config_params = {
-        'algorithm': algorithm,
-        'access_token_lifetime': timedelta(
-            seconds=getattr(settings, 'JWT_ACCESS_TOKEN_LIFETIME', 3600)
+        "algorithm": algorithm,
+        "access_token_lifetime": timedelta(
+            seconds=getattr(settings, "JWT_ACCESS_TOKEN_LIFETIME", 3600)
         ),
-        'refresh_token_lifetime': timedelta(
-            seconds=getattr(settings, 'JWT_REFRESH_TOKEN_LIFETIME', 604800)
+        "refresh_token_lifetime": timedelta(
+            seconds=getattr(settings, "JWT_REFRESH_TOKEN_LIFETIME", 604800)
         ),
-        'issuer': issuer,
-        'audience': getattr(settings, 'JWT_AUDIENCE', None),  # None = don't verify audience
-        'jwks_url': jwks_url,
+        "issuer": issuer,
+        "audience": getattr(
+            settings, "JWT_AUDIENCE", None
+        ),  # None = don't verify audience
+        "jwks_url": jwks_url,
         # Cookie settings - must match between set_jwt_cookies and delete_cookie
-        'cookie_name': getattr(settings, 'JWT_COOKIE_NAME', 'iron_jwt'),
-        'refresh_cookie_name': getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'iron_refresh_jwt'),
-        'cookie_domain': getattr(settings, 'JWT_COOKIE_DOMAIN', None),
-        'cookie_secure': getattr(settings, 'JWT_COOKIE_SECURE', False),
-        'cookie_httponly': getattr(settings, 'JWT_COOKIE_HTTPONLY', True),
-        'cookie_samesite': getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax'),
+        "cookie_name": getattr(settings, "JWT_COOKIE_NAME", "iron_jwt"),
+        "refresh_cookie_name": getattr(
+            settings, "JWT_REFRESH_COOKIE_NAME", "iron_refresh_jwt"
+        ),
+        "cookie_domain": getattr(settings, "JWT_COOKIE_DOMAIN", None),
+        "cookie_secure": getattr(settings, "JWT_COOKIE_SECURE", False),
+        "cookie_httponly": getattr(settings, "JWT_COOKIE_HTTPONLY", True),
+        "cookie_samesite": getattr(settings, "JWT_COOKIE_SAMESITE", "Lax"),
     }
 
-    if algorithm == 'RS256':
+    if algorithm == "RS256":
         # For RS256, prefer direct key content over file paths
-        private_key = getattr(settings, 'JWT_PRIVATE_KEY', None)
-        public_key = getattr(settings, 'JWT_PUBLIC_KEY', None)
+        private_key = getattr(settings, "JWT_PRIVATE_KEY", None)
+        public_key = getattr(settings, "JWT_PUBLIC_KEY", None)
 
         if private_key:
-            config_params['private_key'] = private_key
-        elif getattr(settings, 'JWT_PRIVATE_KEY_PATH', None):
-            config_params['private_key_path'] = settings.JWT_PRIVATE_KEY_PATH
+            config_params["private_key"] = private_key
+        elif getattr(settings, "JWT_PRIVATE_KEY_PATH", None):
+            config_params["private_key_path"] = settings.JWT_PRIVATE_KEY_PATH
 
         if public_key:
-            config_params['public_key'] = public_key
-        elif getattr(settings, 'JWT_PUBLIC_KEY_PATH', None):
-            config_params['public_key_path'] = settings.JWT_PUBLIC_KEY_PATH
+            config_params["public_key"] = public_key
+        elif getattr(settings, "JWT_PUBLIC_KEY_PATH", None):
+            config_params["public_key_path"] = settings.JWT_PUBLIC_KEY_PATH
 
-        config_params['secret_key'] = ''  # Not used for RS256
+        config_params["secret_key"] = ""  # Not used for RS256
     else:
         # For HS256, use secret_key
-        config_params['secret_key'] = getattr(
-            settings, 'JWT_SECRET_KEY', settings.SECRET_KEY)
+        config_params["secret_key"] = getattr(
+            settings, "JWT_SECRET_KEY", settings.SECRET_KEY
+        )
 
     return JWTConfig(**config_params)
 
@@ -88,6 +96,7 @@ def _get_user_model():
     Django's get_user_model() should only be called after apps are loaded.
     """
     from django.contrib.auth import get_user_model
+
     return get_user_model()
 
 
@@ -136,11 +145,11 @@ def serialize_user_to_jwt_data(user) -> Dict[str, Any]:
     }
 
     # Add optional fields if they exist on the user model
-    if hasattr(user, 'is_anonymous'):
+    if hasattr(user, "is_anonymous"):
         data["is_anonymous"] = user.is_anonymous
-    if hasattr(user, 'auth_type'):
+    if hasattr(user, "auth_type"):
         data["auth_type"] = user.auth_type
-    if hasattr(user, 'phone') and user.phone:
+    if hasattr(user, "phone") and user.phone:
         data["phone"] = user.phone
 
     return data
@@ -148,11 +157,11 @@ def serialize_user_to_jwt_data(user) -> Dict[str, Any]:
 
 def _apply_jwt_fields(user, user_data: Dict[str, Any], phone=None):
     """Apply optional JWT fields (is_anonymous, auth_type, phone) to user."""
-    if hasattr(user, 'is_anonymous') and 'is_anonymous' in user_data:
-        user.is_anonymous = user_data['is_anonymous']
-    if hasattr(user, 'auth_type') and 'auth_type' in user_data:
-        user.auth_type = user_data['auth_type']
-    if phone and hasattr(user, 'phone'):
+    if hasattr(user, "is_anonymous") and "is_anonymous" in user_data:
+        user.is_anonymous = user_data["is_anonymous"]
+    if hasattr(user, "auth_type") and "auth_type" in user_data:
+        user.auth_type = user_data["auth_type"]
+    if phone and hasattr(user, "phone"):
         user.phone = phone
 
 
@@ -167,7 +176,8 @@ def _ensure_user_in_staff_group(user) -> bool:
         True if user was added, False if already member or error
     """
     try:
-        from .groups import add_user_to_staff_group
+        from stapel_core.django.groups import add_user_to_staff_group
+
         return add_user_to_staff_group(user)
     except Exception as e:
         logger.warning(f"Could not add user to Staff group: {e}")
@@ -194,7 +204,6 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         return None
 
     try:
-
         # Try to get existing user by PK
         user = User.objects.get(pk=pk)
 
@@ -222,16 +231,16 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         user.email = user_data.get("email", None)
 
         # Sync is_anonymous, auth_type, phone from JWT
-        if hasattr(user, 'is_anonymous') and 'is_anonymous' in user_data:
-            if user.is_anonymous != user_data['is_anonymous']:
-                user.is_anonymous = user_data['is_anonymous']
+        if hasattr(user, "is_anonymous") and "is_anonymous" in user_data:
+            if user.is_anonymous != user_data["is_anonymous"]:
+                user.is_anonymous = user_data["is_anonymous"]
                 updated = True
-        if hasattr(user, 'auth_type') and 'auth_type' in user_data:
-            if user.auth_type != user_data['auth_type']:
-                user.auth_type = user_data['auth_type']
+        if hasattr(user, "auth_type") and "auth_type" in user_data:
+            if user.auth_type != user_data["auth_type"]:
+                user.auth_type = user_data["auth_type"]
                 updated = True
-        jwt_phone = user_data.get('phone') or None
-        if jwt_phone and hasattr(user, 'phone') and user.phone != jwt_phone:
+        jwt_phone = user_data.get("phone") or None
+        if jwt_phone and hasattr(user, "phone") and user.phone != jwt_phone:
             user.phone = jwt_phone
             updated = True
 
@@ -250,11 +259,14 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         # Auth service should NOT create users - if user_id not found, JWT is stale
         # Other services should create users to sync from auth service
         from django.conf import settings
-        create_from_jwt = getattr(settings, 'JWT_CREATE_USERS_FROM_TOKEN', True)
+
+        create_from_jwt = getattr(settings, "JWT_CREATE_USERS_FROM_TOKEN", True)
 
         if not create_from_jwt:
             # Auth service mode: reject stale JWT, user must re-login
-            logger.warning(f"User {pk} not found and JWT_CREATE_USERS_FROM_TOKEN=False. JWT is stale.")
+            logger.warning(
+                f"User {pk} not found and JWT_CREATE_USERS_FROM_TOKEN=False. JWT is stale."
+            )
             return None
 
         # Microservice mode: create user from JWT
@@ -274,15 +286,19 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
                 # Normalize phone to E.164
                 try:
                     import phonenumbers
+
                     parsed = phonenumbers.parse(phone, None)
                     if phonenumbers.is_valid_number(parsed):
-                        phone = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+                        phone = phonenumbers.format_number(
+                            parsed, phonenumbers.PhoneNumberFormat.E164
+                        )
                 except Exception:
                     pass
 
             # Ensure username is never None - generate if needed
             if not username:
                 import uuid
+
                 username = f"user_{uuid.uuid4().hex[:8]}"
 
             # Try to find existing user by phone/email/username (in case PK changed after DB reset)
@@ -298,7 +314,9 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
             if existing_user:
                 # Update existing user's PK to match JWT
                 # This handles DB reset scenarios where same user has different PK
-                logger.info(f"Found existing user by email/phone/username, updating PK from {existing_user.pk} to {pk}")
+                logger.info(
+                    f"Found existing user by email/phone/username, updating PK from {existing_user.pk} to {pk}"
+                )
                 old_pk = existing_user.pk
                 if old_pk != pk:
                     # Atomic delete+create to prevent race conditions
@@ -369,9 +387,10 @@ def extract_jwt_from_request(request) -> tuple[Optional[str], Optional[str]]:
     from django.conf import settings
 
     # Get cookie names from settings or use defaults
-    cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'iron_jwt')
+    cookie_name = getattr(settings, "JWT_COOKIE_NAME", "iron_jwt")
     refresh_cookie_name = getattr(
-        settings, 'JWT_REFRESH_COOKIE_NAME', 'iron_refresh_jwt')
+        settings, "JWT_REFRESH_COOKIE_NAME", "iron_refresh_jwt"
+    )
 
     # Try to get from cookies first
     access_token = request.COOKIES.get(cookie_name)
@@ -379,8 +398,8 @@ def extract_jwt_from_request(request) -> tuple[Optional[str], Optional[str]]:
 
     # Fallback to Authorization header for access token
     if not access_token:
-        auth_header = request.headers.get('authorization', '')
-        if auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
             access_token = auth_header[7:]
 
     return access_token, refresh_token
@@ -398,17 +417,16 @@ def set_jwt_cookies(response, access_token: str, refresh_token: Optional[str] = 
     from django.conf import settings
 
     # Get settings or use defaults
-    cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'iron_jwt')
+    cookie_name = getattr(settings, "JWT_COOKIE_NAME", "iron_jwt")
     refresh_cookie_name = getattr(
-        settings, 'JWT_REFRESH_COOKIE_NAME', 'iron_refresh_jwt')
-    cookie_domain = getattr(settings, 'JWT_COOKIE_DOMAIN', None)
-    cookie_secure = getattr(settings, 'JWT_COOKIE_SECURE', False)
-    cookie_httponly = getattr(settings, 'JWT_COOKIE_HTTPONLY', True)
-    cookie_samesite = getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax')
-    access_token_lifetime = getattr(
-        settings, 'JWT_ACCESS_TOKEN_LIFETIME', 3600)
-    refresh_token_lifetime = getattr(
-        settings, 'JWT_REFRESH_TOKEN_LIFETIME', 604800)
+        settings, "JWT_REFRESH_COOKIE_NAME", "iron_refresh_jwt"
+    )
+    cookie_domain = getattr(settings, "JWT_COOKIE_DOMAIN", None)
+    cookie_secure = getattr(settings, "JWT_COOKIE_SECURE", False)
+    cookie_httponly = getattr(settings, "JWT_COOKIE_HTTPONLY", True)
+    cookie_samesite = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
+    access_token_lifetime = getattr(settings, "JWT_ACCESS_TOKEN_LIFETIME", 3600)
+    refresh_token_lifetime = getattr(settings, "JWT_REFRESH_TOKEN_LIFETIME", 604800)
 
     # Set access token cookie
     response.set_cookie(
@@ -416,7 +434,7 @@ def set_jwt_cookies(response, access_token: str, refresh_token: Optional[str] = 
         access_token,
         max_age=access_token_lifetime,
         domain=cookie_domain,
-        path='/',
+        path="/",
         secure=cookie_secure,
         httponly=cookie_httponly,
         samesite=cookie_samesite,
@@ -429,14 +447,14 @@ def set_jwt_cookies(response, access_token: str, refresh_token: Optional[str] = 
             refresh_token,
             max_age=refresh_token_lifetime,
             domain=cookie_domain,
-            path='/',
+            path="/",
             secure=cookie_secure,
             httponly=cookie_httponly,
             samesite=cookie_samesite,
         )
 
 
-def setup_centralized_admin_login(admin_site, auth_service_prefix: str = 'auth'):
+def setup_centralized_admin_login(admin_site, auth_service_prefix: str = "auth"):
     """
     Configure Django admin to redirect login to centralized auth service.
 
@@ -450,26 +468,27 @@ def setup_centralized_admin_login(admin_site, auth_service_prefix: str = 'auth')
 
     Example:
         from django.contrib import admin
-        from stapel_core.django.utils import setup_centralized_admin_login
+        from stapel_core.django.jwt.utils import setup_centralized_admin_login
 
         # In urls.py, before defining urlpatterns
         setup_centralized_admin_login(admin.site, auth_service_prefix='auth')
     """
-    from django.shortcuts import redirect
-    from django.conf import settings
     from urllib.parse import urlencode
 
+    from django.conf import settings
+    from django.shortcuts import redirect
+
     # Get current service URL prefix
-    url_prefix = getattr(settings, 'URL_PREFIX', '')
+    url_prefix = getattr(settings, "URL_PREFIX", "")
 
     def custom_admin_login(request, extra_context=None):
         """Redirect to centralized auth service for login."""
         # Get the page the user was trying to access
         # If 'next' parameter exists, use it; otherwise default to current service admin
-        next_url = request.GET.get('next', f'/{url_prefix}admin/')
+        next_url = request.GET.get("next", f"/{url_prefix}admin/")
 
         # Build login URL with next parameter
-        login_url = f'/{auth_service_prefix}/admin/login/'
+        login_url = f"/{auth_service_prefix}/admin/login/"
         if next_url and next_url != login_url:
             login_url = f"{login_url}?{urlencode({'next': next_url})}"
 
@@ -479,7 +498,9 @@ def setup_centralized_admin_login(admin_site, auth_service_prefix: str = 'auth')
     admin_site.login = custom_admin_login
 
 
-def get_admin_logout_urlpattern(url_prefix: str = '', auth_service_prefix: str = 'auth'):
+def get_admin_logout_urlpattern(
+    url_prefix: str = "", auth_service_prefix: str = "auth"
+):
     """
     Get URL pattern for JWT-based admin logout.
 
@@ -494,7 +515,7 @@ def get_admin_logout_urlpattern(url_prefix: str = '', auth_service_prefix: str =
         URL pattern for admin logout
 
     Example:
-        from stapel_core.django.utils import get_admin_logout_urlpattern
+        from stapel_core.django.jwt.utils import get_admin_logout_urlpattern
 
         urlpatterns = [
             # Logout MUST be before admin.site.urls
@@ -502,10 +523,11 @@ def get_admin_logout_urlpattern(url_prefix: str = '', auth_service_prefix: str =
             path(f'{url_prefix}admin/', admin.site.urls),
         ]
     """
-    from django.urls import path
-    from django.shortcuts import redirect
     from django.conf import settings
-    from stapel_core.django.auth_views import JWTLogoutView
+    from django.shortcuts import redirect
+    from django.urls import path
+
+    from stapel_core.django.jwt.views import JWTLogoutView
 
     class AdminJWTLogoutView(JWTLogoutView):
         """Logout view that redirects to auth service login page."""
@@ -515,15 +537,24 @@ def get_admin_logout_urlpattern(url_prefix: str = '', auth_service_prefix: str =
             request._jwt_skip_cookie_update = True
             super().post(request)
 
-            redirect_response = redirect(f'/{auth_service_prefix}/admin/login/')
+            redirect_response = redirect(f"/{auth_service_prefix}/admin/login/")
 
-            cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'iron_jwt')
-            refresh_cookie_name = getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'iron_refresh_jwt')
-            cookie_domain = getattr(settings, 'JWT_COOKIE_DOMAIN', None)
-            cookie_samesite = getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax')
+            cookie_name = getattr(settings, "JWT_COOKIE_NAME", "iron_jwt")
+            refresh_cookie_name = getattr(
+                settings, "JWT_REFRESH_COOKIE_NAME", "iron_refresh_jwt"
+            )
+            cookie_domain = getattr(settings, "JWT_COOKIE_DOMAIN", None)
+            cookie_samesite = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
 
-            redirect_response.delete_cookie(cookie_name, path='/', domain=cookie_domain, samesite=cookie_samesite)
-            redirect_response.delete_cookie(refresh_cookie_name, path='/', domain=cookie_domain, samesite=cookie_samesite)
+            redirect_response.delete_cookie(
+                cookie_name, path="/", domain=cookie_domain, samesite=cookie_samesite
+            )
+            redirect_response.delete_cookie(
+                refresh_cookie_name,
+                path="/",
+                domain=cookie_domain,
+                samesite=cookie_samesite,
+            )
             return redirect_response
 
         def post(self, request):
@@ -532,10 +563,12 @@ def get_admin_logout_urlpattern(url_prefix: str = '', auth_service_prefix: str =
         def get(self, request):
             return self._do_logout_and_redirect(request)
 
-    return path(f'{url_prefix}admin/logout/', AdminJWTLogoutView.as_view(), name='admin-logout')
+    return path(
+        f"{url_prefix}admin/logout/", AdminJWTLogoutView.as_view(), name="admin-logout"
+    )
 
 
-def setup_centralized_admin_logout(admin_site, auth_service_prefix: str = 'auth'):
+def setup_centralized_admin_logout(admin_site, auth_service_prefix: str = "auth"):
     """
     DEPRECATED: Use get_admin_logout_urlpattern() instead.
 
@@ -543,11 +576,12 @@ def setup_centralized_admin_logout(admin_site, auth_service_prefix: str = 'auth'
     The URL pattern approach is required for proper logout handling.
     """
     import warnings
+
     warnings.warn(
         "setup_centralized_admin_logout is deprecated. "
         "Use get_admin_logout_urlpattern() and add it before admin.site.urls",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
 
 
@@ -564,7 +598,7 @@ def reset_sequences_for_models(*models):
 
     Example:
         from categories.models import Feature, Category
-        from stapel_core.django.utils import reset_sequences_for_models
+        from stapel_core.django.jwt.utils import reset_sequences_for_models
 
         # After bulk import
         Feature.objects.bulk_create(features_with_ids)
@@ -576,8 +610,9 @@ def reset_sequences_for_models(*models):
         # Or reset all models (slower, use sparingly)
         reset_sequences_for_models()
     """
-    from django.apps import apps
     from django.db import connection
+
+    from django.apps import apps
 
     if models:
         model_list = models
@@ -590,12 +625,12 @@ def reset_sequences_for_models(*models):
             continue
 
         field_type = type(pk_field).__name__
-        if field_type not in ('AutoField', 'BigAutoField'):
+        if field_type not in ("AutoField", "BigAutoField"):
             continue
 
         table_name = model._meta.db_table
         pk_column = pk_field.column
-        sequence_name = f'{table_name}_{pk_column}_seq'
+        sequence_name = f"{table_name}_{pk_column}_seq"
 
         try:
             with connection.cursor() as cursor:
@@ -608,13 +643,17 @@ def reset_sequences_for_models(*models):
                     max_id = 0
 
                 # Get current sequence value
-                cursor.execute(f"SELECT last_value FROM \"{sequence_name}\"")
+                cursor.execute(f'SELECT last_value FROM "{sequence_name}"')
                 row = cursor.fetchone()
                 current_val = row[0] if row else 0
 
                 # Reset if needed
                 if current_val < max_id:
-                    cursor.execute(f"SELECT setval('\"{sequence_name}\"', %s)", [max_id])
-                    logger.info(f"Reset sequence {sequence_name}: {current_val} -> {max_id}")
+                    cursor.execute(
+                        f"SELECT setval('\"{sequence_name}\"', %s)", [max_id]
+                    )
+                    logger.info(
+                        f"Reset sequence {sequence_name}: {current_val} -> {max_id}"
+                    )
         except Exception as e:
             logger.warning(f"Could not reset sequence for {table_name}: {e}")
