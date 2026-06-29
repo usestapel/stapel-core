@@ -34,9 +34,20 @@ kafka = [
 sentry = [
     "sentry-sdk>=1.40",
 ]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
 all = [
     "stapel-core[kafka,sentry]",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--tb=short -q"
 
 [tool.setuptools]
 package-dir = {"stapel_core" = "."}

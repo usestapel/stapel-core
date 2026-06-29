@@ -17,7 +17,8 @@ import jwt
 import logging
 import hashlib
 import base64
-from datetime import datetime
+import time as _time
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Tuple
 
 from .config import JWTConfig
@@ -98,7 +99,7 @@ class JWTHandler:
                 "For RS256, private_key is required."
             )
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         payload = {
             **user_data,
             "token_type": "access",
@@ -142,7 +143,7 @@ class JWTHandler:
                 "For RS256, private_key is required."
             )
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Include all user data in refresh token so it can be used for token refresh
         # without needing to query database (important for cross-service auth)
         payload = {
@@ -266,7 +267,7 @@ class JWTHandler:
         if not exp:
             return True
 
-        return datetime.utcnow().timestamp() >= exp
+        return _time.time() >= exp
 
     def get_token_expiration(self, token: str) -> Optional[datetime]:
         """
@@ -286,7 +287,7 @@ class JWTHandler:
         if not exp:
             return None
 
-        return datetime.fromtimestamp(exp)
+        return datetime.fromtimestamp(exp, tz=timezone.utc)
 
     def is_token_near_expiry(self, token: str) -> bool:
         """
@@ -302,7 +303,7 @@ class JWTHandler:
         if not expiration:
             return True
 
-        time_until_expiry = expiration - datetime.utcnow()
+        time_until_expiry = expiration - datetime.now(timezone.utc)
         return time_until_expiry <= self.config.refresh_threshold
 
     def validate_token_type(self, token: str, expected_type: str) -> bool:
