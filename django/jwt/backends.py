@@ -8,7 +8,7 @@ import logging
 from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth import get_user_model
 
-from ..core.token_manager import TokenManager
+from stapel_core.core.token_manager import TokenManager
 from .utils import get_or_create_user_from_jwt
 
 logger = logging.getLogger(__name__)

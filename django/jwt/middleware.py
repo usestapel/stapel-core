@@ -23,7 +23,7 @@ from .utils import (
     extract_jwt_from_request,
     set_jwt_cookies,
 )
-from .jwt_provider import jwt_provider
+from .provider import jwt_provider
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +209,7 @@ class JWTAuthMiddleware(MiddlewareMixin):
         csrf_cookie = request.META.get("CSRF_COOKIE")
         csrf_needs_update = request.META.get("CSRF_COOKIE_NEEDS_UPDATE", False)
 
-        login(request, user, backend='stapel_core.django.session_backend.EmailAuthBackend')
+        login(request, user, backend='stapel_core.django.jwt.session.EmailAuthBackend')
 
         # Restore CSRF state if there was an existing cookie.
         # If no prior cookie existed (first visit), keep the new token from login().

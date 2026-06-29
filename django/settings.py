@@ -103,7 +103,7 @@ _root_handlers = ['console']
 
 if _telegram_configured:
     _handlers['telegram'] = {
-        'class': 'stapel_core.django.telegram.TelegramHandler',
+        'class': 'stapel_core.django.monitoring.telegram.TelegramHandler',
         'level': 'ERROR',
         'service': _SERVICE_NAME,
     }
@@ -160,10 +160,10 @@ SPECTACULAR_SETTINGS = {
 
     # Tag extraction from URL path (first segment after /api/)
     # e.g., /api/auth/login/ -> "auth", /api/categories/ -> "categories"
-    'PREPROCESSING_HOOKS': ['stapel_core.django.openapi.preprocess_exclude_schema_endpoints'],
+    'PREPROCESSING_HOOKS': ['stapel_core.django.openapi.schemas.preprocess_exclude_schema_endpoints'],
     'POSTPROCESSING_HOOKS': [
-        'stapel_core.django.openapi.postprocess_schema_tags',
-        'stapel_core.django.openapi.postprocess_fix_polymorphic_discriminators',
+        'stapel_core.django.openapi.schemas.postprocess_schema_tags',
+        'stapel_core.django.openapi.schemas.postprocess_fix_polymorphic_discriminators',
     ],
 
     # Swagger UI settings
@@ -328,19 +328,19 @@ LOGOUT_REDIRECT_URL = "/auth/admin/login/"
 # REST Framework configuration for all services
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'stapel_core.django.authentication.JWTCookieAuthentication',
+        'stapel_core.django.jwt.authentication.JWTCookieAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'stapel_core.django.permissions.IsServiceRequest',
-        'stapel_core.django.permissions.IsSuperUser',
+        'stapel_core.django.api.permissions.IsServiceRequest',
+        'stapel_core.django.api.permissions.IsSuperUser',
     ],
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
     ],
     # Custom AutoSchema that displays permission classes in Swagger
-    'DEFAULT_SCHEMA_CLASS': 'stapel_core.django.openapi.PermissionAwareAutoSchema',
-    'EXCEPTION_HANDLER': 'stapel_core.django.errors.iron_exception_handler',
+    'DEFAULT_SCHEMA_CLASS': 'stapel_core.django.openapi.schemas.PermissionAwareAutoSchema',
+    'EXCEPTION_HANDLER': 'stapel_core.django.api.errors.iron_exception_handler',
 }
 
 # Password validation

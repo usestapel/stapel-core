@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock
 from rest_framework.test import APIRequestFactory
 
-from stapel_core.django.permissions import (
+from stapel_core.django.api.permissions import (
     IsStaffUser,
     IsSuperUser,
     ReadOnlyOrSuperUser,

@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 # Docker HEALTHCHECK. Touch-based — mtime is enough to prove the loop
 # advanced recently.
 HEARTBEAT_PATH = os.environ.get("KAFKA_CONSUMER_HEARTBEAT", "/tmp/kafka_consumer_alive")
-HEARTBEAT_STALENESS_S = int(os.environ.get("KAFKA_CONSUMER_HEARTBEAT_STALENESS_S", "120"))
+HEARTBEAT_STALENESS_S = int(
+    os.environ.get("KAFKA_CONSUMER_HEARTBEAT_STALENESS_S", "120")
+)
 WATCHDOG_INTERVAL_S = int(os.environ.get("KAFKA_CONSUMER_WATCHDOG_INTERVAL_S", "30"))
 
 
@@ -74,7 +76,9 @@ class BaseKafkaConsumerCommand(BaseCommand):
         conf["group.id"] = self.consumer_group
         conf["auto.offset.reset"] = "earliest"
         conf["enable.auto.commit"] = False
-        conf["session.timeout.ms"] = 10000  # 10s (default 45s) — faster rebalance on restart
+        conf["session.timeout.ms"] = (
+            10000  # 10s (default 45s) — faster rebalance on restart
+        )
         conf["heartbeat.interval.ms"] = 3000  # must be < session.timeout.ms / 3
 
         consumer = Consumer(conf)
@@ -124,7 +128,7 @@ class BaseKafkaConsumerCommand(BaseCommand):
                         success = True
                         break
                     except Exception:
-                        wait = self.base_backoff * (2 ** attempt)
+                        wait = self.base_backoff * (2**attempt)
                         logger.warning(
                             "Event processing failed (attempt %d/%d), retrying in %.1fs: %s\n%s",
                             attempt + 1,
@@ -172,7 +176,7 @@ class BaseKafkaConsumerCommand(BaseCommand):
         """Mtime of HEARTBEAT_PATH is the consumer's liveness signal.
 
         Read by the watchdog thread and by the Docker HEALTHCHECK
-        (see iron-recordings.yml ``healthcheck`` stanza).
+        (see ``healthcheck`` stanza).
         """
         try:
             with open(HEARTBEAT_PATH, "a"):
@@ -202,7 +206,8 @@ class BaseKafkaConsumerCommand(BaseCommand):
                     logger.error(
                         "Watchdog: consumer heartbeat stale (%.0fs > %ds), exiting "
                         "to let docker restart the container",
-                        age, HEARTBEAT_STALENESS_S,
+                        age,
+                        HEARTBEAT_STALENESS_S,
                     )
                     os._exit(1)
 
@@ -226,6 +231,4 @@ class BaseKafkaConsumerCommand(BaseCommand):
             producer.flush(timeout=5)
             logger.info("Message sent to DLQ: %s", dlq)
         except Exception:
-            logger.error(
-                "Failed to send message to DLQ: %s", traceback.format_exc()
-            )
+            logger.error("Failed to send message to DLQ: %s", traceback.format_exc())

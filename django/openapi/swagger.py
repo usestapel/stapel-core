@@ -1,5 +1,5 @@
 """
-Common OpenAPI/Swagger configuration utilities for Iron services.
+Common OpenAPI/Swagger configuration utilities for Stapel services.
 
 This module provides helper functions to configure drf-spectacular with JWT authentication
 and custom Swagger UI behavior (logout URL fix, etc.).
@@ -9,14 +9,11 @@ imports before Django settings are fully configured. This allows `get_spectacula
 to be safely used in settings.py files.
 """
 
-from django.urls import path, include
+from django.urls import include, path
 
 
 def get_spectacular_settings(
-    title: str,
-    description: str,
-    version: str = '1.0.0',
-    **extra_settings
+    title: str, description: str, version: str = "1.0.0", **extra_settings
 ) -> dict:
     """
     Get drf-spectacular settings for a service.
@@ -25,7 +22,7 @@ def get_spectacular_settings(
     Use this in your service's settings.py to configure SPECTACULAR_SETTINGS.
 
     Args:
-        title: API title (e.g., "Iron Authentication API")
+        title: API title (e.g., "Stapel Authentication API")
         description: API description (markdown supported)
         version: API version string
         **extra_settings: Additional settings to merge
@@ -35,28 +32,30 @@ def get_spectacular_settings(
 
     Example:
         # In your service's settings.py:
-        from stapel_core.django.swagger import get_spectacular_settings
+        from stapel_core.django.openapi.swagger import get_spectacular_settings
 
         SPECTACULAR_SETTINGS = get_spectacular_settings(
-            title="Iron Auth API",
-            description="Authentication service for Iron platform.",
+            title="Stapel Auth API",
+            description="Authentication service for Stapel platform.",
             version="1.0.0",
         )
     """
     from stapel_core.django.settings import SPECTACULAR_SETTINGS as base_settings
 
     settings = base_settings.copy()
-    settings.update({
-        'TITLE': title,
-        'DESCRIPTION': description,
-        'VERSION': version,
-    })
+    settings.update(
+        {
+            "TITLE": title,
+            "DESCRIPTION": description,
+            "VERSION": version,
+        }
+    )
     settings.update(extra_settings)
 
     return settings
 
 
-def get_swagger_urls(url_prefix: str = ''):
+def get_swagger_urls(url_prefix: str = ""):
     """
     Get URL patterns for Swagger UI, ReDoc, and OpenAPI schema.
 
@@ -71,7 +70,7 @@ def get_swagger_urls(url_prefix: str = ''):
 
     Example:
         # In your service's urls.py:
-        from stapel_core.django.swagger import get_swagger_urls
+        from stapel_core.django.openapi.swagger import get_swagger_urls
 
         urlpatterns = [
             *get_swagger_urls('auth/'),
@@ -88,20 +87,18 @@ def get_swagger_urls(url_prefix: str = ''):
 
     return [
         # OpenAPI schema endpoint (JSON/YAML)
-        path(f'{url_prefix}schema/', SpectacularAPIView.as_view(), name='schema'),
-
+        path(f"{url_prefix}schema/", SpectacularAPIView.as_view(), name="schema"),
         # Swagger UI with custom JS injection
         path(
-            f'{url_prefix}swagger/',
-            CustomSpectacularSwaggerView.as_view(url_name='schema'),
-            name='swagger-ui'
+            f"{url_prefix}swagger/",
+            CustomSpectacularSwaggerView.as_view(url_name="schema"),
+            name="swagger-ui",
         ),
-
         # ReDoc UI
         path(
-            f'{url_prefix}redoc/',
-            SpectacularRedocView.as_view(url_name='schema'),
-            name='redoc'
+            f"{url_prefix}redoc/",
+            SpectacularRedocView.as_view(url_name="schema"),
+            name="redoc",
         ),
     ]
 
@@ -120,11 +117,12 @@ class CustomSpectacularSwaggerView:
         """Generate custom script with service navigation."""
         # Build services JSON for JS
         import json
+
         services_json = json.dumps(services)
 
         return f"""
 <style>
-.iron-topbar {{
+.stapel-topbar {{
     background: #1f2937;
     padding: 8px 16px;
     display: flex;
@@ -136,28 +134,28 @@ class CustomSpectacularSwaggerView:
     top: 0;
     z-index: 1000;
 }}
-.iron-topbar a {{
+.stapel-topbar a {{
     color: #fff;
     text-decoration: none;
 }}
-.iron-topbar a:hover {{
+.stapel-topbar a:hover {{
     text-decoration: underline;
 }}
-.iron-admin-btn {{
+.stapel-admin-btn {{
     background: #417690;
     color: #fff !important;
     padding: 6px 12px;
     border-radius: 4px;
     font-weight: 500;
 }}
-.iron-admin-btn:hover {{
+.stapel-admin-btn:hover {{
     background: #205067;
     text-decoration: none !important;
 }}
-.iron-svc-dropdown {{
+.stapel-svc-dropdown {{
     position: relative;
 }}
-.iron-svc-btn {{
+.stapel-svc-btn {{
     background: rgba(255,255,255,0.1);
     border: 1px solid rgba(255,255,255,0.2);
     color: #fff;
@@ -166,10 +164,10 @@ class CustomSpectacularSwaggerView:
     cursor: pointer;
     font-size: 14px;
 }}
-.iron-svc-btn:hover {{
+.stapel-svc-btn:hover {{
     background: rgba(255,255,255,0.2);
 }}
-.iron-svc-menu {{
+.stapel-svc-menu {{
     display: none;
     position: absolute;
     top: calc(100% - 4px);
@@ -181,43 +179,43 @@ class CustomSpectacularSwaggerView:
     padding-top: 8px;
     z-index: 1001;
 }}
-.iron-svc-dropdown:hover .iron-svc-menu,
-.iron-svc-menu:hover {{
+.stapel-svc-dropdown:hover .stapel-svc-menu,
+.stapel-svc-menu:hover {{
     display: block;
 }}
-.iron-svc-menu-title {{
+.stapel-svc-menu-title {{
     padding: 8px 16px 4px;
     font-size: 11px;
     font-weight: 600;
     color: #666;
     text-transform: uppercase;
 }}
-.iron-svc-item {{
+.stapel-svc-item {{
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 8px 16px;
     color: #333;
 }}
-.iron-svc-item:hover {{
+.stapel-svc-item:hover {{
     background: #f5f5f5;
 }}
-.iron-svc-item.active {{
+.stapel-svc-item.active {{
     background: #e8f4f8;
     font-weight: 600;
 }}
-.iron-svc-item .links {{
+.stapel-svc-item .links {{
     display: flex;
     gap: 6px;
 }}
-.iron-svc-item .links a {{
+.stapel-svc-item .links a {{
     color: #417690;
     padding: 2px 8px;
     border-radius: 3px;
     background: #f0f0f0;
     font-size: 12px;
 }}
-.iron-svc-item .links a:hover {{
+.stapel-svc-item .links a:hover {{
     background: #417690;
     color: #fff;
     text-decoration: none;
@@ -229,18 +227,18 @@ class CustomSpectacularSwaggerView:
     const services = {services_json};
 
     function createNavbar() {{
-        if (document.getElementById('iron-topbar')) return;
+        if (document.getElementById('stapel-topbar')) return;
 
         const topbar = document.createElement('div');
-        topbar.id = 'iron-topbar';
-        topbar.className = 'iron-topbar';
+        topbar.id = 'stapel-topbar';
+        topbar.className = 'stapel-topbar';
 
         const adminUrl = currentPrefix ? '/' + currentPrefix + '/admin/' : '/admin/';
 
         let servicesHtml = '';
         services.forEach(svc => {{
             const isActive = svc.prefix === currentPrefix ? ' active' : '';
-            servicesHtml += '<div class="iron-svc-item' + isActive + '">' +
+            servicesHtml += '<div class="stapel-svc-item' + isActive + '">' +
                 '<span>' + svc.name + '</span>' +
                 '<span class="links">' +
                     '<a href="' + svc.admin_url + '">Admin</a>' +
@@ -249,23 +247,23 @@ class CustomSpectacularSwaggerView:
             '</div>';
         }});
 
-        topbar.innerHTML = '<a href="' + adminUrl + '" class="iron-admin-btn">Admin</a>' +
-            '<div class="iron-svc-dropdown">' +
-                '<button class="iron-svc-btn">Services ▾</button>' +
-                '<div class="iron-svc-menu">' +
-                    '<div class="iron-svc-menu-title">All Services</div>' +
+        topbar.innerHTML = '<a href="' + adminUrl + '" class="stapel-admin-btn">Admin</a>' +
+            '<div class="stapel-svc-dropdown">' +
+                '<button class="stapel-svc-btn">Services ▾</button>' +
+                '<div class="stapel-svc-menu">' +
+                    '<div class="stapel-svc-menu-title">All Services</div>' +
                     servicesHtml +
-                    '<div class="iron-svc-menu-title" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;">Tools</div>' +
-                    '<div class="iron-svc-item">' +
+                    '<div class="stapel-svc-menu-title" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;">Tools</div>' +
+                    '<div class="stapel-svc-item">' +
                         '<span>Translator Dashboard</span>' +
                         '<span class="links"><a href="/translate/dashboard/">Open</a></span>' +
                     '</div>' +
-                    '<div class="iron-svc-menu-title" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;">Monitoring</div>' +
-                    '<div class="iron-svc-item">' +
+                    '<div class="stapel-svc-menu-title" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;">Monitoring</div>' +
+                    '<div class="stapel-svc-item">' +
                         '<span>Grafana</span>' +
-                        '<span class="links"><a href="/monitoring/grafana/d/iron-home/iron-system-overview" target="_blank">Open</a></span>' +
+                        '<span class="links"><a href="/monitoring/grafana/d/stapel-home/stapel-system-overview" target="_blank">Open</a></span>' +
                     '</div>' +
-                    '<div class="iron-svc-item">' +
+                    '<div class="stapel-svc-item">' +
                         '<span>Prometheus</span>' +
                         '<span class="links"><a href="/monitoring/prometheus/" target="_blank">Open</a></span>' +
                     '</div>' +
@@ -296,13 +294,13 @@ class CustomSpectacularSwaggerView:
     observer.observe(document.body, {{ childList: true, subtree: true }});
 }})();
 </script>
-""".encode('utf-8')
+""".encode("utf-8")
 
     @classmethod
     def as_view(cls, **initkwargs):
         """Create a view that wraps SpectacularSwaggerView with custom JS injection."""
-        from drf_spectacular.views import SpectacularSwaggerView
         from django.views.decorators.cache import never_cache
+        from drf_spectacular.views import SpectacularSwaggerView
 
         get_custom_script = cls._get_custom_script
 
@@ -313,29 +311,35 @@ class CustomSpectacularSwaggerView:
                 response = super().dispatch(request, *args, **kwargs)
 
                 # Render the response if it's a TemplateResponse
-                if hasattr(response, 'render'):
+                if hasattr(response, "render"):
                     response.render()
 
                 # Inject custom JavaScript with service navigation
-                if hasattr(response, 'content') and b'swagger-ui' in response.content:
+                if hasattr(response, "content") and b"swagger-ui" in response.content:
                     from django.conf import settings
+
                     from stapel_core.core.config import IRON_SERVICES
 
-                    current_prefix = getattr(settings, 'URL_PREFIX', '').rstrip('/')
+                    current_prefix = getattr(settings, "URL_PREFIX", "").rstrip("/")
                     services = []
                     for svc in IRON_SERVICES:
-                        prefix = svc['prefix']
-                        services.append({
-                            'name': svc['name'],
-                            'prefix': prefix,
-                            'admin_url': f"/{prefix}/admin/" if prefix else "/admin/",
-                            'swagger_url': f"/{prefix}/swagger/" if prefix else "/swagger/",
-                        })
+                        prefix = svc["prefix"]
+                        services.append(
+                            {
+                                "name": svc["name"],
+                                "prefix": prefix,
+                                "admin_url": f"/{prefix}/admin/"
+                                if prefix
+                                else "/admin/",
+                                "swagger_url": f"/{prefix}/swagger/"
+                                if prefix
+                                else "/swagger/",
+                            }
+                        )
 
                     custom_script = get_custom_script(current_prefix, services)
                     response.content = response.content.replace(
-                        b'</body>',
-                        custom_script + b'</body>'
+                        b"</body>", custom_script + b"</body>"
                     )
 
                 return response
@@ -366,9 +370,9 @@ class IsStaffUserForSwagger:
             def has_permission(self, request, _view):
                 """Check if user is authenticated and is staff."""
                 return bool(
-                    request.user and
-                    request.user.is_authenticated and
-                    request.user.is_staff
+                    request.user
+                    and request.user.is_authenticated
+                    and request.user.is_staff
                 )
 
         return _IsStaffUserForSwagger()
@@ -390,22 +394,23 @@ def _register_jwt_auth_extension():
         This tells drf-spectacular how to document the JWT cookie authentication
         in the generated OpenAPI schema.
         """
-        target_class = 'stapel_core.django.authentication.JWTCookieAuthentication'
-        name = 'JWTCookieAuth'
+
+        target_class = "stapel_core.django.jwt.authentication.JWTCookieAuthentication"
+        name = "JWTCookieAuth"
 
         def get_security_definition(self, _auto_schema):
             return {
-                'type': 'apiKey',
-                'in': 'cookie',
-                'name': 'iron_jwt',
-                'description': 'JWT token stored in cookie. Login via /auth/admin/ to get the cookie.',
+                "type": "apiKey",
+                "in": "cookie",
+                "name": "stapel_jwt",
+                "description": "JWT token stored in cookie. Login via /auth/admin/ to get the cookie.",
             }
 
     # The extension is auto-registered when the class is defined
     return JWTCookieAuthenticationExtension
 
 
-def get_dev_urls(url_prefix: str = '', mcp_schema_view=None):
+def get_dev_urls(url_prefix: str = "", mcp_schema_view=None):
     """
     Get development-only URL patterns (Swagger, MCP, Debug Toolbar).
 
@@ -419,8 +424,8 @@ def get_dev_urls(url_prefix: str = '', mcp_schema_view=None):
         list: URL patterns (empty in production)
 
     Example:
-        from stapel_core.django.swagger import get_dev_urls
-        from stapel_core.django.mcp import build_mcp_schema_view
+        from stapel_core.django.openapi.swagger import get_dev_urls
+        from stapel_core.django.openapi.mcp import build_mcp_schema_view
 
         mcp_schema_view = build_mcp_schema_view(...)
 
@@ -430,9 +435,10 @@ def get_dev_urls(url_prefix: str = '', mcp_schema_view=None):
         ]
     """
     import os
-    env = os.environ.get('DJANGO_ENV', '')
 
-    if env not in ('local', 'dev'):
+    env = os.envstapel.get("DJANGO_ENV", "")
+
+    if env not in ("local", "dev"):
         return []
 
     urls = [
@@ -442,23 +448,35 @@ def get_dev_urls(url_prefix: str = '', mcp_schema_view=None):
 
     # MCP Schema endpoints
     if mcp_schema_view:
-        urls.extend([
-            path(f'{url_prefix}mcp-schema.json', mcp_schema_view, name='mcp-schema'),
-            path(f'{url_prefix}.well-known/mcp.json', mcp_schema_view, name='mcp-wellknown'),
-        ])
+        urls.extend(
+            [
+                path(
+                    f"{url_prefix}mcp-schema.json", mcp_schema_view, name="mcp-schema"
+                ),
+                path(
+                    f"{url_prefix}.well-known/mcp.json",
+                    mcp_schema_view,
+                    name="mcp-wellknown",
+                ),
+            ]
+        )
 
     # Debug Toolbar (only if in INSTALLED_APPS)
     from django.conf import settings
-    if 'debug_toolbar' in settings.INSTALLED_APPS:
+
+    if "debug_toolbar" in settings.INSTALLED_APPS:
         import debug_toolbar
-        urls.append(path(f'{url_prefix}__debug__/', include(debug_toolbar.urls)))
+
+        urls.append(path(f"{url_prefix}__debug__/", include(debug_toolbar.urls)))
 
     return urls
 
 
-def get_app_swagger_urls(url_prefix: str, existing_urlpatterns=None, title: str = ''):
+def get_app_swagger_urls(url_prefix: str, existing_urlpatterns=None, title: str = ""):
     """
     Backward-compatible alias for get_swagger_urls.
     Previously accepted (app_name, urlpatterns, title); prefix is all that's used.
     """
-    return get_swagger_urls(url_prefix + '/' if not url_prefix.endswith('/') else url_prefix)
+    return get_swagger_urls(
+        url_prefix + "/" if not url_prefix.endswith("/") else url_prefix
+    )

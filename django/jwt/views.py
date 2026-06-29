@@ -11,8 +11,8 @@ from django.views import View
 from django.contrib.auth import logout as django_logout
 from django.conf import settings
 
-from ..core.token_manager import TokenManager
-from ..core.token_blacklist import TokenBlacklist
+from stapel_core.core.token_manager import TokenManager
+from stapel_core.core.token_blacklist import TokenBlacklist
 from .utils import extract_jwt_from_request, load_jwt_config_from_settings, set_jwt_cookies
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class JWTLogoutView(View):
 
             # Initialize JWT handler
             config = load_jwt_config_from_settings()
-            from ..core.jwt_handler import JWTHandler
+            from stapel_core.core.jwt_handler import JWTHandler
             jwt_handler = JWTHandler(config)
 
             # Blacklist access token if present and not expired
@@ -190,7 +190,7 @@ class JWTStatusView(View):
             # Initialize JWT handler
             config = load_jwt_config_from_settings()
 
-            from ..core.jwt_handler import JWTHandler
+            from stapel_core.core.jwt_handler import JWTHandler
             jwt_handler = JWTHandler(config)
 
             # Check access token

@@ -26,11 +26,11 @@ BASE_MIDDLEWARE = [
 
 BASE_REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'stapel_core.django.authentication.JWTCookieAuthentication',
+        'stapel_core.django.jwt.authentication.JWTCookieAuthentication',
     ],
     # Empty by default — avoid IsAuthenticated/IsServiceRequest blocking tests with 403
     'DEFAULT_PERMISSION_CLASSES': [],
-    'EXCEPTION_HANDLER': 'stapel_core.django.errors.iron_exception_handler',
+    'EXCEPTION_HANDLER': 'stapel_core.django.api.errors.iron_exception_handler',
 }
 
 

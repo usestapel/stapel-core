@@ -72,7 +72,7 @@ class JWTCookieAuthentication(authentication.BaseAuthentication):
         In settings.py:
         REST_FRAMEWORK = {
             'DEFAULT_AUTHENTICATION_CLASSES': [
-                'stapel_core.django.authentication.JWTCookieAuthentication',
+                'stapel_core.django.jwt.authentication.JWTCookieAuthentication',
             ],
         }
     """

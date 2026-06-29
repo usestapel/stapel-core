@@ -10,7 +10,7 @@ from django.contrib.auth import login
 from django.conf import settings
 
 from .utils import set_jwt_cookies
-from .jwt_provider import jwt_provider
+from .provider import jwt_provider
 
 logger = logging.getLogger(__name__)
 

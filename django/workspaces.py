@@ -1,7 +1,7 @@
 """
 Cross-service workspace membership helpers.
 
-Other services (recordings, billing, ...) ask iron-workspaces over HTTP
+Other services (recordings, billing, ...) ask stapel-workspaces over HTTP
 whether a given user has the required role in a given workspace.  The
 result is cached briefly in Redis (or the local cache) so a single
 request burst doesn't fan out into N HTTP calls.
@@ -24,11 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 WORKSPACES_SERVICE_URL = os.getenv(
-    "WORKSPACES_SERVICE_URL", "http://iron-workspaces:8000"
+    "WORKSPACES_SERVICE_URL", "http://stapel-workspaces:8000"
 )
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "")
 
-# Role hierarchy mirrored from iron-workspaces.workspaces.permissions
+# Role hierarchy mirrored from stapel-workspaces.workspaces.permissions
 ROLE_HIERARCHY = ["viewer", "member", "admin", "owner"]
 CACHE_TTL_SECONDS = 30
 
@@ -61,9 +61,7 @@ def get_membership(workspace_id, user_id) -> Optional[Membership]:
     if cached is not None:
         if cached == "__none__":
             return None
-        return Membership(
-            workspace_id=workspace_id, user_id=user_id, role=cached
-        )
+        return Membership(workspace_id=workspace_id, user_id=user_id, role=cached)
 
     headers = {"Accept": "application/json"}
     if SERVICE_API_KEY:
@@ -122,7 +120,13 @@ def get_or_create_personal_workspace(user_id) -> Optional[str]:
         resp = requests.post(url, headers=headers, timeout=5)
         if resp.status_code == 200:
             return resp.json().get("workspace_id")
-        logger.warning("get_or_create_personal_workspace: unexpected %s for user %s", resp.status_code, user_id)
+        logger.warning(
+            "get_or_create_personal_workspace: unexpected %s for user %s",
+            resp.status_code,
+            user_id,
+        )
     except requests.RequestException as exc:
-        logger.warning("get_or_create_personal_workspace failed for user %s: %s", user_id, exc)
+        logger.warning(
+            "get_or_create_personal_workspace failed for user %s: %s", user_id, exc
+        )
     return None

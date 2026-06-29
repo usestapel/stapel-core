@@ -83,7 +83,7 @@ def convert_openapi_to_tools_schema(
     """
     Convert OpenAPI schema into Claude-compatible tools list format.
 
-    This matches the older iron-cdn MCP response shape to avoid breaking consumers.
+    This matches the older stapel-cdn MCP response shape to avoid breaking consumers.
     """
     mcp_schema = {
         "name": name,
@@ -98,10 +98,10 @@ def convert_openapi_to_tools_schema(
                 continue
 
             tool = {
-                "name": details.get("operationId", f"{method}_{path}".replace("/", "_")),
-                "description": details.get(
-                    "summary", details.get("description", "")
+                "name": details.get(
+                    "operationId", f"{method}_{path}".replace("/", "_")
                 ),
+                "description": details.get("summary", details.get("description", "")),
                 "inputSchema": {"type": "object", "properties": {}, "required": []},
             }
 
@@ -133,7 +133,9 @@ def build_mcp_schema_view(
     title: str,
     description: str,
     version: str = "1.0.0",
-    converter: Callable[[Dict[str, Any], Any], Dict[str, Any]] = convert_openapi_to_openrpc,
+    converter: Callable[
+        [Dict[str, Any], Any], Dict[str, Any]
+    ] = convert_openapi_to_openrpc,
 ):
     """
     Return a Django view that returns MCP schema converted from OpenAPI.

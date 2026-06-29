@@ -18,7 +18,7 @@ class IsStaffUser(permissions.BasePermission):
         In settings.py:
         REST_FRAMEWORK = {
             'DEFAULT_PERMISSION_CLASSES': [
-                'stapel_core.django.permissions.IsStaffUser',
+                'stapel_core.django.api.permissions.IsStaffUser',
             ],
         }
 
