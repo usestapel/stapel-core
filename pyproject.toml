@@ -48,7 +48,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--tb=short -q"
+addopts = "--tb=short -q --import-mode=importlib"
 
 [tool.coverage.run]
 source = ["stapel_core"]
