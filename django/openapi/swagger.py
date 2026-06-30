@@ -436,7 +436,7 @@ def get_dev_urls(url_prefix: str = "", mcp_schema_view=None):
     """
     import os
 
-    env = os.envstapel.get("DJANGO_ENV", "")
+    env = os.environ.get("DJANGO_ENV", "")
 
     if env not in ("local", "dev"):
         return []

@@ -1,5 +1,4 @@
 import json
-import pytest
 
 from stapel_core.bus import Event, get_bus, publish, reset_bus
 from stapel_core.bus.backends.memory import MemoryBus

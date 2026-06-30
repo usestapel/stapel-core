@@ -11,7 +11,6 @@ import os
 import signal
 import threading
 import time
-import traceback
 from typing import Callable
 
 from ..base import BusBackend

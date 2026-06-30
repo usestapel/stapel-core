@@ -212,7 +212,7 @@ class CdnImageListField(models.JSONField):
         kwargs['image_type'] = self.image_type
         kwargs['max_images'] = self.max_images
         # Remove defaults
-        if kwargs.get('default') == list:
+        if kwargs.get('default') is list:
             del kwargs['default']
         if kwargs.get('blank') is True:
             del kwargs['blank']

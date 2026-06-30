@@ -1,6 +1,6 @@
 import uuid
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 from django.test import RequestFactory, override_settings
 from django.http import HttpResponse
 

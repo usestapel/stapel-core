@@ -14,8 +14,8 @@ configure_django(
     },
 )
 
-import pytest
-from stapel_core.bus import reset_bus
+import pytest  # noqa: E402
+from stapel_core.bus import reset_bus  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
