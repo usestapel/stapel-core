@@ -86,7 +86,7 @@ class JWTCookieAuthentication(authentication.BaseAuthentication):
             tuple: (user, None) if authenticated, None otherwise
         """
         from .utils import extract_jwt_from_request, get_or_create_user_from_jwt
-        from .jwt_provider import jwt_provider
+        from .provider import jwt_provider
 
         # Extract JWT from cookies
         access_token, _ = extract_jwt_from_request(request)

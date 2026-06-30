@@ -30,7 +30,7 @@ BASE_REST_FRAMEWORK = {
     ],
     # Empty by default — avoid IsAuthenticated/IsServiceRequest blocking tests with 403
     'DEFAULT_PERMISSION_CLASSES': [],
-    'EXCEPTION_HANDLER': 'stapel_core.django.api.errors.iron_exception_handler',
+    'EXCEPTION_HANDLER': 'stapel_core.django.api.errors.stapel_exception_handler',
 }
 
 

@@ -19,6 +19,7 @@ Usage:
 """
 
 import logging
+import threading
 from typing import Optional, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class JWTProvider:
     """
 
     _instance = None
+    _init_lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
@@ -40,37 +42,45 @@ class JWTProvider:
         return cls._instance
 
     def _ensure_initialized(self):
-        """Lazy initialization to avoid import-time Django settings access."""
+        """Lazy initialization to avoid import-time Django settings access.
+
+        Uses double-checked locking so two concurrent first-request threads
+        don't each build their own handler/manager (cf. bus/router.get_bus).
+        """
         if self._initialized:
             return
 
-        from .utils import load_jwt_config_from_settings
-        from stapel_core.core.token_manager import TokenManager
-        from stapel_core.core.jwt_handler import JWTHandler
+        with self._init_lock:
+            if self._initialized:
+                return
 
-        self._config = load_jwt_config_from_settings()
-        self._blacklist = self._init_blacklist()
-        self._handler = JWTHandler(self._config)
-        self._manager = TokenManager(self._config, blacklist=self._blacklist)
-        self._initialized = True
+            from .utils import load_jwt_config_from_settings
+            from stapel_core.core.token_manager import TokenManager
+            from stapel_core.core.jwt_handler import JWTHandler
 
-        logger.info(
-            f"JWTProvider initialized: algorithm={self._config.algorithm}, "
-            f"can_sign={self._config.can_sign()}, can_verify={self._config.can_verify()}"
-        )
+            self._config = load_jwt_config_from_settings()
+            self._blacklist = self._init_blacklist()
+            self._handler = JWTHandler(self._config)
+            self._manager = TokenManager(self._config, blacklist=self._blacklist)
+            self._initialized = True
+
+            logger.info(
+                f"JWTProvider initialized: algorithm={self._config.algorithm}, "
+                f"can_sign={self._config.can_sign()}, can_verify={self._config.can_verify()}"
+            )
 
     def _init_blacklist(self):
-        """Initialize token blacklist with Redis client."""
+        """Initialize token blacklist.
+
+        TokenBlacklist is backed by Django's cache framework (LocMem in tests,
+        Redis in production via django-redis) — no raw Redis client is needed.
+        """
         from stapel_core.core.token_blacklist import TokenBlacklist
         try:
-            from django.core.cache import cache
-            redis_client = None
-            if hasattr(cache, 'client'):
-                redis_client = cache.client.get_client()
-            return TokenBlacklist(redis_client)
+            return TokenBlacklist()
         except Exception as e:
             logger.warning(f"Could not initialize token blacklist: {e}")
-            return TokenBlacklist(None)
+            return TokenBlacklist()
 
     @property
     def config(self):

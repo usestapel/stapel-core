@@ -25,6 +25,7 @@ dependencies = [
     "django-redis>=5.4",
     "PyJWT>=2.8",
     "cryptography>=41.0",
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
@@ -56,44 +57,19 @@ omit = [
     "*/bus/_config.py",
     "*/bus/backends/kafka.py",
     "*/kafka/*",
-    # Django admin/registration boilerplate
-    "*/django/admin.py",
-    "*/django/admin_context.py",
-    "*/django/admin_redirect_middleware.py",
-    "*/users/admin.py",
     # AppConfig — no logic
     "*/django/apps.py",
-    # Auth views/backends — tested inside each service
-    "*/django/auth_views.py",
-    "*/django/backends.py",
-    "*/django/session_backend.py",
-    # Django model fields, abstract models, groups — tested at service level
-    "*/django/fields.py",
-    "*/django/models.py",
-    "*/django/groups.py",
-    # Health check views — trivial HTTP wrappers
-    "*/django/health.py",
-    # JWT provider singleton — initialized per-service, not package-testable
+    # Users admin — trivial Django admin registration
+    "*/django/users/admin.py",
+    # JWT provider top-level shim — re-export, tested via the real module
     "*/django/jwt_provider.py",
+    # Per-service settings module — wired per deployment, not package-testable
+    "*/django/settings.py",
     # Management commands — run via CLI, tested at service level
     "*/management/commands/reset_sequences.py",
     "*/management/commands/staff_group.py",
-    # MCP, OpenAPI, Swagger — schema generation wrappers
-    "*/django/mcp.py",
-    "*/django/openapi.py",
-    "*/django/openid.py",
-    "*/django/swagger.py",
-    # Pagination, revision — complex DRF wrappers, tested in services
-    "*/django/pagination.py",
-    "*/django/revision.py",
-    # URL routing boilerplate
-    "*/django/routers.py",
-    # Per-service settings module
-    "*/django/settings.py",
     # External service integrations — require running services
-    "*/django/telegram.py",
     "*/django/workspaces.py",
-    "*/django/views.py",
     "*/notifications/*",
     # GDPR — external data export, tested at service level
     "*/gdpr.py",
@@ -120,6 +96,7 @@ packages = [
     "stapel_core",
     "stapel_core.bus",
     "stapel_core.bus.backends",
+    "stapel_core.captcha",
     "stapel_core.core",
     "stapel_core.django",
     "stapel_core.django.jwt",

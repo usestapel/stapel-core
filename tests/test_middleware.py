@@ -42,8 +42,8 @@ def _mock_jwt(
     mock.refresh_access_token.return_value = refresh_result
     mock.manager.is_near_expiry.return_value = near_expiry
     # config used in process_response cookie clearing
-    mock.config.cookie_name = "iron_jwt"
-    mock.config.refresh_cookie_name = "iron_refresh_jwt"
+    mock.config.cookie_name = "stapel_jwt"
+    mock.config.refresh_cookie_name = "stapel_refresh_jwt"
     mock.config.cookie_domain = None
     mock.config.cookie_samesite = "Lax"
     return mock
@@ -114,7 +114,7 @@ class TestJWTAuthMiddlewareProcessRequest:
     def test_blacklisted_access_token_clears_cookies(self):
         mock_jwt = _mock_jwt(is_blacklisted=True)
         with patch('stapel_core.django.jwt.middleware.jwt_provider', mock_jwt):
-            req = _req(cookies={'iron_jwt': 'bad.token'})
+            req = _req(cookies={'stapel_jwt': 'bad.token'})
             result = self.middleware.process_request(req)
         assert result is None
         assert getattr(req, '_jwt_clear_cookies', False) is True
@@ -126,7 +126,7 @@ class TestJWTAuthMiddlewareProcessRequest:
             return token == 'bad.refresh'
         mock_jwt.is_blacklisted.side_effect = _is_blacklisted
         with patch('stapel_core.django.jwt.middleware.jwt_provider', mock_jwt):
-            req = _req(cookies={'iron_jwt': 'good.access', 'iron_refresh_jwt': 'bad.refresh'})
+            req = _req(cookies={'stapel_jwt': 'good.access', 'stapel_refresh_jwt': 'bad.refresh'})
             result = self.middleware.process_request(req)
         assert result is None
         assert getattr(req, '_jwt_clear_cookies', False) is True
@@ -140,7 +140,7 @@ class TestJWTAuthMiddlewareProcessRequest:
             patch('stapel_core.django.jwt.middleware.login') as mock_login,
             patch('stapel_core.django.jwt.authentication.is_user_blacklisted', return_value=False),
         ):
-            req = _req(cookies={'iron_jwt': 'valid.token'})
+            req = _req(cookies={'stapel_jwt': 'valid.token'})
             req.user = MagicMock(is_authenticated=False)
             result = self.middleware.process_request(req)
         assert result is None
@@ -155,7 +155,7 @@ class TestJWTAuthMiddlewareProcessRequest:
             patch('stapel_core.django.jwt.middleware.login') as mock_login,
             patch('stapel_core.django.jwt.authentication.is_user_blacklisted', return_value=False),
         ):
-            req = _req(cookies={'iron_jwt': 'valid.token'})
+            req = _req(cookies={'stapel_jwt': 'valid.token'})
             req.user = MagicMock(is_authenticated=True, pk='user-123')
             result = self.middleware.process_request(req)
         assert result is None
@@ -168,7 +168,7 @@ class TestJWTAuthMiddlewareProcessRequest:
             patch('stapel_core.django.jwt.middleware.get_or_create_user_from_jwt', return_value=None),
             patch('stapel_core.django.jwt.authentication.is_user_blacklisted', return_value=False),
         ):
-            req = _req(cookies={'iron_jwt': 'valid.token'})
+            req = _req(cookies={'stapel_jwt': 'valid.token'})
             req.user = MagicMock(is_authenticated=False)
             self.middleware.process_request(req)
         assert getattr(req, '_jwt_clear_cookies', False) is True
@@ -179,7 +179,7 @@ class TestJWTAuthMiddlewareProcessRequest:
             patch('stapel_core.django.jwt.middleware.jwt_provider', mock_jwt),
             patch('stapel_core.django.jwt.authentication.is_user_blacklisted', return_value=True),
         ):
-            req = _req(cookies={'iron_jwt': 'valid.token'})
+            req = _req(cookies={'stapel_jwt': 'valid.token'})
             req.user = MagicMock(is_authenticated=False)
             self.middleware.process_request(req)
         assert getattr(req, '_jwt_clear_cookies', False) is True
@@ -188,7 +188,7 @@ class TestJWTAuthMiddlewareProcessRequest:
     def test_invalid_token_no_refresh_allowed(self):
         mock_jwt = _mock_jwt(user_data=None)
         with patch('stapel_core.django.jwt.middleware.jwt_provider', mock_jwt):
-            req = _req(cookies={'iron_jwt': 'expired.token', 'iron_refresh_jwt': 'ref.tok'})
+            req = _req(cookies={'stapel_jwt': 'expired.token', 'stapel_refresh_jwt': 'ref.tok'})
             result = self.middleware.process_request(req)
         assert result is None
         mock_jwt.refresh_access_token.assert_not_called()
@@ -205,7 +205,7 @@ class TestJWTAuthMiddlewareProcessRequest:
             patch('stapel_core.django.jwt.middleware.login'),
             patch('stapel_core.django.jwt.authentication.is_user_blacklisted', return_value=False),
         ):
-            req = _req(cookies={'iron_jwt': 'expired.token', 'iron_refresh_jwt': 'ref.tok'})
+            req = _req(cookies={'stapel_jwt': 'expired.token', 'stapel_refresh_jwt': 'ref.tok'})
             req.user = MagicMock(is_authenticated=False)
             self.middleware.process_request(req)
         assert getattr(req, '_jwt_refreshed', False) is True
@@ -215,7 +215,7 @@ class TestJWTAuthMiddlewareProcessRequest:
     def test_refresh_fails_no_new_access_token(self):
         mock_jwt = _mock_jwt(user_data=None, refresh_result=None)
         with patch('stapel_core.django.jwt.middleware.jwt_provider', mock_jwt):
-            req = _req(cookies={'iron_jwt': 'expired.token', 'iron_refresh_jwt': 'ref.tok'})
+            req = _req(cookies={'stapel_jwt': 'expired.token', 'stapel_refresh_jwt': 'ref.tok'})
             req.user = MagicMock(is_authenticated=False)
             result = self.middleware.process_request(req)
         assert result is None
@@ -231,7 +231,7 @@ class TestJWTAuthMiddlewareProcessRequest:
             patch('stapel_core.django.jwt.middleware.login'),
             patch('stapel_core.django.jwt.authentication.is_user_blacklisted', return_value=False),
         ):
-            req = _req(cookies={'iron_jwt': 'near.expiry.token', 'iron_refresh_jwt': 'ref.tok'})
+            req = _req(cookies={'stapel_jwt': 'near.expiry.token', 'stapel_refresh_jwt': 'ref.tok'})
             req.user = MagicMock(is_authenticated=False)
             self.middleware.process_request(req)
         assert getattr(req, '_jwt_refreshed', False) is True
@@ -244,7 +244,7 @@ class TestJWTAuthMiddlewareProcessRequest:
             patch('stapel_core.django.jwt.middleware.get_or_create_user_from_jwt', side_effect=OperationalError()),
             patch('stapel_core.django.jwt.authentication.is_user_blacklisted', return_value=False),
         ):
-            req = _req(cookies={'iron_jwt': 'valid.token'})
+            req = _req(cookies={'stapel_jwt': 'valid.token'})
             req.user = MagicMock(is_authenticated=False)
             result = self.middleware.process_request(req)
         assert result is not None
@@ -274,7 +274,7 @@ class TestJWTAuthMiddlewareProcessResponse:
             req._jwt_clear_cookies = True
             response = HttpResponse()
             result = self.middleware.process_response(req, response)
-        assert "iron_jwt" in result.cookies or result.cookies.get("iron_jwt", None) is not None
+        assert "stapel_jwt" in result.cookies or result.cookies.get("stapel_jwt", None) is not None
         # Cookie deletion sets max_age=0 or expires in the past
         # Django sets delete_cookie by setting max_age=0
 
@@ -289,7 +289,7 @@ class TestJWTAuthMiddlewareProcessResponse:
             response = HttpResponse()
             result = self.middleware.process_response(req, response)
         # set_jwt_cookies should NOT have been called
-        assert 'iron_jwt' not in result.cookies
+        assert 'stapel_jwt' not in result.cookies
 
     @override_settings(JWT_REFRESH_ALLOWED=True)
     def test_sets_cookie_when_refreshed(self):

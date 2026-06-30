@@ -318,11 +318,11 @@ class CustomSpectacularSwaggerView:
                 if hasattr(response, "content") and b"swagger-ui" in response.content:
                     from django.conf import settings
 
-                    from stapel_core.core.config import IRON_SERVICES
+                    from stapel_core.core.config import STAPEL_SERVICES
 
                     current_prefix = getattr(settings, "URL_PREFIX", "").rstrip("/")
                     services = []
-                    for svc in IRON_SERVICES:
+                    for svc in STAPEL_SERVICES:
                         prefix = svc["prefix"]
                         services.append(
                             {

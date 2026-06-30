@@ -182,8 +182,8 @@ SPECTACULAR_SETTINGS = {
 # JWT Configuration for common library - read from environment
 JWT_ACCESS_TOKEN_LIFETIME = int(os.getenv('JWT_ACCESS_TOKEN_LIFETIME', '3600'))  # 1 hour default
 JWT_REFRESH_TOKEN_LIFETIME = int(os.getenv('JWT_REFRESH_TOKEN_LIFETIME', '604800'))  # 7 days default
-JWT_COOKIE_NAME = os.getenv('JWT_COOKIE_NAME', 'iron_jwt')
-JWT_REFRESH_COOKIE_NAME = os.getenv('JWT_REFRESH_COOKIE_NAME', 'iron_refresh_jwt')
+JWT_COOKIE_NAME = os.getenv('JWT_COOKIE_NAME', 'stapel_jwt')
+JWT_REFRESH_COOKIE_NAME = os.getenv('JWT_REFRESH_COOKIE_NAME', 'stapel_refresh_jwt')
 JWT_COOKIE_DOMAIN = os.getenv('JWT_COOKIE_DOMAIN', None)  # None = host-only, set to ".domain.com" for subdomains
 JWT_COOKIE_SECURE = os.getenv('JWT_COOKIE_SECURE', 'False').lower() == 'true'  # True in production with HTTPS
 JWT_COOKIE_HTTPONLY = os.getenv('JWT_COOKIE_HTTPONLY', 'True').lower() == 'true'
@@ -244,7 +244,7 @@ def get_common_templates(base_dir: Path) -> List[dict]:
                     "django.template.context_processors.request",
                     "django.contrib.auth.context_processors.auth",
                     "django.contrib.messages.context_processors.messages",
-                    "stapel_core.django.admin.context.iron_services",
+                    "stapel_core.django.admin.context.stapel_services",
                 ],
             },
         },
@@ -295,8 +295,8 @@ def get_default_database(
     return {
         'ENGINE': engine,
         'NAME': os.getenv('POSTGRES_DB', db_name),
-        'USER': os.getenv('POSTGRES_USER', 'iron'),
-        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'iron'),
+        'USER': os.getenv('POSTGRES_USER', 'stapel'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'stapel'),
         'HOST': os.getenv('POSTGRES_HOST', 'db'),
         'PORT': os.getenv('POSTGRES_PORT', '5432'),
         'CONN_MAX_AGE': int(os.getenv('CONN_MAX_AGE', '0')),
@@ -310,7 +310,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # Session defaults (services can override domain/secure in prod)
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
-SESSION_COOKIE_NAME = "iron_sessionid"
+SESSION_COOKIE_NAME = "stapel_sessionid"
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SECURE = False  # set True in prod
 
@@ -340,7 +340,7 @@ REST_FRAMEWORK = {
     ],
     # Custom AutoSchema that displays permission classes in Swagger
     'DEFAULT_SCHEMA_CLASS': 'stapel_core.django.openapi.schemas.PermissionAwareAutoSchema',
-    'EXCEPTION_HANDLER': 'stapel_core.django.api.errors.iron_exception_handler',
+    'EXCEPTION_HANDLER': 'stapel_core.django.api.errors.stapel_exception_handler',
 }
 
 # Password validation
@@ -422,7 +422,7 @@ JWT_PUBLIC_KEY = base64.b64decode(_jwt_public_key_b64).decode('utf-8') if _jwt_p
 
 # JWT issuer and audience - derived from IRON_HOST if not explicitly set
 JWT_ISSUER = os.getenv('JWT_ISSUER', f'https://{IRON_HOST}')
-JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'iron')
+JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'stapel')
 
 # Message bus backend
 # Options:

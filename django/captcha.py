@@ -68,8 +68,8 @@ class CaptchaMixin:
         ip = _extract_ip(request)
         if not verifier.verify(value, ip):
             logger.warning('Captcha verification failed ip=%s', ip)
-            from stapel_core.django.errors import IronValidationError
-            raise IronValidationError('error.400.captcha_invalid')
+            from stapel_core.django.errors import StapelValidationError
+            raise StapelValidationError('error.400.captcha_invalid')
         return value
 
     def _require_captcha_if_configured(self, attrs: dict) -> None:
@@ -78,5 +78,5 @@ class CaptchaMixin:
         if isinstance(verifier, NoopVerifier):
             return
         if not attrs.get('captcha_token'):
-            from stapel_core.django.errors import IronValidationError
-            raise IronValidationError('error.400.captcha_required')
+            from stapel_core.django.errors import StapelValidationError
+            raise StapelValidationError('error.400.captcha_required')

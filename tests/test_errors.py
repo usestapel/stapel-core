@@ -1,29 +1,39 @@
 from dataclasses import dataclass
-from rest_framework.test import APIRequestFactory
-from rest_framework.exceptions import ValidationError as DRFValidationError, ErrorDetail
+
 from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework.exceptions import ErrorDetail
+from rest_framework.exceptions import ValidationError as DRFValidationError
+from rest_framework.test import APIRequestFactory
 
 from stapel_core.django.api.errors import (
-    IronResponse,
-    IronErrorResponse,
-    IronValidationError,
-    IronServiceError,
-    iron_exception_handler,
-    register_service_errors,
-    format_duration,
-    error_429_rate_limit,
-    error_400_bad_request,
-    error_401_unauthorized,
-    error_403_forbidden,
-    error_404_not_found,
-    error_500_internal,
     ERR_400_BAD_REQUEST,
     ERR_403_FORBIDDEN,
     ERR_404_NOT_FOUND,
     ERR_429_RATE_LIMIT,
     ERR_500_INTERNAL,
+    StapelErrorResponse,
+    error_400_bad_request,
+    error_401_unauthorized,
+    error_403_forbidden,
+    error_404_not_found,
+    error_429_rate_limit,
+    error_500_internal,
+    format_duration,
+    register_service_errors,
+    stapel_exception_handler,
 )
-from stapel_core.django.api.serializers import IronDataclassSerializer
+from stapel_core.django.api.errors import (
+    StapelResponse as StapelResponse,
+)
+from stapel_core.django.api.errors import (
+    StapelServiceError as StapelServiceError,
+)
+from stapel_core.django.api.errors import (
+    StapelValidationError as StapelValidationError,
+)
+from stapel_core.django.api.serializers import (
+    IronDataclassSerializer as StapelDataclassSerializer,
+)
 
 _factory = APIRequestFactory()
 
@@ -33,56 +43,66 @@ def _ctx():
 
 
 # ---------------------------------------------------------------------------
-# IronErrorResponse
+# StapelErrorResponse
 # ---------------------------------------------------------------------------
 
-class TestIronErrorResponse:
+
+class TestStapelErrorResponse:
     def test_status_code(self):
-        resp = IronErrorResponse(404, ERR_404_NOT_FOUND)
+        resp = StapelErrorResponse(404, ERR_404_NOT_FOUND)
         assert resp.status_code == 404
 
     def test_body_has_required_keys(self):
-        resp = IronErrorResponse(400, ERR_400_BAD_REQUEST)
+        resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
         assert "localizable_error" in resp.data
         assert "error" in resp.data
         assert "params" in resp.data
 
     def test_localizable_error_matches_key(self):
-        resp = IronErrorResponse(400, ERR_400_BAD_REQUEST)
+        resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
         assert resp.data["localizable_error"] == ERR_400_BAD_REQUEST
 
     def test_error_message_populated_from_registry(self):
-        resp = IronErrorResponse(404, ERR_404_NOT_FOUND)
+        resp = StapelErrorResponse(404, ERR_404_NOT_FOUND)
         assert resp.data["error"] != ""
         assert resp.data["error"] != ERR_404_NOT_FOUND  # should be the English text
 
     def test_params_passed_through(self):
-        resp = IronErrorResponse(429, ERR_429_RATE_LIMIT, params={
-            "retry_after": 60,
-            "retry_after_minutes": 1,
-            "retry_after_display": "1:00",
-        })
+        resp = StapelErrorResponse(
+            429,
+            ERR_429_RATE_LIMIT,
+            params={
+                "retry_after": 60,
+                "retry_after_minutes": 1,
+                "retry_after_display": "1:00",
+            },
+        )
         assert resp.data["params"]["retry_after"] == 60
 
     def test_unknown_key_uses_key_as_error(self):
-        resp = IronErrorResponse(400, "error.custom.unknown.key")
+        resp = StapelErrorResponse(400, "error.custom.unknown.key")
         assert resp.data["localizable_error"] == "error.custom.unknown.key"
 
     def test_template_formatting(self):
-        resp = IronErrorResponse(400, "error.400.field.max_length", params={
-            "field": "name",
-            "max_length": 100,
-        })
+        resp = StapelErrorResponse(
+            400,
+            "error.400.field.max_length",
+            params={
+                "field": "name",
+                "max_length": 100,
+            },
+        )
         assert "100" in resp.data["error"] or "name" in resp.data["error"]
 
     def test_params_default_to_empty_dict(self):
-        resp = IronErrorResponse(400, ERR_400_BAD_REQUEST)
+        resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
         assert resp.data["params"] == {}
 
 
 # ---------------------------------------------------------------------------
 # Common error helpers
 # ---------------------------------------------------------------------------
+
 
 class TestCommonErrorHelpers:
     def test_error_400(self):
@@ -102,10 +122,11 @@ class TestCommonErrorHelpers:
 
 
 # ---------------------------------------------------------------------------
-# IronResponse
+# StapelResponse
 # ---------------------------------------------------------------------------
 
-class TestIronResponse:
+
+class TestStapelResponse:
     def _make_serializer(self):
         @dataclass
         class MyDto:
@@ -119,7 +140,7 @@ class TestIronResponse:
             value: int
             name: str
 
-        class MySerializer(IronDataclassSerializer):
+        class MySerializer(StapelDataclassSerializer):
             class Meta:
                 dataclass = MyDto
 
@@ -140,31 +161,32 @@ class TestIronResponse:
             value: int
             name: str
 
-        class Ser2(IronDataclassSerializer):
+        class Ser2(StapelDataclassSerializer):
             class Meta:
                 dataclass = MyDto2
 
         inst = MyDto2(value=99, name="test")
-        resp = IronResponse(Ser2(inst))
+        resp = StapelResponse(Ser2(inst))
         assert resp.data == {"value": 99, "name": "test"}
 
     def test_accepts_dict_data_directly(self):
-        resp = IronResponse({"key": "val"})
+        resp = StapelResponse({"key": "val"})
         assert resp.data == {"key": "val"}
 
     def test_empty_response_204(self):
-        resp = IronResponse(status=204)
+        resp = StapelResponse(status=204)
         assert resp.status_code == 204
         assert resp.data is None
 
     def test_default_status_200(self):
-        resp = IronResponse({"x": 1})
+        resp = StapelResponse({"x": 1})
         assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
 # format_duration
 # ---------------------------------------------------------------------------
+
 
 class TestFormatDuration:
     def test_zero(self):
@@ -202,6 +224,7 @@ class TestFormatDuration:
 # error_429_rate_limit
 # ---------------------------------------------------------------------------
 
+
 class TestError429RateLimit:
     def test_returns_429_status(self):
         resp = error_429_rate_limit(60)
@@ -229,85 +252,100 @@ class TestError429RateLimit:
 
 
 # ---------------------------------------------------------------------------
-# iron_exception_handler
+# stapel_exception_handler
 # ---------------------------------------------------------------------------
 
+
 class TestIronExceptionHandler:
-    # IronServiceError
+    # StapelServiceError
     def test_iron_service_error_correct_status(self):
-        exc = IronServiceError(403, ERR_403_FORBIDDEN)
-        resp = iron_exception_handler(exc, _ctx())
+        exc = StapelServiceError(403, ERR_403_FORBIDDEN)
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 403
         assert resp.data["localizable_error"] == ERR_403_FORBIDDEN
 
     def test_iron_service_error_with_params(self):
-        exc = IronServiceError(429, ERR_429_RATE_LIMIT, params={"retry_after": 60, "retry_after_minutes": 1, "retry_after_display": "1:00"})
-        resp = iron_exception_handler(exc, _ctx())
+        exc = StapelServiceError(
+            429,
+            ERR_429_RATE_LIMIT,
+            params={
+                "retry_after": 60,
+                "retry_after_minutes": 1,
+                "retry_after_display": "1:00",
+            },
+        )
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 429
         assert resp.data["params"]["retry_after"] == 60
 
     def test_iron_service_error_500(self):
-        exc = IronServiceError(500, ERR_500_INTERNAL)
-        resp = iron_exception_handler(exc, _ctx())
+        exc = StapelServiceError(500, ERR_500_INTERNAL)
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 500
 
-    # IronValidationError
+    # StapelValidationError
     def test_iron_validation_error_returns_400(self):
-        exc = IronValidationError(ERR_400_BAD_REQUEST)
-        resp = iron_exception_handler(exc, _ctx())
+        exc = StapelValidationError(ERR_400_BAD_REQUEST)
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 400
         assert resp.data["localizable_error"] == ERR_400_BAD_REQUEST
 
     def test_iron_validation_error_with_params(self):
-        exc = IronValidationError("error.400.field.max_length", params={"field": "bio", "max_length": 200})
-        resp = iron_exception_handler(exc, _ctx())
+        exc = StapelValidationError(
+            "error.400.field.max_length", params={"field": "bio", "max_length": 200}
+        )
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 400
         assert resp.data["params"]["field"] == "bio"
 
     # DRF field-level errors
     def test_drf_required_field_error(self):
-        exc = DRFValidationError({"email": [ErrorDetail("This field is required.", code="required")]})
-        resp = iron_exception_handler(exc, _ctx())
+        exc = DRFValidationError(
+            {"email": [ErrorDetail("This field is required.", code="required")]}
+        )
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 400
         assert resp.data["localizable_error"] == "error.400.field.required"
         assert resp.data["params"]["field"] == "email"
 
     def test_drf_max_length_field_error(self):
         exc = DRFValidationError({"name": [ErrorDetail("Too long", code="max_length")]})
-        resp = iron_exception_handler(exc, _ctx())
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.data["localizable_error"] == "error.400.field.max_length"
         assert resp.data["params"]["field"] == "name"
 
     def test_drf_non_field_errors(self):
         exc = DRFValidationError([ErrorDetail("Some non-field error", code="invalid")])
-        resp = iron_exception_handler(exc, _ctx())
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 400
 
     def test_drf_non_field_errors_dict(self):
-        exc = DRFValidationError({"non_field_errors": [ErrorDetail("Password mismatch", code="invalid")]})
-        resp = iron_exception_handler(exc, _ctx())
+        exc = DRFValidationError(
+            {"non_field_errors": [ErrorDetail("Password mismatch", code="invalid")]}
+        )
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 400
 
     def test_drf_registered_key_as_string_detail(self):
         exc = DRFValidationError(ERR_404_NOT_FOUND)
-        resp = iron_exception_handler(exc, _ctx())
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.data["localizable_error"] == ERR_404_NOT_FOUND
 
     # Django ValidationError
     def test_django_validation_error_dict(self):
         exc = DjangoValidationError({"name": ["This field is required."]})
-        resp = iron_exception_handler(exc, _ctx())
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 400
 
     def test_django_validation_error_message(self):
         exc = DjangoValidationError("Something went wrong.")
-        resp = iron_exception_handler(exc, _ctx())
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp.status_code == 400
 
     # Unknown exception falls through to DRF default
     def test_unknown_exception_returns_none(self):
         exc = ValueError("not an API error")
-        resp = iron_exception_handler(exc, _ctx())
+        resp = stapel_exception_handler(exc, _ctx())
         assert resp is None
 
 
@@ -315,19 +353,20 @@ class TestIronExceptionHandler:
 # register_service_errors
 # ---------------------------------------------------------------------------
 
+
 class TestRegisterServiceErrors:
     def test_custom_key_renders_correct_message(self):
         register_service_errors({"error.test.my_custom": "My custom error text"})
-        resp = IronErrorResponse(400, "error.test.my_custom")
+        resp = StapelErrorResponse(400, "error.test.my_custom")
         assert resp.data["error"] == "My custom error text"
 
     def test_custom_key_with_template(self):
         register_service_errors({"error.test.templated": "Value is {val}"})
-        resp = IronErrorResponse(400, "error.test.templated", params={"val": "bad"})
+        resp = StapelErrorResponse(400, "error.test.templated", params={"val": "bad"})
         assert resp.data["error"] == "Value is bad"
 
     def test_bad_template_params_falls_back_to_template(self):
         register_service_errors({"error.test.broken_template": "Value is {val}"})
         # Missing param — should not raise, falls back to raw template
-        resp = IronErrorResponse(400, "error.test.broken_template")
+        resp = StapelErrorResponse(400, "error.test.broken_template")
         assert "Value is" in resp.data["error"]

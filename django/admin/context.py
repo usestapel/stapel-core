@@ -5,23 +5,27 @@ Context processor for Django admin to add service navigation.
 from django.conf import settings
 
 
-def iron_services(_request):
+def stapel_services(_request):
     """
-    Add Iron services navigation to admin context.
+    Add Stapel services navigation to admin context.
 
     This context processor adds a list of available services with their URLs
     to the admin template context, enabling cross-service navigation.
 
-    Services are defined in common.core.config.IRON_SERVICES
+    Services are defined in stapel_core.core.config.STAPEL_SERVICES.
+
+    Exposes the list under both ``stapel_services`` and the legacy
+    ``iron_services`` template variable, so existing admin templates keep
+    rendering until they are migrated.
     """
-    from stapel_core.core.config import IRON_SERVICES
+    from stapel_core.core.config import STAPEL_SERVICES
 
     # Get current service prefix
     current_prefix = getattr(settings, 'URL_PREFIX', '').rstrip('/')
 
     # Build services list with URLs and active status
     services = []
-    for service in IRON_SERVICES:
+    for service in STAPEL_SERVICES:
         prefix = service['prefix']
         admin_url = f"/{prefix}/admin/" if prefix else "/admin/"
         swagger_url = f"/{prefix}/swagger/" if prefix else "/swagger/"
@@ -45,8 +49,14 @@ def iron_services(_request):
     current_dashboard_url = dashboard_urls.get(current_prefix)
 
     return {
-        'iron_services': services,
+        'stapel_services': services,
+        'iron_services': services,  # legacy alias for admin templates
         'current_swagger_url': current_swagger_url,
         'current_service_prefix': current_prefix,
         'current_dashboard_url': current_dashboard_url,
     }
+
+
+# Backward-compat alias — services historically register iron_services.
+iron_services = stapel_services
+

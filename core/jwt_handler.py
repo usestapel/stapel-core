@@ -217,36 +217,16 @@ class JWTHandler:
             )
             return payload
         except jwt.ExpiredSignatureError:
-            logger.warning("[DEBUG] Token has expired")
+            logger.debug("Token has expired")
             return None
         except jwt.InvalidIssuerError as e:
-            logger.warning(f"[DEBUG] Invalid token issuer: {e}")
+            logger.debug("Invalid token issuer: %s", e)
             return None
         except jwt.InvalidAudienceError as e:
-            logger.warning(f"[DEBUG] Invalid token audience: {e}")
+            logger.debug("Invalid token audience: %s", e)
             return None
         except jwt.InvalidTokenError as e:
-            # Log detailed token info for debugging
-            try:
-                header = jwt.get_unverified_header(token)
-                # Also try to decode payload without verification
-                import base64
-                parts = token.split('.')
-                if len(parts) >= 2:
-                    # Decode payload (add padding if needed)
-                    payload_b64 = parts[1] + '=' * (4 - len(parts[1]) % 4)
-                    payload_raw = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
-                    import json
-                    payload_data = json.loads(payload_raw)
-                    exp = payload_data.get('exp', 'N/A')
-                    iat = payload_data.get('iat', 'N/A')
-                    user_id = payload_data.get('user_id', 'N/A')
-                    token_type = payload_data.get('token_type', 'N/A')
-                    logger.warning(f"[DEBUG] Invalid token: {e} | alg={header.get('alg')} expected={self.config.algorithm} | type={token_type} user={user_id} exp={exp} iat={iat}")
-                else:
-                    logger.warning(f"[DEBUG] Invalid token: {e} | header={header}")
-            except Exception as parse_err:
-                logger.warning(f"[DEBUG] Invalid token: {e} | parse_error={parse_err}")
+            logger.debug("Invalid token: %s", e)
             return None
 
     def is_token_expired(self, token: str) -> bool:
