@@ -1,27 +1,180 @@
-# stapel-core
+# stapel_core
 
-> Core Django utilities for the Stapel framework — JWT auth backend, permissions, error handling, serializers, bus abstractions
+Shared Python library for Iron services. Provides JWT authentication, captcha
+verification, event bus, notifications, and Django utilities used across all
+backend services.
 
-Part of the [Stapel framework](https://github.com/usestapel) — composable Django apps for building production-grade platforms.
+Part of the [Stapel framework](https://github.com/usestapel).
 
-## Installation
+## Quick start for a new Django service
 
 ```bash
-pip install stapel-core
+pip install -e ../iron-common-python
 ```
 
-## Quick start
+Add to `INSTALLED_APPS`:
 
 ```python
-# settings.py
 INSTALLED_APPS = [
     ...
-    'stapel_core',
+    'stapel_core.django',
+    'stapel_core.django.users',   # if using the shared User model
 ]
 ```
 
-## Bus events
+## Modules
 
-## License
+### `stapel_core.captcha` — Pluggable captcha verification
 
-MIT — see [LICENSE](LICENSE)
+Backend-agnostic captcha interface. Supports Cloudflare Turnstile, Google
+reCAPTCHA v2, hCaptcha, and custom backends.
+
+**Settings** (per service, in `settings/base.py`):
+
+```python
+CAPTCHA_BACKEND = env.str('CAPTCHA_BACKEND', 'turnstile')
+CAPTCHA_SECRET  = env.str('CAPTCHA_SECRET', None)  # absent → disabled
+```
+
+**Auto-disable**: if `CAPTCHA_SECRET` is `None` or empty, `build_verifier`
+returns `NoopVerifier` regardless of backend. No separate toggle needed.
+
+**DRF integration** (add mixin to any serializer):
+
+```python
+from stapel_core.django.captcha import CaptchaMixin
+
+class MySerializer(CaptchaMixin, serializers.Serializer):
+    captcha_token = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        self._require_captcha_if_configured(attrs)
+        return attrs
+```
+
+**Custom backend** — subclass `CaptchaVerifier` and point to it via a dotted
+import path:
+
+```python
+from stapel_core.captcha import CaptchaVerifier
+
+class MyCaptchaVerifier(CaptchaVerifier):
+    def verify(self, token: str, ip: str | None = None) -> bool:
+        return my_service.check(token, self.secret)
+```
+
+```python
+# settings.py
+CAPTCHA_BACKEND = 'myapp.captcha.MyCaptchaVerifier'
+CAPTCHA_SECRET  = 'my-secret'
+```
+
+---
+
+### `stapel_core.django.jwt` — JWT authentication
+
+Unified JWT provider (singleton). Supports HS256 and RS256.
+
+```python
+from stapel_core.django.jwt.provider import jwt_provider
+
+access, refresh = jwt_provider.create_tokens(user)
+payload = jwt_provider.validate_token(access_token)
+```
+
+**Settings**:
+
+```python
+JWT_ALGORITHM    = 'HS256'           # or 'RS256'
+JWT_SECRET_KEY   = 'your-secret'     # HS256
+JWT_PRIVATE_KEY  = '...'             # RS256
+JWT_PUBLIC_KEY   = '...'             # RS256
+JWT_ISSUER       = 'https://yourapp.com'
+JWT_AUDIENCE     = None
+JWT_ACCESS_TOKEN_LIFETIME  = 900     # seconds
+JWT_REFRESH_TOKEN_LIFETIME = 604800  # seconds
+```
+
+---
+
+### `stapel_core.django.authentication` — JWT cookie auth
+
+`JWTCookieAuthentication` reads JWT from `access_token` cookie or
+`Authorization: Bearer <token>` header.
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'stapel_core.django.authentication.JWTCookieAuthentication',
+    ],
+}
+```
+
+---
+
+### `stapel_core.django.api` — DRF utilities
+
+| Symbol | Purpose |
+|---|---|
+| `IronDataclassSerializer` | Serializer that maps `@dataclass` fields |
+| `IronResponse(serializer)` | Wraps `.data` automatically |
+| `IronErrorResponse(status, ERR_KEY)` | Structured error response |
+| `IronValidationError(ERR_KEY)` | Raises DRF validation error with error key |
+| `register_service_errors(dict)` | Registers error messages for a service |
+| `IronPageNumberPagination` | Standard paginator |
+
+---
+
+### `stapel_core.bus` — Event bus
+
+Kafka-backed event bus with in-memory backend for tests.
+
+```python
+from stapel_core.bus import bus, Event
+
+@bus.on('user.created')
+async def handle(event: Event):
+    ...
+
+await bus.publish(Event(topic='user.created', data={'user_id': '...'}))
+```
+
+---
+
+### `stapel_core.notifications` — Push notifications
+
+```python
+from stapel_core.notifications import request_notification
+
+request_notification(
+    notification_type='welcome',
+    user_id=str(user.id),
+    email=user.email,
+    variables={'name': user.username},
+    source_service='auth',
+)
+```
+
+---
+
+### `stapel_core.oauth` — OAuth provider registry
+
+Provider classes (`GoogleProvider`, `GitHubProvider`, etc.) and registry for
+OAuth consumer flows (when your service accepts OAuth logins from external
+providers).
+
+---
+
+### `stapel_core.gdpr` — GDPR utilities
+
+Account closure requests, data export, re-registration hashes.
+
+---
+
+## Running tests
+
+```bash
+cd iron-common-python
+pip install -e '.[dev]'
+pytest stapel_core/tests/ -v
+```

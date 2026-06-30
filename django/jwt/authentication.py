@@ -7,10 +7,8 @@ for DRF views and Swagger documentation.
 
 import logging
 from rest_framework import authentication
-from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
-User = get_user_model()
 
 # User-level blacklist key prefix — uses raw Redis to bypass Django KEY_PREFIX,
 # so the blacklist works across all services (auth, catalog, profiles, etc.)

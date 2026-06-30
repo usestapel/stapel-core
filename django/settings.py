@@ -213,8 +213,8 @@ COMMON_INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "drf_spectacular",
-    "common.django.apps.CommonDjangoConfig",
-    "common.django.users",
+    "stapel_core.django.apps.CommonDjangoConfig",
+    "stapel_core.django.users",
 ]
 
 COMMON_MIDDLEWARE = [
@@ -222,12 +222,12 @@ COMMON_MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
-    "common.django.middleware.CsrfExemptAPIMiddleware",  # Must be before CsrfViewMiddleware
+    "stapel_core.django.jwt.middleware.CsrfExemptAPIMiddleware",  # Must be before CsrfViewMiddleware
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "common.django.middleware.JWTAuthMiddleware",
-    "common.django.admin_redirect_middleware.AdminLoginRedirectMiddleware",
-    "common.django.middleware.ServiceAPIKeyMiddleware",
+    "stapel_core.django.jwt.middleware.JWTAuthMiddleware",
+    "stapel_core.django.admin.redirect.AdminLoginRedirectMiddleware",
+    "stapel_core.django.jwt.middleware.ServiceAPIKeyMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -244,7 +244,7 @@ def get_common_templates(base_dir: Path) -> List[dict]:
                     "django.template.context_processors.request",
                     "django.contrib.auth.context_processors.auth",
                     "django.contrib.messages.context_processors.messages",
-                    "common.django.admin_context.iron_services",
+                    "stapel_core.django.admin.context.iron_services",
                 ],
             },
         },

@@ -29,9 +29,14 @@ class CommonDjangoConfig(AppConfig):
         # triggers that access before Django settings are fully loaded, the cache will
         # contain DRF defaults instead of our REST_FRAMEWORK config. Force a full reload
         # now that Django is ready and all settings are available.
+        # Also patch APIView.authentication_classes — it's set at class-definition time
+        # from the cached (stale) api_settings value, so we must update it too.
         try:
             from rest_framework.settings import api_settings
+            from rest_framework.views import APIView
             api_settings.reload()
+            APIView.authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES
+            APIView.permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES
         except Exception:
             pass
 

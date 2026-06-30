@@ -1,4 +1,3 @@
-import pytest
 from dataclasses import dataclass
 from rest_framework.test import APIRequestFactory
 from rest_framework.exceptions import ValidationError as DRFValidationError, ErrorDetail
@@ -19,7 +18,6 @@ from stapel_core.django.api.errors import (
     error_404_not_found,
     error_500_internal,
     ERR_400_BAD_REQUEST,
-    ERR_401_UNAUTHORIZED,
     ERR_403_FORBIDDEN,
     ERR_404_NOT_FOUND,
     ERR_429_RATE_LIMIT,
@@ -128,7 +126,6 @@ class TestIronResponse:
         return MySerializer
 
     def test_auto_calls_data_on_serializer(self):
-        Ser = self._make_serializer()
         from dataclasses import dataclass as dc
 
         @dc
