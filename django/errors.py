@@ -1,28 +1,2 @@
 """Backward-compatibility shim — re-exports from stapel_core.django.api.errors."""
 from stapel_core.django.api.errors import *  # noqa: F401,F403
-from stapel_core.django.api.errors import (
-    IronResponse,
-    IronErrorResponse,
-    IronValidationError,
-    IronServiceError,
-    iron_exception_handler,
-    register_service_errors,
-    ERR_400_BAD_REQUEST,
-    ERR_401_UNAUTHORIZED,
-    ERR_402_PAYMENT_REQUIRED,
-    ERR_403_FORBIDDEN,
-    ERR_404_NOT_FOUND,
-    ERR_405_METHOD_NOT_ALLOWED,
-    ERR_406_NOT_ACCEPTABLE,
-    ERR_408_REQUEST_TIMEOUT,
-    ERR_409_CONFLICT,
-    ERR_410_GONE,
-    ERR_413_PAYLOAD_TOO_LARGE,
-    ERR_415_UNSUPPORTED_MEDIA_TYPE,
-    ERR_422_UNPROCESSABLE_ENTITY,
-    ERR_423_LOCKED,
-    ERR_429_TOO_MANY_REQUESTS,
-    ERR_429_RATE_LIMIT,
-    ERR_400_VALIDATION_ERROR,
-    ERR_500_INTERNAL,
-)
