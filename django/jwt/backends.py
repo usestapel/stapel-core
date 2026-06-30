@@ -8,7 +8,7 @@ import logging
 from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth import get_user_model
 
-from stapel_core.core.token_manager import TokenManager
+from .provider import jwt_provider
 from .utils import get_or_create_user_from_jwt
 
 logger = logging.getLogger(__name__)
@@ -20,8 +20,8 @@ class JWTAuthBackend(BaseBackend):
     """
     Django authentication backend for JWT tokens.
 
-    This backend can authenticate users based on JWT tokens
-    and is compatible with Django's authentication system.
+    Authentication is delegated to the shared ``jwt_provider`` singleton so the
+    JWT config, token manager and blacklist are initialised exactly once.
     """
 
     def authenticate(self, request, jwt_token=None, **kwargs):
@@ -31,7 +31,7 @@ class JWTAuthBackend(BaseBackend):
         Args:
             request: Django HttpRequest instance
             jwt_token: JWT token string
-            **kwargs: Additional keyword arguments
+            **kwargs: Additional arguments
 
         Returns:
             User instance if authentication successful, None otherwise
@@ -40,21 +40,11 @@ class JWTAuthBackend(BaseBackend):
             return None
 
         try:
-            # Load JWT configuration from settings
-            from .utils import load_jwt_config_from_settings
-
-            config = load_jwt_config_from_settings()
-
-            # Create token manager
-            token_manager = TokenManager(config)
-
-            # Validate token and extract user data
-            user_data = token_manager.validate_access_token(jwt_token)
+            user_data = jwt_provider.validate_token(jwt_token)
             if not user_data:
                 logger.debug("Invalid JWT token")
                 return None
 
-            # Get or create user from JWT data
             user = get_or_create_user_from_jwt(user_data)
             if not user:
                 logger.error("Failed to get/create user from JWT")

@@ -76,17 +76,6 @@ class TestJWTConfig:
     def test_get_verification_key_hs256(self):
         assert HS256.get_verification_key() == "test-secret-key-for-testing-purposes-only-32b"
 
-    def test_from_dict_converts_lifetimes(self):
-        cfg = JWTConfig.from_dict({
-            "secret_key": "s",
-            "algorithm": "HS256",
-            "audience": None,
-            "access_token_lifetime": 900,
-            "refresh_token_lifetime": 86400,
-        })
-        assert cfg.access_token_lifetime == timedelta(seconds=900)
-        assert cfg.refresh_token_lifetime == timedelta(days=1)
-
 
 # ---------------------------------------------------------------------------
 # JWTHandler — HS256

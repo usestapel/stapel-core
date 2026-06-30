@@ -1,44 +1,31 @@
 """
 Django views for JWT authentication operations.
 
-Provides logout, token refresh, and other authentication-related views.
+All JWT operations route through the shared ``jwt_provider`` singleton so that
+configuration, the token manager and the blacklist are initialised exactly once.
 """
 
 import logging
-from datetime import datetime, timezone
+
+from django.conf import settings
+from django.contrib.auth import logout as django_logout
 from django.http import JsonResponse
 from django.views import View
-from django.contrib.auth import logout as django_logout
-from django.conf import settings
 
-from stapel_core.core.token_manager import TokenManager
-from stapel_core.core.token_blacklist import TokenBlacklist
-from .utils import extract_jwt_from_request, load_jwt_config_from_settings, set_jwt_cookies
+from .provider import jwt_provider
+from .utils import extract_jwt_from_request, set_jwt_cookies
 
 logger = logging.getLogger(__name__)
 
 
 class JWTLogoutView(View):
     """
-    View to handle JWT logout.
+    Handle JWT logout.
 
-    This view:
-    1. Blacklists the current JWT tokens
-    2. Clears JWT cookies
-    3. Logs out Django session
+    Blacklists the current access/refresh tokens (via the provider's blacklist,
+    backed by Django's cache), clears the JWT cookies, and logs out the Django
+    session.
     """
-
-    def _get_redis_client(self):
-        """Get Redis client from Django cache."""
-        try:
-            from django.core.cache import cache
-            # Try to get Redis client from django-redis
-            if hasattr(cache, 'client'):
-                return cache.client.get_client()
-            return None
-        except Exception as e:
-            logger.error(f"Error getting Redis client: {e}")
-            return None
 
     def post(self, request):
         """Handle POST logout request."""
@@ -46,46 +33,23 @@ class JWTLogoutView(View):
         request._jwt_skip_cookie_update = True
 
         try:
-            # Extract tokens from request
             access_token, refresh_token = extract_jwt_from_request(request)
 
-            # Initialize blacklist
-            redis_client = self._get_redis_client()
-            blacklist = TokenBlacklist(redis_client)
+            # Blacklist both tokens if they are present and not yet expired.
+            for token in (access_token, refresh_token):
+                if token:
+                    jwt_provider.blacklist_token(token)
 
-            # Initialize JWT handler
-            config = load_jwt_config_from_settings()
-            from stapel_core.core.jwt_handler import JWTHandler
-            jwt_handler = JWTHandler(config)
-
-            # Blacklist access token if present and not expired
-            if access_token:
-                payload = jwt_handler.decode_token(access_token, verify=False)
-                if payload and 'jti' in payload and 'exp' in payload:
-                    expires_in = datetime.fromtimestamp(payload['exp'], tz=timezone.utc) - datetime.now(timezone.utc)
-                    if expires_in.total_seconds() > 0:
-                        blacklist.blacklist_token(payload['jti'], expires_in)
-
-            # Blacklist refresh token if present and not expired
-            if refresh_token:
-                payload = jwt_handler.decode_token(refresh_token, verify=False)
-                if payload and 'jti' in payload and 'exp' in payload:
-                    expires_in = datetime.fromtimestamp(payload['exp'], tz=timezone.utc) - datetime.now(timezone.utc)
-                    if expires_in.total_seconds() > 0:
-                        blacklist.blacklist_token(payload['jti'], expires_in)
-
-            # Logout Django session
             django_logout(request)
 
-            # Create response with cleared cookies
             response = JsonResponse({
                 'status': 'success',
                 'message': 'Successfully logged out'
             })
 
             # Clear JWT cookies
-            cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'iron_jwt')
-            refresh_cookie_name = getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'iron_refresh_jwt')
+            cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'stapel_jwt')
+            refresh_cookie_name = getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'stapel_refresh_jwt')
             cookie_domain = getattr(settings, 'JWT_COOKIE_DOMAIN', None)
             cookie_samesite = getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax')
 
@@ -109,22 +73,21 @@ class JWTLogoutView(View):
 
 class JWTRefreshView(View):
     """
-    View to explicitly refresh JWT tokens.
+    Explicitly refresh JWT tokens.
 
-    Accepts refresh token and returns new access token.
+    Accepts a refresh token and returns a new access token.
     """
 
     def post(self, request):
         """Handle POST refresh request."""
         try:
-            # Only allow refresh if JWT_REFRESH_ALLOWED is True (should only be in auth service)
+            # Only allow refresh if JWT_REFRESH_ALLOWED is True (auth service only).
             if not getattr(settings, 'JWT_REFRESH_ALLOWED', False):
                 return JsonResponse({
                     'status': 'error',
                     'message': 'Token refresh not allowed on this service'
                 }, status=403)
 
-            # Extract refresh token from request
             _, refresh_token = extract_jwt_from_request(request)
 
             if not refresh_token:
@@ -133,13 +96,8 @@ class JWTRefreshView(View):
                     'message': 'No refresh token provided'
                 }, status=400)
 
-            # Initialize JWT config and token manager
-            config = load_jwt_config_from_settings()
-
-            token_manager = TokenManager(config)
-
-            # Refresh access token (preserves user data from refresh token)
-            new_access_token = token_manager.refresh_access_token(refresh_token)
+            # Refresh via the provider (preserves user data from the refresh token).
+            new_access_token = jwt_provider.refresh_access_token(refresh_token)
 
             if not new_access_token:
                 return JsonResponse({
@@ -147,18 +105,15 @@ class JWTRefreshView(View):
                     'message': 'Failed to refresh token'
                 }, status=401)
 
-            # Create response
             response = JsonResponse({
                 'status': 'success',
                 'message': 'Token refreshed successfully',
                 'access_token': new_access_token
             })
 
-            # Set new access token as cookie
             set_jwt_cookies(response, new_access_token)
 
             logger.info("Token refreshed successfully")
-
             return response
 
         except Exception as e:
@@ -171,9 +126,9 @@ class JWTRefreshView(View):
 
 class JWTStatusView(View):
     """
-    View to check JWT token status.
+    Check JWT token status.
 
-    Returns information about current authentication state.
+    Returns the current authentication state and token validity.
     """
 
     def get(self, request):
@@ -187,24 +142,18 @@ class JWTStatusView(View):
                     'message': 'No tokens found'
                 })
 
-            # Initialize JWT handler
-            config = load_jwt_config_from_settings()
+            handler = jwt_provider.handler
 
-            from stapel_core.core.jwt_handler import JWTHandler
-            jwt_handler = JWTHandler(config)
-
-            # Check access token
             access_valid = False
             access_payload = None
             if access_token:
-                access_payload = jwt_handler.decode_token(access_token, verify=True)
+                access_payload = handler.decode_token(access_token, verify=True)
                 access_valid = access_payload is not None
 
-            # Check refresh token
             refresh_valid = False
             refresh_payload = None
             if refresh_token:
-                refresh_payload = jwt_handler.decode_token(refresh_token, verify=True)
+                refresh_payload = handler.decode_token(refresh_token, verify=True)
                 refresh_valid = refresh_payload is not None
 
             return JsonResponse({

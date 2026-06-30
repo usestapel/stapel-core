@@ -54,9 +54,9 @@ def load_jwt_config_from_settings():
         ),  # None = don't verify audience
         "jwks_url": jwks_url,
         # Cookie settings - must match between set_jwt_cookies and delete_cookie
-        "cookie_name": getattr(settings, "JWT_COOKIE_NAME", "iron_jwt"),
+        "cookie_name": getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt"),
         "refresh_cookie_name": getattr(
-            settings, "JWT_REFRESH_COOKIE_NAME", "iron_refresh_jwt"
+            settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
         ),
         "cookie_domain": getattr(settings, "JWT_COOKIE_DOMAIN", None),
         "cookie_secure": getattr(settings, "JWT_COOKIE_SECURE", False),
@@ -387,9 +387,9 @@ def extract_jwt_from_request(request) -> tuple[Optional[str], Optional[str]]:
     from django.conf import settings
 
     # Get cookie names from settings or use defaults
-    cookie_name = getattr(settings, "JWT_COOKIE_NAME", "iron_jwt")
+    cookie_name = getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt")
     refresh_cookie_name = getattr(
-        settings, "JWT_REFRESH_COOKIE_NAME", "iron_refresh_jwt"
+        settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
     )
 
     # Try to get from cookies first
@@ -417,9 +417,9 @@ def set_jwt_cookies(response, access_token: str, refresh_token: Optional[str] = 
     from django.conf import settings
 
     # Get settings or use defaults
-    cookie_name = getattr(settings, "JWT_COOKIE_NAME", "iron_jwt")
+    cookie_name = getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt")
     refresh_cookie_name = getattr(
-        settings, "JWT_REFRESH_COOKIE_NAME", "iron_refresh_jwt"
+        settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
     )
     cookie_domain = getattr(settings, "JWT_COOKIE_DOMAIN", None)
     cookie_secure = getattr(settings, "JWT_COOKIE_SECURE", False)
@@ -539,9 +539,9 @@ def get_admin_logout_urlpattern(
 
             redirect_response = redirect(f"/{auth_service_prefix}/admin/login/")
 
-            cookie_name = getattr(settings, "JWT_COOKIE_NAME", "iron_jwt")
+            cookie_name = getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt")
             refresh_cookie_name = getattr(
-                settings, "JWT_REFRESH_COOKIE_NAME", "iron_refresh_jwt"
+                settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
             )
             cookie_domain = getattr(settings, "JWT_COOKIE_DOMAIN", None)
             cookie_samesite = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")

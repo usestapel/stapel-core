@@ -1,5 +1,5 @@
 """
-Base serializers for Iron Django services.
+Base serializers for Stapel Django services.
 """
 import dataclasses
 import re
@@ -16,7 +16,7 @@ _ATTR_LINE_RE = re.compile(r'^\s{4,8}(\w+)\s*(?:\(.*?\))?\s*:\s*(.+)$')
 _EXAMPLE_RE = re.compile(r'^(.*?)\.\s*Example:\s*(.+)$')
 
 
-class IronDataclassSerializer(DataclassSerializer):
+class StapelDataclassSerializer(DataclassSerializer):
     """
     DataclassSerializer that bridges dataclass/enum docstrings to OpenAPI.
 
@@ -59,13 +59,13 @@ class IronDataclassSerializer(DataclassSerializer):
 
     @property
     def serializer_dataclass_field(self):
-        return IronDataclassSerializer
+        return StapelDataclassSerializer
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Auto-generated nested instances (no subclass, no __init_subclass__ hook).
         # Set the dataclass docstring as the OpenAPI component description.
-        if type(self) is IronDataclassSerializer:
+        if type(self) is StapelDataclassSerializer:
             dc = self.dataclass_definition.dataclass_type
             parsed = _parse_docstring(dc.__doc__ or '')
             if parsed.get('description'):
@@ -85,7 +85,7 @@ class IronDataclassSerializer(DataclassSerializer):
         cls.__doc__ = parsed['description'] or ''
 
         # Store parsed attrs/members for get_fields()
-        cls._iron_doc = parsed
+        cls._stapel_doc = parsed
 
         # Build example from docstring + metadata overrides
         example_value = {}
@@ -103,9 +103,9 @@ class IronDataclassSerializer(DataclassSerializer):
         dc = self.dataclass_definition.dataclass_type
 
         # 1. Apply docstring-parsed help_text
-        # For explicit subclasses, _iron_doc is set by __init_subclass__.
+        # For explicit subclasses, _stapel_doc is set by __init_subclass__.
         # For auto-generated nested instances, parse at runtime.
-        parsed = getattr(type(self), '_iron_doc', None)
+        parsed = getattr(type(self), '_stapel_doc', None)
         if parsed is None:
             parsed = _parse_docstring(dc.__doc__ or '')
         doc_attrs = parsed.get('attributes', {})
@@ -133,6 +133,10 @@ class IronDataclassSerializer(DataclassSerializer):
                 _apply_enum_descriptions(ser_field, doc_members)
 
         return fields
+
+
+# Backward-compat alias — services historically import IronDataclassSerializer.
+IronDataclassSerializer = StapelDataclassSerializer
 
 
 # ---------------------------------------------------------------------------

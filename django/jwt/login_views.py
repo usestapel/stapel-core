@@ -50,8 +50,8 @@ class JWTCookieLoginView(LoginView):
                 logout(request)
                 # Clear JWT cookies by returning response with deleted cookies
                 response = super().dispatch(request, *args, **kwargs)
-                cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'iron_jwt')
-                refresh_cookie_name = getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'iron_refresh_jwt')
+                cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'stapel_jwt')
+                refresh_cookie_name = getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'stapel_refresh_jwt')
                 cookie_domain = getattr(settings, 'JWT_COOKIE_DOMAIN', None)
                 cookie_samesite = getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax')
                 response.delete_cookie(cookie_name, path='/', domain=cookie_domain, samesite=cookie_samesite)

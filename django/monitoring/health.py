@@ -112,25 +112,29 @@ def prometheus_metrics(request):
 
     metrics = []
 
+    # Metric name prefix. Deployments can customise via STAPEL_METRICS_PREFIX
+    # (e.g. the Iron product pins it to "iron_" to preserve dashboards).
+    mp = getattr(settings, 'STAPEL_METRICS_PREFIX', 'stapel_')
+
     # Service info
-    metrics.append('# HELP iron_service_info Service information')
-    metrics.append('# TYPE iron_service_info gauge')
-    metrics.append(f'iron_service_info{{service="{service_name}",version="{version}"}} 1')
+    metrics.append(f'# HELP {mp}service_info Service information')
+    metrics.append(f'# TYPE {mp}service_info gauge')
+    metrics.append(f'{mp}service_info{{service="{service_name}",version="{version}"}} 1')
 
     # Uptime
-    metrics.append('# HELP iron_uptime_seconds Service uptime in seconds')
-    metrics.append('# TYPE iron_uptime_seconds gauge')
-    metrics.append(f'iron_uptime_seconds{{service="{service_name}"}} {uptime:.2f}')
+    metrics.append(f'# HELP {mp}uptime_seconds Service uptime in seconds')
+    metrics.append(f'# TYPE {mp}uptime_seconds gauge')
+    metrics.append(f'{mp}uptime_seconds{{service="{service_name}"}} {uptime:.2f}')
 
     # Database health
-    metrics.append('# HELP iron_database_up Database connection status')
-    metrics.append('# TYPE iron_database_up gauge')
-    metrics.append(f'iron_database_up{{service="{service_name}"}} {db_ok}')
+    metrics.append(f'# HELP {mp}database_up Database connection status')
+    metrics.append(f'# TYPE {mp}database_up gauge')
+    metrics.append(f'{mp}database_up{{service="{service_name}"}} {db_ok}')
 
     # Service up
-    metrics.append('# HELP iron_up Service is up')
-    metrics.append('# TYPE iron_up gauge')
-    metrics.append(f'iron_up{{service="{service_name}"}} 1')
+    metrics.append(f'# HELP {mp}up Service is up')
+    metrics.append(f'# TYPE {mp}up gauge')
+    metrics.append(f'{mp}up{{service="{service_name}"}} 1')
 
     # Append custom metrics from registered exporters
     for exporter in _custom_metrics_exporters:

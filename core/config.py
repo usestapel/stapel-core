@@ -10,9 +10,9 @@ from typing import Optional
 from datetime import timedelta
 
 
-# Iron Services Configuration
+# Stapel Services Configuration
 # This is the single source of truth for all services in the platform
-IRON_SERVICES = [
+STAPEL_SERVICES = [
     {'name': 'Auth', 'prefix': 'auth'},
     {'name': 'CDN', 'prefix': 'cdn'},
     {'name': 'Agent', 'prefix': 'agent'},
@@ -23,6 +23,9 @@ IRON_SERVICES = [
     {'name': 'Recordings', 'prefix': 'recordings'},
     {'name': 'Billing', 'prefix': 'billing'},
 ]
+
+# Backward-compat alias — services historically import IRON_SERVICES.
+IRON_SERVICES = STAPEL_SERVICES
 
 
 @dataclass
@@ -57,8 +60,8 @@ class JWTConfig:
     public_key_path: Optional[str] = None
 
     # Standard JWT claims
-    issuer: str = "iron-auth"  # iss claim - identifies the token issuer
-    audience: Optional[str] = "iron"  # aud claim - intended audience
+    issuer: str = "stapel-auth"  # iss claim - identifies the token issuer
+    audience: Optional[str] = "stapel"  # aud claim - intended audience
     key_id: Optional[str] = None  # kid header - identifies which key was used
     jwks_url: Optional[str] = None  # jku header - URL to JWKS for key discovery
 
@@ -70,8 +73,8 @@ class JWTConfig:
     algorithm: str = "HS256"
 
     # Cookie settings
-    cookie_name: str = "iron_jwt"
-    refresh_cookie_name: str = "iron_refresh_jwt"
+    cookie_name: str = "stapel_jwt"
+    refresh_cookie_name: str = "stapel_refresh_jwt"
     cookie_path: str = "/"
     cookie_domain: Optional[str] = None
     cookie_secure: bool = False  # Set to True in production with HTTPS
@@ -151,25 +154,6 @@ class JWTConfig:
             # Prefer public key, but private key can also verify
             return self.public_key or self.private_key
         return self.secret_key
-
-    @classmethod
-    def from_dict(cls, config_dict: dict) -> "JWTConfig":
-        """
-        Create JWTConfig from a dictionary.
-
-        Useful for loading from environment variables or configuration files.
-        """
-        # Convert timedelta values if they're provided as seconds
-        if "access_token_lifetime" in config_dict and isinstance(config_dict["access_token_lifetime"], (int, float)):
-            config_dict["access_token_lifetime"] = timedelta(seconds=config_dict["access_token_lifetime"])
-
-        if "refresh_token_lifetime" in config_dict and isinstance(config_dict["refresh_token_lifetime"], (int, float)):
-            config_dict["refresh_token_lifetime"] = timedelta(seconds=config_dict["refresh_token_lifetime"])
-
-        if "refresh_threshold" in config_dict and isinstance(config_dict["refresh_threshold"], (int, float)):
-            config_dict["refresh_threshold"] = timedelta(seconds=config_dict["refresh_threshold"])
-
-        return cls(**config_dict)
 
     def to_dict(self) -> dict:
         """Convert config to dictionary."""

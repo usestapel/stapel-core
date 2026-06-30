@@ -29,19 +29,19 @@ class TestExtractJwtFromRequest:
         return req
 
     def test_access_from_cookie(self):
-        req = self._req(cookies={"iron_jwt": "tok.abc"})
+        req = self._req(cookies={"stapel_jwt": "tok.abc"})
         access, refresh = extract_jwt_from_request(req)
         assert access == "tok.abc"
         assert refresh is None
 
     def test_refresh_from_cookie(self):
-        req = self._req(cookies={"iron_refresh_jwt": "ref.tok"})
+        req = self._req(cookies={"stapel_refresh_jwt": "ref.tok"})
         access, refresh = extract_jwt_from_request(req)
         assert refresh == "ref.tok"
         assert access is None
 
     def test_both_from_cookies(self):
-        req = self._req(cookies={"iron_jwt": "acc", "iron_refresh_jwt": "ref"})
+        req = self._req(cookies={"stapel_jwt": "acc", "stapel_refresh_jwt": "ref"})
         access, refresh = extract_jwt_from_request(req)
         assert access == "acc"
         assert refresh == "ref"
@@ -53,7 +53,7 @@ class TestExtractJwtFromRequest:
 
     def test_cookie_takes_precedence_over_header(self):
         req = self._req(
-            cookies={"iron_jwt": "cookie-tok"},
+            cookies={"stapel_jwt": "cookie-tok"},
             auth_header="Bearer header-tok",
         )
         access, _ = extract_jwt_from_request(req)
@@ -86,19 +86,19 @@ class TestSetJwtCookies:
     def test_access_cookie_set(self):
         response = HttpResponse()
         set_jwt_cookies(response, "access-tok")
-        assert "iron_jwt" in response.cookies
-        assert response.cookies["iron_jwt"].value == "access-tok"
+        assert "stapel_jwt" in response.cookies
+        assert response.cookies["stapel_jwt"].value == "access-tok"
 
     def test_refresh_cookie_not_set_when_none(self):
         response = HttpResponse()
         set_jwt_cookies(response, "access-tok", refresh_token=None)
-        assert "iron_refresh_jwt" not in response.cookies
+        assert "stapel_refresh_jwt" not in response.cookies
 
     def test_refresh_cookie_set_when_provided(self):
         response = HttpResponse()
         set_jwt_cookies(response, "access-tok", refresh_token="refresh-tok")
-        assert "iron_refresh_jwt" in response.cookies
-        assert response.cookies["iron_refresh_jwt"].value == "refresh-tok"
+        assert "stapel_refresh_jwt" in response.cookies
+        assert response.cookies["stapel_refresh_jwt"].value == "refresh-tok"
 
     @override_settings(JWT_COOKIE_NAME="my_jwt", JWT_COOKIE_HTTPONLY=True, JWT_COOKIE_SECURE=True)
     def test_custom_settings_applied(self):
@@ -112,7 +112,7 @@ class TestSetJwtCookies:
     def test_samesite_setting(self):
         response = HttpResponse()
         set_jwt_cookies(response, "tok")
-        assert response.cookies["iron_jwt"]["samesite"] == "Strict"
+        assert response.cookies["stapel_jwt"]["samesite"] == "Strict"
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +176,8 @@ class TestLoadJwtConfigFromSettings:
         JWT_ALGORITHM="HS256",
         JWT_ISSUER="test-issuer",
         JWT_AUDIENCE=None,
-        JWT_COOKIE_NAME="iron_jwt",
-        JWT_REFRESH_COOKIE_NAME="iron_refresh_jwt",
+        JWT_COOKIE_NAME="stapel_jwt",
+        JWT_REFRESH_COOKIE_NAME="stapel_refresh_jwt",
     )
     def test_hs256_config(self):
         cfg = load_jwt_config_from_settings()
@@ -190,8 +190,8 @@ class TestLoadJwtConfigFromSettings:
         JWT_ISSUER="stapel-auth",
         JWT_JWKS_URL=None,
         JWT_AUDIENCE=None,
-        JWT_COOKIE_NAME="iron_jwt",
-        JWT_REFRESH_COOKIE_NAME="iron_refresh_jwt",
+        JWT_COOKIE_NAME="stapel_jwt",
+        JWT_REFRESH_COOKIE_NAME="stapel_refresh_jwt",
     )
     def test_jwks_url_derived_from_http_issuer(self):
         with override_settings(
@@ -206,8 +206,8 @@ class TestLoadJwtConfigFromSettings:
         JWT_ISSUER="non-http-issuer",
         JWT_JWKS_URL=None,
         JWT_AUDIENCE=None,
-        JWT_COOKIE_NAME="iron_jwt",
-        JWT_REFRESH_COOKIE_NAME="iron_refresh_jwt",
+        JWT_COOKIE_NAME="stapel_jwt",
+        JWT_REFRESH_COOKIE_NAME="stapel_refresh_jwt",
         JWT_SECRET_KEY="secret-key-for-testing-32bytes-long",
     )
     def test_no_jwks_url_for_non_http_issuer(self):
@@ -221,8 +221,8 @@ class TestLoadJwtConfigFromSettings:
         JWT_ALGORITHM="HS256",
         JWT_ISSUER="iss",
         JWT_AUDIENCE=None,
-        JWT_COOKIE_NAME="iron_jwt",
-        JWT_REFRESH_COOKIE_NAME="iron_refresh_jwt",
+        JWT_COOKIE_NAME="stapel_jwt",
+        JWT_REFRESH_COOKIE_NAME="stapel_refresh_jwt",
         JWT_SECRET_KEY="secret-key-for-testing-32bytes-long",
     )
     def test_cookie_settings_passed_through(self):

@@ -3,7 +3,7 @@
 [![CI](https://github.com/usestapel/stapel-core/actions/workflows/ci.yml/badge.svg)](https://github.com/usestapel/stapel-core/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/usestapel/stapel-core/graph/badge.svg)](https://codecov.io/gh/usestapel/stapel-core)
 
-Shared Python library for Iron services. Provides JWT authentication, captcha
+Shared Python library for Stapel services. Provides JWT authentication, captcha
 verification, event bus, notifications, and Django utilities used across all
 backend services.
 
@@ -119,28 +119,47 @@ REST_FRAMEWORK = {
 
 | Symbol | Purpose |
 |---|---|
-| `IronDataclassSerializer` | Serializer that maps `@dataclass` fields |
-| `IronResponse(serializer)` | Wraps `.data` automatically |
-| `IronErrorResponse(status, ERR_KEY)` | Structured error response |
-| `IronValidationError(ERR_KEY)` | Raises DRF validation error with error key |
+| `StapelDataclassSerializer` | Serializer that maps `@dataclass` fields |
+| `StapelResponse(serializer)` | Wraps `.data` automatically |
+| `StapelErrorResponse(status, ERR_KEY)` | Structured error response |
+| `StapelValidationError(ERR_KEY)` | Raises DRF validation error with error key |
 | `register_service_errors(dict)` | Registers error messages for a service |
-| `IronPageNumberPagination` | Standard paginator |
+| `AnchorPagination` / `CreatedAtAnchorPagination` | Cursor-style paginators |
 
 ---
 
 ### `stapel_core.bus` — Event bus
 
-Kafka-backed event bus with in-memory backend for tests.
+Kafka-backed event bus with an in-memory backend for tests.
+
+**Publish** (sync, fire-and-forget):
 
 ```python
-from stapel_core.bus import bus, Event
+from stapel_core.bus import publish, Event
 
-@bus.on('user.created')
-async def handle(event: Event):
-    ...
-
-await bus.publish(Event(topic='user.created', data={'user_id': '...'}))
+publish('user.created', Event(
+    event_type='user.created',
+    service='auth',
+    payload={'user_id': '...'},
+))
 ```
+
+**Consume** by subclassing the management-command base:
+
+```python
+from stapel_core.bus import BaseBusConsumerCommand, Event
+
+class ConsumeUsers(BaseBusConsumerCommand):
+    topics = ['user.created']
+    consumer_group = 'notifications'
+
+    def handle_event(self, event: Event) -> None:
+        ...
+```
+
+Backend is selected via the `STAPEL_BUS_BACKEND` Django setting
+(`stapel_core.bus.backends.kafka.KafkaBus` in production,
+`stapel_core.bus.backends.memory.MemoryBus` in tests).
 
 ---
 
