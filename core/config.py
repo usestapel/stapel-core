@@ -24,9 +24,6 @@ STAPEL_SERVICES = [
     {'name': 'Billing', 'prefix': 'billing'},
 ]
 
-# Backward-compat alias — services historically import IRON_SERVICES.
-IRON_SERVICES = STAPEL_SERVICES
-
 
 @dataclass
 class JWTConfig:

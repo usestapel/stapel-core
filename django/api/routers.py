@@ -1,4 +1,4 @@
-"""Custom DRF routers for Iron services."""
+"""Custom DRF routers for Stapel services."""
 from rest_framework.routers import DefaultRouter
 
 

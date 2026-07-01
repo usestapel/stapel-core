@@ -1,5 +1,5 @@
 """
-Iron Common Library - Shared authentication and utilities for Iron microservices.
+Stapel Common Library - Shared authentication and utilities for Stapel microservices.
 
 This package provides framework-agnostic JWT authentication logic and
 framework-specific wrappers (Django, Flask, FastAPI) for easy integration.

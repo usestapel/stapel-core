@@ -1,5 +1,5 @@
 """
-DRF authentication classes for Iron services.
+DRF authentication classes for Stapel services.
 
 These classes integrate with the JWT middleware to provide authentication
 for DRF views and Swagger documentation.

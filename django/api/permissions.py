@@ -1,5 +1,5 @@
 """
-Common DRF permission classes for Iron services.
+Common DRF permission classes for Stapel services.
 
 These permissions enforce staff-only access to DRF API endpoints and Swagger documentation.
 """

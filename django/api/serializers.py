@@ -135,10 +135,6 @@ class StapelDataclassSerializer(DataclassSerializer):
         return fields
 
 
-# Backward-compat alias — services historically import IronDataclassSerializer.
-IronDataclassSerializer = StapelDataclassSerializer
-
-
 # ---------------------------------------------------------------------------
 # Docstring parser
 # ---------------------------------------------------------------------------
