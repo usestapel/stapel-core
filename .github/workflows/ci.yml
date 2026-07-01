@@ -30,6 +30,14 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest pytest-cov
 
+      - name: Hide local package source from pytest
+        # The flat layout (package-dir={"stapel_core":"."}) makes __init__.py live at
+        # the repo root. pytest tries to import it as a package initializer during
+        # test setup (importtestmodule(self.path / "__init__.py")), which fails because
+        # the file is imported without a package context. Renaming it after pip install
+        # (package is now in site-packages) prevents pytest from finding it.
+        run: mv __init__.py __init__.py.bak
+
       - name: Tests with coverage
         run: |
           pytest tests/ \
