@@ -31,16 +31,12 @@ jobs:
         run: pip install pytest pytest-cov
 
       - name: Tests with coverage
-        # Run from /tmp so CWD's django/ dir doesn't shadow the installed Django package.
-        # The flat package layout (package-dir={"stapel_core":"."}) puts django/ at repo
-        # root, which Python's '' sys.path entry would pick up before site-packages.
         run: |
-          cd /tmp && python -m pytest $GITHUB_WORKSPACE/tests/ \
-            --rootdir=$GITHUB_WORKSPACE \
+          pytest tests/ \
             --cov=stapel_core \
             --cov-report=term-missing \
-            --cov-report=xml:$GITHUB_WORKSPACE/coverage.xml \
-            --junitxml=$GITHUB_WORKSPACE/junit.xml \
+            --cov-report=xml \
+            --junitxml=junit.xml \
             -o junit_family=legacy \
             -v
 
