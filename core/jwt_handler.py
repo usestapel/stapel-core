@@ -431,7 +431,7 @@ class JWTHandler:
         Generate OpenID Connect discovery document.
 
         Args:
-            base_url: Base URL of the auth service (e.g., https://auth.iron.com)
+            base_url: Base URL of the auth service (e.g., https://auth.stapel.com)
 
         Returns:
             OpenID Configuration dictionary

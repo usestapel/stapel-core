@@ -1,5 +1,5 @@
 """
-Common Django models for Iron services.
+Common Django models for Stapel services.
 
 This module provides shared models that should be used across all Django services
 to ensure consistency and enable cross-service authentication.

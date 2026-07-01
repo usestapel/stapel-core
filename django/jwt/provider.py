@@ -1,5 +1,5 @@
 """
-Unified JWT Provider for all Iron services.
+Unified JWT Provider for all Stapel services.
 
 This module provides a SINGLE source of truth for JWT operations.
 All other code should use this module instead of creating JWTConfig/TokenManager directly.

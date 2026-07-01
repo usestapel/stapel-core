@@ -1,5 +1,5 @@
 """
-Common Django settings for Iron services.
+Common Django settings for Stapel services.
 
 Usage:
     from stapel_core.django.settings import *
@@ -136,8 +136,8 @@ LOGGING = {
 # drf-spectacular OpenAPI settings for all services
 # Services should extend this with their own TITLE and DESCRIPTION
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Iron API',
-    'DESCRIPTION': 'Iron Platform API',
+    'TITLE': 'Stapel API',
+    'DESCRIPTION': 'Stapel Platform API',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
 

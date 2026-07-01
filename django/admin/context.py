@@ -13,10 +13,6 @@ def stapel_services(_request):
     to the admin template context, enabling cross-service navigation.
 
     Services are defined in stapel_core.core.config.STAPEL_SERVICES.
-
-    Exposes the list under both ``stapel_services`` and the legacy
-    ``iron_services`` template variable, so existing admin templates keep
-    rendering until they are migrated.
     """
     from stapel_core.core.config import STAPEL_SERVICES
 
@@ -50,13 +46,8 @@ def stapel_services(_request):
 
     return {
         'stapel_services': services,
-        'iron_services': services,  # legacy alias for admin templates
         'current_swagger_url': current_swagger_url,
         'current_service_prefix': current_prefix,
         'current_dashboard_url': current_dashboard_url,
     }
-
-
-# Backward-compat alias — services historically register iron_services.
-iron_services = stapel_services
 

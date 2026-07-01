@@ -1,5 +1,5 @@
 """
-Common notification utilities for Iron services.
+Common notification utilities for Stapel services.
 
 Public API:
     - request_notification: Publish notification request to Kafka

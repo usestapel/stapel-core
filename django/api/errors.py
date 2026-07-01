@@ -456,29 +456,3 @@ class ErrorKeysView(APIView):
 
     def get(self, request):
         return Response(_GLOBAL_REGISTRY)
-
-
-# =============================================================================
-# Backward-compatibility aliases
-#
-# The error-layer types were renamed Iron* -> Stapel* when the framework was
-# extracted for open-source reuse. The Iron* names are kept as aliases so the
-# existing services keep importing unchanged; new code should use Stapel*.
-# =============================================================================
-
-IronError = StapelError
-IronErrorSerializer = StapelErrorSerializer
-StapelResponse = StapelResponse
-
-
-class StapelValidationError(StapelValidationError):
-    """Deprecated alias for :class:`StapelValidationError`."""
-
-
-class StapelServiceError(StapelServiceError):
-    """Deprecated alias for :class:`StapelServiceError`."""
-
-
-def iron_exception_handler(exc, context):
-    """Deprecated alias for :func:`stapel_exception_handler`."""
-    return stapel_exception_handler(exc, context)
