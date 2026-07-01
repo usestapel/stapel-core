@@ -103,6 +103,7 @@ class KafkaBus(BusBackend):
         try:
             while running.is_set():
                 msg = consumer.poll(timeout=poll_timeout)
+                self._touch_heartbeat()
                 if msg is None:
                     continue
                 if msg.error():
@@ -111,7 +112,6 @@ class KafkaBus(BusBackend):
                     logger.error("KafkaBus consumer error: %s", msg.error())
                     continue
 
-                self._touch_heartbeat()
                 event = Event.from_bytes(msg.value())
                 retries = 0
                 while retries <= 3:
