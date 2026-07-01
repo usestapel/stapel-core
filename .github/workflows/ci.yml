@@ -28,7 +28,7 @@ jobs:
         run: python -c "import stapel_core; print('import OK')"
 
       - name: Install test dependencies
-        run: pip install pytest pytest-cov
+        run: pip install pytest pytest-django pytest-cov
 
       - name: Hide local package source from pytest
         # The flat layout (package-dir={"stapel_core":"."}) makes __init__.py live at
