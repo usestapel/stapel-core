@@ -166,6 +166,11 @@ class NatsJetStreamBus(BusBackend):
                 durable_name=durable,
                 filter_subjects=subjects,
                 max_deliver=-1,
+                # Retries inside _process sleep up to 14s per message and a
+                # batch of 10 is handled sequentially — far beyond the 30s
+                # default ack_wait, after which JetStream would redeliver
+                # messages we are still processing.
+                ack_wait=300,
             ),
         )
         logger.info(
@@ -196,7 +201,15 @@ class NatsJetStreamBus(BusBackend):
                 else:
                     dlq_subject, payload = outcome
                     try:
-                        await js.publish(dlq_subject, payload)
+                        # Deterministic msg-id so a redelivery after a failed
+                        # ack does not duplicate the DLQ entry.
+                        try:
+                            dlq_headers = {
+                                "Nats-Msg-Id": Event.from_bytes(payload).event_id + ".dlq"
+                            }
+                        except Exception:
+                            dlq_headers = None
+                        await js.publish(dlq_subject, payload, headers=dlq_headers)
                         await msg.ack()
                     except Exception:
                         logger.exception(

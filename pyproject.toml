@@ -33,7 +33,8 @@ kafka = [
     "confluent-kafka>=2.3",
 ]
 nats = [
-    "nats-py>=2.6",
+    # filter_subjects in ConsumerConfig needs nats-py 2.9+ (server 2.10+)
+    "nats-py>=2.9",
 ]
 sentry = [
     "sentry-sdk>=1.40",

@@ -92,6 +92,7 @@ def _bus():
     return NatsJetStreamBus()
 
 
+@pytest.mark.django_db
 def test_process_success_returns_none(fast_retries):
     seen = []
     event = Event(event_type="user.deleted", service="gdpr", payload={"user_id": "u1"})
@@ -100,6 +101,7 @@ def test_process_success_returns_none(fast_retries):
     assert seen[0].payload == {"user_id": "u1"}
 
 
+@pytest.mark.django_db
 def test_process_retries_then_succeeds(fast_retries):
     calls = {"n": 0}
 
@@ -113,6 +115,7 @@ def test_process_retries_then_succeeds(fast_retries):
     assert calls["n"] == 3
 
 
+@pytest.mark.django_db
 def test_process_exhausted_retries_goes_to_dlq(fast_retries):
     def always_fails(event):
         raise RuntimeError("permanent")
@@ -125,6 +128,7 @@ def test_process_exhausted_retries_goes_to_dlq(fast_retries):
     assert Event.from_bytes(payload).event_id == event.event_id
 
 
+@pytest.mark.django_db
 def test_process_poison_message_goes_to_dlq(fast_retries):
     outcome = _bus()._process(b"\xff not json", lambda e: None)
     assert outcome is not None
