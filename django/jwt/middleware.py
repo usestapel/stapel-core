@@ -292,20 +292,22 @@ class ServiceAPIKeyMiddleware(MiddlewareMixin):
     header_name = "HTTP_X_API_KEY"
 
     def process_request(self, request):
+        import hmac
+
         api_key = request.META.get(self.header_name)
         if not api_key:
             return None
 
-        # Prefer single shared key
+        # Prefer single shared key (constant-time compare)
         shared_key = getattr(settings, "SERVICE_API_KEY", None)
-        if shared_key and api_key == shared_key:
+        if shared_key and hmac.compare_digest(api_key, shared_key):
             request.is_service_request = True
             request.service_name = "internal"
             return None
 
         service_keys = getattr(settings, "SERVICE_API_KEYS", {})
         for service_name, key in service_keys.items():
-            if api_key == key:
+            if key and hmac.compare_digest(api_key, key):
                 request.is_service_request = True
                 request.service_name = service_name
                 return None

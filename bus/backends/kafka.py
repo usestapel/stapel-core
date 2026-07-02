@@ -112,8 +112,22 @@ class KafkaBus(BusBackend):
                     logger.error("KafkaBus consumer error: %s", msg.error())
                     continue
 
-                event = Event.from_bytes(msg.value())
+                try:
+                    event = Event.from_bytes(msg.value())
+                except Exception:
+                    # Poison message: deserialization failure outside the
+                    # retry loop would crash consume() and, with the offset
+                    # uncommitted, wedge the partition on restart.
+                    logger.exception(
+                        "KafkaBus undecodable message on %s, sending raw to DLQ",
+                        msg.topic(),
+                    )
+                    if self._send_raw_to_dlq(msg.topic(), msg.value()):
+                        consumer.commit(msg)
+                    continue
+
                 retries = 0
+                dlq_ok = True
                 while retries <= 3:
                     try:
                         handler(event)
@@ -122,18 +136,38 @@ class KafkaBus(BusBackend):
                         retries += 1
                         if retries > 3:
                             logger.exception("KafkaBus DLQ event_id=%s", event.event_id)
-                            self._send_to_dlq(msg.topic(), event)
+                            dlq_ok = self._send_to_dlq(msg.topic(), event)
                         else:
                             time.sleep(2 ** retries)
-                consumer.commit(msg)
+                # Commit only when the message was handled or confirmed in
+                # the DLQ — otherwise the offset would advance past a
+                # message that exists nowhere else (silent loss).
+                if dlq_ok:
+                    consumer.commit(msg)
         finally:
             consumer.close()
 
-    def _send_to_dlq(self, original_topic: str, event: Event) -> None:
+    def _send_to_dlq(self, original_topic: str, event: Event) -> bool:
         try:
             self.publish(_dlq_topic(original_topic), event)
+            return True
         except Exception:
             logger.exception("KafkaBus failed to send to DLQ")
+            return False
+
+    def _send_raw_to_dlq(self, original_topic: str, raw: bytes) -> bool:
+        """DLQ a message that could not even be deserialized."""
+        try:
+            event = Event(
+                event_type="__undecodable__",
+                service="bus",
+                payload={"raw": raw.decode("utf-8", errors="replace"), "topic": original_topic},
+            )
+            self.publish(_dlq_topic(original_topic), event)
+            return True
+        except Exception:
+            logger.exception("KafkaBus failed to DLQ undecodable message")
+            return False
 
     @staticmethod
     def _touch_heartbeat() -> None:

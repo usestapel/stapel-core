@@ -23,11 +23,15 @@ class OAuthUserData:
         email: User email if available. Example: user@example.com
         username: Suggested username. Example: johndoe
         avatar: Avatar URL. Example: https://example.com/avatar.jpg
+        email_verified: True only when the PROVIDER asserts the email is
+            verified. Account merging by email must require this flag —
+            merging on an unverified address is an account-takeover vector.
     """
     id: str
     email: str | None
     username: str | None
     avatar: str | None
+    email_verified: bool = False
 
 
 class OAuthProvider(ABC):

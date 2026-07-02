@@ -82,9 +82,20 @@ def load_jwt_config_from_settings():
         config_params["secret_key"] = ""  # Not used for RS256
     else:
         # For HS256, use secret_key
-        config_params["secret_key"] = getattr(
-            settings, "JWT_SECRET_KEY", settings.SECRET_KEY
-        )
+        secret = getattr(settings, "JWT_SECRET_KEY", settings.SECRET_KEY)
+        # A well-known default secret means anyone can mint superuser tokens.
+        # Refuse to start outside DEBUG rather than run forgeable.
+        if not getattr(settings, "DEBUG", False) and (
+            not secret or secret.startswith("django-insecure-")
+        ):
+            from django.core.exceptions import ImproperlyConfigured
+
+            raise ImproperlyConfigured(
+                "JWT is configured for HS256 with a missing or default secret. "
+                "Set JWT_SECRET_KEY (or SECRET_KEY) to a strong value, or "
+                "provide JWT_PRIVATE_KEY/JWT_PUBLIC_KEY for RS256."
+            )
+        config_params["secret_key"] = secret
 
     return JWTConfig(**config_params)
 

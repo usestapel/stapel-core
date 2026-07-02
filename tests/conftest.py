@@ -12,7 +12,7 @@ _sys.path = [p for p in _sys.path if _os.path.abspath(p or _os.getcwd()) != _rep
 from stapel_core.testing import configure_django  # noqa: E402
 
 configure_django(
-    installed_apps=["stapel_core.django.users"],
+    installed_apps=["stapel_core.django.users", "stapel_core.django.outbox"],
     extra_settings={
         "AUTH_USER_MODEL": "users.User",
         "CACHES": {

@@ -215,6 +215,7 @@ COMMON_INSTALLED_APPS = [
     "drf_spectacular",
     "stapel_core.django.apps.CommonDjangoConfig",
     "stapel_core.django.users",
+    "stapel_core.django.outbox",
 ]
 
 COMMON_MIDDLEWARE = [

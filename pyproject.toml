@@ -12,13 +12,13 @@ requires-python = ">=3.11"
 keywords = ["django", "stapel", "auth", "jwt"]
 classifiers = [
     "Framework :: Django",
-    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.2",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
 
 dependencies = [
-    "Django>=4.2",
+    "Django>=5.1",
     "djangorestframework>=3.14",
     "djangorestframework-dataclasses>=1.2",
     "drf-spectacular>=0.27",
@@ -109,6 +109,14 @@ packages = [
     "stapel_core.django.management.commands",
     "stapel_core.django.users",
     "stapel_core.django.users.migrations",
+    "stapel_core.django.outbox",
+    "stapel_core.django.outbox.migrations",
+    "stapel_core.django.outbox.management",
+    "stapel_core.django.outbox.management.commands",
+    "stapel_core.comm",
     "stapel_core.kafka",
     "stapel_core.notifications",
 ]
+
+[tool.setuptools.package-data]
+"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*"]
