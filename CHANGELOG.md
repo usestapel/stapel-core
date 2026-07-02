@@ -3,7 +3,7 @@
 All notable changes to stapel-core. Versioning: semver; 0.x may break
 minor-to-minor, breaking changes are always listed here.
 
-## [Unreleased]
+## [0.2.0] - 2026-07-02
 
 ### Added
 - comm layer: Action (`emit`/`on_action`) with transactional outbox,
