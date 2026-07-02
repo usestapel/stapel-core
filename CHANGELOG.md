@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0 — 2026-07-03
+
+### Added
+- `stapel_core.verification` — step-up verification framework:
+  `@requires_verification(scope, factors, max_age)`, structured 403
+  challenge envelope, server-side grants per user+scope (or stateless
+  X-Verification-Token), `STAPEL_VERIFICATION` policy overrides, factor
+  registry, OpenAPI annotation.
+- `bus/backends/routing.py` — per-topic transport routing behind the
+  BusBackend facade (e.g. some topics to NATS, others to Kafka/memory).
+
+### Changed
+- comm task dispatch and action/config refinements.
+
+
 ## 0.2.2 — 2026-07-02
 
 ### Fixed
