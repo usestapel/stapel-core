@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.2.0"
+version = "0.2.1"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -22,6 +22,7 @@ dependencies = [
     "djangorestframework>=3.14",
     "djangorestframework-dataclasses>=1.2",
     "drf-spectacular>=0.27",
+    "django-cors-headers>=4.3",
     "django-redis>=5.4",
     "PyJWT>=2.8",
     "cryptography>=41.0",

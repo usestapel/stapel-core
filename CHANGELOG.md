@@ -3,6 +3,14 @@
 All notable changes to stapel-core. Versioning: semver; 0.x may break
 minor-to-minor, breaking changes are always listed here.
 
+## [0.2.1] - 2026-07-02
+
+### Fixed
+- Declare `django-cors-headers` as a dependency — COMMON_INSTALLED_APPS /
+  COMMON_MIDDLEWARE require it, but pip installs of the wheel did not pull
+  it in (worked only in vendored checkouts whose requirements listed it
+  explicitly).
+
 ## [0.2.0] - 2026-07-02
 
 ### Added
