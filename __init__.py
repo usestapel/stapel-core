@@ -25,7 +25,12 @@ Django-dependent attribute is actually used.
 
 from importlib import import_module
 
-__version__ = "0.1.0"
+try:  # single source of truth: pyproject's version via package metadata
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("stapel-core")
+except Exception:  # editable/vendored checkout without dist-info
+    __version__ = "0.3.0"
 
 # Attribute name -> (relative module, attribute in that module).
 # An attribute of None means the module itself is the export.
