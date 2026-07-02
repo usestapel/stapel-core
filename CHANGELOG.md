@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 — 2026-07-02
+
+### Fixed
+- Flows/verification OpenAPI postprocessing hook resolves ViewSet action
+  handlers (`x-stapel-flows` / `x-stapel-verification` now annotate
+  @action endpoints, not only plain http-verb handlers).
+
 All notable changes to stapel-core. Versioning: semver; 0.x may break
 minor-to-minor, breaking changes are always listed here.
 
