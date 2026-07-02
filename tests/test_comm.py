@@ -267,6 +267,74 @@ def test_http_session_is_pooled_and_reused():
         reset_http_session()
 
 
+# ---------------------------------------------------------------------------
+# NATS function transport (bridge mocked)
+# ---------------------------------------------------------------------------
+
+
+def test_nats_transport_roundtrip(monkeypatch):
+    import json
+
+    from stapel_core.comm import nats as nats_mod
+
+    captured = {}
+
+    class FakeBridge:
+        def request(self, subject, data, timeout):
+            captured.update(subject=subject, data=json.loads(data), timeout=timeout)
+            return json.dumps({"result": {"ok": True}}).encode()
+
+    monkeypatch.setattr(nats_mod, "get_bridge", lambda: FakeBridge())
+
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "nats"}):
+        result = call("cdn.media_exists", {"ref": "r"}, timeout=1.5)
+
+    assert result == {"ok": True}
+    assert captured["subject"] == "stapel.fn.cdn.media_exists"
+    assert captured["data"] == {"payload": {"ref": "r"}}
+    assert captured["timeout"] == 1.5
+
+
+def test_nats_transport_no_responders_maps_to_not_registered(monkeypatch):
+    from stapel_core.comm import nats as nats_mod
+
+    class NoRespondersError(Exception):
+        pass
+
+    class FakeBridge:
+        def request(self, subject, data, timeout):
+            raise NoRespondersError()
+
+    monkeypatch.setattr(nats_mod, "get_bridge", lambda: FakeBridge())
+
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "nats"}):
+        with pytest.raises(FunctionNotRegistered):
+            call("cdn.media_exists", {"ref": "r"})
+
+
+def test_nats_transport_remote_error(monkeypatch):
+    import json
+
+    from stapel_core.comm import nats as nats_mod
+
+    class FakeBridge:
+        def request(self, subject, data, timeout):
+            return json.dumps({"error": "ValueError('bad')"}).encode()
+
+    monkeypatch.setattr(nats_mod, "get_bridge", lambda: FakeBridge())
+
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "nats"}):
+        with pytest.raises(FunctionCallError):
+            call("cdn.media_exists", {"ref": "r"})
+
+
+def test_nats_subject_prefix_configurable():
+    from stapel_core.comm.nats import subject_for
+
+    with override_settings(STAPEL_COMM={"NATS_SUBJECT_PREFIX": "acme.rpc"}):
+        assert subject_for("billing.debit") == "acme.rpc.billing.debit"
+
+
 def test_custom_dotted_transport(monkeypatch):
     """FUNCTION_TRANSPORT accepts a dotted path — gRPC/NATS slot in without
     touching module code."""

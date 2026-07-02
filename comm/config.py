@@ -10,12 +10,18 @@ _DEFAULTS: dict[str, Any] = {
     # Write every emit() through the transactional outbox. Disable only in
     # tests that assert synchronous delivery.
     "OUTBOX_ENABLED": True,
-    # inprocess | http
+    # inprocess | nats | http | dotted path to a transport callable.
+    # nats is the recommended RPC between services: one multiplexed
+    # connection per process, protocol-level timeouts, queue-group load
+    # balancing, no route table. http remains as a curl-debuggable fallback.
     "FUNCTION_TRANSPORT": "inprocess",
     # For the http transport: longest-prefix match of function name → base
     # URL of the owning service, e.g. {"cdn.": "http://svc-cdn:8000/cdn"}.
     "FUNCTION_ROUTES": {},
     "FUNCTION_TIMEOUT": 5.0,
+    # For the nats transport
+    "NATS_URL": "nats://nats:4222",
+    "NATS_SUBJECT_PREFIX": "stapel.fn",
     # Validate payloads against schemas registered with @function/@on_action.
     # None = follow settings.DEBUG.
     "VALIDATE_SCHEMAS": None,

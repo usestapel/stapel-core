@@ -58,18 +58,23 @@ def call(name: str, payload: dict | None = None, *, timeout: float | None = None
         except Exception as exc:
             raise FunctionCallError(f"function '{name}' failed: {exc!r}") from exc
 
+    if transport == "nats":
+        from .nats import nats_function_transport
+
+        return nats_function_transport(name, payload, timeout=timeout)
+
     if transport == "http":
         return _call_http(name, payload, timeout=timeout)
 
-    # Custom transport (gRPC, NATS request-reply, ...): a dotted path to a
-    # callable ``transport(name, payload, timeout=None) -> Any``. Lets a
-    # deployment swap the RPC mechanism without touching module code.
+    # Custom transport (gRPC, ...): a dotted path to a callable
+    # ``transport(name, payload, timeout=None) -> Any``. Lets a deployment
+    # swap the RPC mechanism without touching module code.
     if "." in transport:
         return _custom_call(transport, name, payload, timeout=timeout)
 
     raise FunctionRouteNotConfigured(
         f"unknown FUNCTION_TRANSPORT {transport!r} "
-        "(expected 'inprocess', 'http', or a dotted path to a transport callable)"
+        "(expected 'inprocess', 'nats', 'http', or a dotted path to a transport callable)"
     )
 
 

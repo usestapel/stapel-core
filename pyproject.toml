@@ -32,6 +32,9 @@ dependencies = [
 kafka = [
     "confluent-kafka>=2.3",
 ]
+nats = [
+    "nats-py>=2.6",
+]
 sentry = [
     "sentry-sdk>=1.40",
 ]
@@ -40,7 +43,7 @@ dev = [
     "pytest-cov>=4.1",
 ]
 all = [
-    "stapel-core[kafka,sentry]",
+    "stapel-core[kafka,nats,sentry]",
 ]
 
 [tool.pytest.ini_options]
