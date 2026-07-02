@@ -26,7 +26,7 @@ send the X-Verification-Token returned on completion).
 See docs: flows-and-verification.md in the stapel workspace.
 """
 
-from .decorators import requires_verification
+from .decorators import VERIFICATION_LEVELS, requires_verification
 from .factors import (
     VerificationFactor,
     factor_registry,
@@ -38,11 +38,17 @@ from .grants import (
     get_challenge,
     grant_verification,
     has_grant,
+    verification_enrollment_payload,
     verification_error_payload,
+)
+from .policy import (
+    get_user_policy,
+    invalidate_policy_cache,
 )
 
 __all__ = [
     "requires_verification",
+    "VERIFICATION_LEVELS",
     "VerificationFactor",
     "factor_registry",
     "register_factor",
@@ -51,5 +57,8 @@ __all__ = [
     "complete_challenge",
     "grant_verification",
     "has_grant",
+    "verification_enrollment_payload",
     "verification_error_payload",
+    "get_user_policy",
+    "invalidate_policy_cache",
 ]

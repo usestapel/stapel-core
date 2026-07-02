@@ -13,7 +13,9 @@ VERIFICATION_403 = {
     "description": (
         "Step-up verification required. Complete one of the listed factors "
         "via the auth service's verification endpoints, then retry (grant "
-        "is server-side; stateless clients may resend X-Verification-Token)."
+        "is server-side; stateless clients may resend X-Verification-Token). "
+        "On strict endpoints a user with no usable factor instead receives "
+        "the enrollment variant: verification.enroll=true, no challenge_id."
     ),
     "content": {
         "application/json": {
@@ -35,8 +37,9 @@ VERIFICATION_403 = {
                                 "items": {"type": "string"},
                             },
                             "expires_at": {"type": "integer"},
+                            "enroll": {"type": "boolean"},
                         },
-                        "required": ["challenge_id", "scope", "factors"],
+                        "required": ["scope", "factors"],
                     },
                 },
                 "required": ["localizable_error", "verification"],
@@ -95,6 +98,7 @@ def stapel_postprocessing_hook(result, generator, request, public):
                     "scope": contract["scope"],
                     "factors": contract["factors"],
                     "max_age": contract["max_age"],
+                    "level": contract.get("level"),
                 }
                 operation.setdefault("responses", {}).setdefault(
                     "403", VERIFICATION_403

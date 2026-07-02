@@ -11,8 +11,8 @@ from stapel_core.bus.router import SHORTHANDS, _resolve_backend_path, get_bus, r
 # ---------------------------------------------------------------------------
 
 
-def test_shorthands_cover_all_three_backends():
-    assert set(SHORTHANDS) == {"memory", "kafka", "nats"}
+def test_shorthands_cover_all_backends():
+    assert set(SHORTHANDS) == {"memory", "kafka", "nats", "routing"}
 
 
 def test_env_wins_over_setting(monkeypatch):

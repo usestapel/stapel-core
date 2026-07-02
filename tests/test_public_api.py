@@ -24,6 +24,8 @@ EXPECTED_ALL = sorted([
     "flow_step",
     "function",
     "gdpr_registry",
+    "get_user_policy",
+    "invalidate_policy_cache",
     "register_factor",
     "requires_verification",
     "get_bus",

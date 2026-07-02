@@ -15,6 +15,12 @@ verification_settings = AppSettings(
         "MAX_ATTEMPTS": 5,
         # Extra factor classes to register at startup (dotted paths).
         "EXTRA_FACTORS": [],
+        # Policy level applied when a view passes level=None:
+        # "strict" | "default_on" | "opt_in".
+        "DEFAULT_LEVEL": "strict",
+        # How long (seconds) a user's resolved verification policy
+        # (auth.verification.policy Function result) stays cached.
+        "POLICY_CACHE_TTL": 60,
     },
 )
 

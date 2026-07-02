@@ -24,10 +24,22 @@ committed. Execution claims the record atomically (a redelivered
 ``max_attempts`` and then parks it FAILED with a ``task.failed`` Action.
 ``manage.py sweep_tasks`` fails tasks past their deadline.
 
-Executors (STAPEL_COMM["TASK_EXECUTOR"]): "inline" runs the handler where
-the requested-event is consumed (outbox relay / bus consumer — NOT the web
-request); "celery" dispatches to a Celery worker; a dotted path receives
-``(task_id)`` for anything else.
+Two orthogonal settings control the pipeline:
+
+Dispatch (STAPEL_COMM["TASK_DISPATCH"]) — how ``task.requested`` REACHES
+the worker process: "action" (default) rides ACTION_TRANSPORT like any
+other Action; "bus" publishes ``task.*`` events directly via
+``stapel_core.bus`` regardless of ACTION_TRANSPORT, so a monolith can keep
+Actions in-process while Tasks go through a broker to a dedicated worker
+(the outbox row is still written — the transactional guarantee stands);
+"inline" makes start() execute the task synchronously via the inline
+executor path — for tests and scripts only.
+
+Executors (STAPEL_COMM["TASK_EXECUTOR"]) — how the worker RUNS the handler
+once the requested-event arrived: "inline" runs it where the event is
+consumed (outbox relay / bus consumer — NOT the web request); "celery"
+dispatches to a Celery worker; a dotted path receives ``(task_id)`` for
+anything else.
 """
 from __future__ import annotations
 
@@ -140,6 +152,12 @@ def start(
         {"task_id": str(record.pk), "kind": kind},
         key=correlation_id or str(record.pk),
     )
+    if comm_setting("TASK_DISPATCH", "action") == "inline":
+        # Tests/scripts: run right here, synchronously, via the inline
+        # executor path. The emitted event above stays (outbox audit
+        # trail); its redelivery is a no-op — the record is no longer
+        # PENDING.
+        execute(str(record.pk))
     return str(record.pk)
 
 

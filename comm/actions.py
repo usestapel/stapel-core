@@ -89,7 +89,24 @@ def _dispatch_row(pk) -> None:
 
 def deliver(event: Event) -> None:
     """Deliver *event* over the configured transport. Raises on failure so
-    the outbox can retry."""
+    the outbox can retry.
+
+    Task events are special-cased: with ``TASK_DISPATCH == "bus"`` every
+    ``task.*`` event goes straight to :mod:`stapel_core.bus` even when
+    ``ACTION_TRANSPORT`` is inprocess — a monolith keeps Actions in-process
+    while Tasks travel through a broker to a dedicated worker. Both the
+    first-chance on_commit dispatch and the outbox relay funnel through
+    here, so the routing holds on retries too.
+    """
+    if (
+        event.event_type.startswith("task.")
+        and comm_setting("TASK_DISPATCH", "action") == "bus"
+    ):
+        from ..bus import publish
+
+        publish(event.event_type, event)
+        return
+
     transport = comm_setting("ACTION_TRANSPORT", "inprocess")
 
     if transport == "inprocess":

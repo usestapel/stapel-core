@@ -22,6 +22,7 @@ GRANT_KEY = "stapel:verification:grant:{user_id}:{scope}"
 TOKEN_KEY = "stapel:verification:token:{token}"
 
 ERR_403_VERIFICATION_REQUIRED = "error.403.verification_required"
+ERR_403_VERIFICATION_ENROLLMENT = "error.403.verification_enrollment_required"
 ERR_400_VERIFICATION_FACTOR = "error.400.verification_invalid_factor"
 ERR_400_VERIFICATION_FAILED = "error.400.verification_failed"
 ERR_404_VERIFICATION_CHALLENGE = "error.404.verification_challenge_not_found"
@@ -140,5 +141,26 @@ def verification_error_payload(challenge: dict) -> dict[str, Any]:
             "scope": challenge["scope"],
             "factors": challenge["factors"],
             "expires_at": challenge["expires_at"],
+        },
+    }
+
+
+def verification_enrollment_payload(scope: str, factors: list[str]) -> dict[str, Any]:
+    """The 403 body for a strict endpoint hit by a user with no usable factors.
+
+    Same envelope shape as :func:`verification_error_payload`, but there is
+    nothing to verify yet — no challenge is stored, so the ``verification``
+    object carries ``"enroll": true`` and the endpoint's factor list (the
+    factors the user could enroll) instead of ``challenge_id``/``expires_at``.
+    """
+    from . import errors  # noqa: F401 — lazy i18n key registration (needs Django)
+
+    return {
+        "localizable_error": ERR_403_VERIFICATION_ENROLLMENT,
+        "error": "Verification factor enrollment required",
+        "verification": {
+            "scope": scope,
+            "factors": factors,
+            "enroll": True,
         },
     }

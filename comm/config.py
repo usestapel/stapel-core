@@ -28,6 +28,14 @@ _DEFAULTS: dict[str, Any] = {
     # Task execution: inline (in the consumer/relay process) | celery |
     # dotted path to a callable(task_id).
     "TASK_EXECUTOR": "inline",
+    # How the ``task.requested`` announcement reaches the worker:
+    #   action — ride ACTION_TRANSPORT like any other Action (default);
+    #   bus    — publish task.* events directly via stapel_core.bus,
+    #            regardless of ACTION_TRANSPORT (monolith keeps Actions
+    #            in-process while Tasks go through a broker to a worker);
+    #   inline — start() executes the task synchronously (tests/scripts).
+    # Orthogonal to TASK_EXECUTOR, which is HOW the worker runs the handler.
+    "TASK_DISPATCH": "action",
     # Service name stamped into emitted events; falls back to SERVICE_NAME.
     "SERVICE": None,
 }

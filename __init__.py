@@ -46,6 +46,8 @@ _LAZY_EXPORTS = {
     "requires_verification": (".verification", "requires_verification"),
     "register_factor": (".verification", "register_factor"),
     "VerificationFactor": (".verification", "VerificationFactor"),
+    "get_user_policy": (".verification", "get_user_policy"),
+    "invalidate_policy_cache": (".verification", "invalidate_policy_cache"),
     # bus — transport-agnostic message bus
     "publish": (".bus", "publish"),
     "get_bus": (".bus", "get_bus"),
