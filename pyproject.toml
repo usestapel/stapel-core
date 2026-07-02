@@ -27,6 +27,7 @@ dependencies = [
     "PyJWT>=2.8",
     "cryptography>=41.0",
     "requests>=2.31",
+    "phonenumbers>=8.13",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +44,9 @@ sentry = [
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
+    # celery executor is an optional runtime path (guarded import in
+    # comm/tasks.py); the test suite exercises that branch.
+    "celery>=5.3",
 ]
 all = [
     "stapel-core[kafka,nats,sentry]",
