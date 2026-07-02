@@ -34,8 +34,15 @@ class TokenBlacklist:
         try:
             return bool(cache.get(self._key(jti)))
         except Exception as e:
+            # Fail CLOSED: with the blacklist store down, treating every
+            # token as valid would resurrect revoked sessions exactly when
+            # the system is degraded. Override only for availability-over-
+            # security deployments.
             logger.error(f"Error checking blacklist: {e}")
-            return False
+            from django.conf import settings
+            if getattr(settings, "STAPEL_BLACKLIST_FAIL_OPEN", False):
+                return False
+            return True
 
     def remove_from_blacklist(self, jti: str) -> bool:
         from django.core.cache import cache

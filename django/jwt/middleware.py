@@ -259,19 +259,36 @@ class JWTAuthMiddleware(MiddlewareMixin):
 
 class CsrfExemptAPIMiddleware(MiddlewareMixin):
     """
-    Middleware to exempt API endpoints from CSRF verification.
+    Middleware to exempt API endpoints from CSRF verification — but ONLY
+    for clients that cannot be victims of CSRF.
 
-    Since API endpoints use JWT authentication (not session-based),
-    CSRF protection is not needed and would interfere with cross-origin
-    requests from the frontend.
-
-    Exempts any path containing '/api/'.
+    A request authenticated by an Authorization header or a service API key
+    is immune to CSRF by construction (the browser will not attach those
+    cross-site). A request whose only credential is the JWT COOKIE is a
+    browser session: exempting it makes every mutating endpoint
+    CSRF-vulnerable whenever SameSite is relaxed. Such requests must carry
+    the CSRF token (or the X-Requested-With custom header, which is
+    subject to CORS preflight and therefore proves same-origin JS).
     """
 
     def process_request(self, request):
-        """Mark API requests as CSRF exempt."""
-        if '/api/' in request.path:
-            setattr(request, '_dont_enforce_csrf_checks', True)
+        """Mark API requests as CSRF exempt when safe to do so."""
+        if '/api/' not in request.path:
+            return None
+        has_cookie_credential = bool(
+            request.COOKIES.get(getattr(settings, 'JWT_COOKIE_NAME', 'stapel_jwt'))
+        )
+        has_header_credential = bool(
+            request.META.get('HTTP_AUTHORIZATION')
+            or request.META.get('HTTP_X_API_KEY')
+        )
+        if has_cookie_credential and not has_header_credential:
+            # Browser session: keep CSRF unless same-origin is proven by a
+            # custom header (triggers CORS preflight cross-origin).
+            if request.META.get('HTTP_X_REQUESTED_WITH') == 'XMLHttpRequest':
+                setattr(request, '_dont_enforce_csrf_checks', True)
+            return None
+        setattr(request, '_dont_enforce_csrf_checks', True)
         return None
 
     def process_response(self, request, response):

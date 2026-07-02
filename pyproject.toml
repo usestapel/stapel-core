@@ -117,10 +117,14 @@ packages = [
     "stapel_core.django.outbox.migrations",
     "stapel_core.django.outbox.management",
     "stapel_core.django.outbox.management.commands",
+    "stapel_core.django.taskstore",
+    "stapel_core.django.taskstore.migrations",
+    "stapel_core.django.taskstore.management",
+    "stapel_core.django.taskstore.management.commands",
     "stapel_core.comm",
     "stapel_core.kafka",
     "stapel_core.notifications",
 ]
 
 [tool.setuptools.package-data]
-"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*"]
+"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*", "py.typed"]

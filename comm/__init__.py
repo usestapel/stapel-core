@@ -34,6 +34,14 @@ See docs/module-communication.md in the stapel workspace for the design.
 """
 
 from .actions import deliver, emit, on_action, subscribe_action
+from .tasks import (
+    TaskNotFound,
+    TaskStatus,
+    register_task,
+    start,
+    status,
+    task_handler,
+)
 from .config import comm_setting
 from .exceptions import (
     CommError,
@@ -46,6 +54,12 @@ from .registry import action_registry, function_registry
 
 __all__ = [
     "emit",
+    "start",
+    "status",
+    "task_handler",
+    "register_task",
+    "TaskStatus",
+    "TaskNotFound",
     "on_action",
     "subscribe_action",
     "deliver",

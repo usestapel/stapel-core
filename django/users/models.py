@@ -7,9 +7,13 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 
 
-class User(AbstractUser):
-    """
-    Unified concrete User model for all services.
+class AbstractStapelUser(AbstractUser):
+    """All Stapel user fields and behavior, as an abstract base.
+
+    Host projects that need extra fields subclass this and point
+    AUTH_USER_MODEL at their model — no fork required. Feature modules must
+    reference the user via settings.AUTH_USER_MODEL / get_user_model(),
+    never the concrete class below.
     """
 
     AUTH_TYPE_CHOICES = [
@@ -50,16 +54,16 @@ class User(AbstractUser):
     # Override M2M fields to use stable related names under app_label "users"
     groups = models.ManyToManyField(
         "auth.Group",
-        related_name="users_user_set",
-        related_query_name="users_user",
+        related_name="%(app_label)s_%(class)s_set",
+        related_query_name="%(app_label)s_%(class)s",
         blank=True,
         help_text=_("The groups this user belongs to."),
         verbose_name=_("groups"),
     )
     user_permissions = models.ManyToManyField(
         "auth.Permission",
-        related_name="users_user_permissions_set",
-        related_query_name="users_user_permissions",
+        related_name="%(app_label)s_%(class)s_permissions_set",
+        related_query_name="%(app_label)s_%(class)s_permissions",
         blank=True,
         help_text=_("Specific permissions for this user."),
         verbose_name=_("user permissions"),
@@ -69,14 +73,8 @@ class User(AbstractUser):
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS = []
 
-    class Meta:
-        app_label = "users"
-        db_table = "users"
-        indexes = [
-            models.Index(fields=["email"], name="users_email_idx"),
-            models.Index(fields=["phone"], name="users_phone_idx"),
-            models.Index(fields=["oauth_provider", "oauth_id"], name="users_oauth_idx"),
-        ]
+    class Meta(AbstractUser.Meta):
+        abstract = True
 
     def save(self, *args, **kwargs):
         # Normalize empty strings to NULL for unique constraints
@@ -136,7 +134,19 @@ class User(AbstractUser):
             suffix = self.username[5:]  # Extract part after 'anon_'
             new_username = f'user_{suffix}'
             # Check uniqueness and generate new suffix if needed
-            while User.objects.filter(username=new_username).exclude(id=self.id).exists():
+            while type(self).objects.filter(username=new_username).exclude(id=self.id).exists():
                 new_username = f'user_{uuid.uuid4().hex[:8]}'
             self.username = new_username
 
+
+class User(AbstractStapelUser):
+    """Default concrete user (AUTH_USER_MODEL = "users.User")."""
+
+    class Meta:
+        app_label = "users"
+        db_table = "users"
+        indexes = [
+            models.Index(fields=["email"], name="users_email_idx"),
+            models.Index(fields=["phone"], name="users_phone_idx"),
+            models.Index(fields=["oauth_provider", "oauth_id"], name="users_oauth_idx"),
+        ]

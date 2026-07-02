@@ -52,6 +52,13 @@ class FunctionRegistry:
             self._providers[name] = handler
             self._schemas[name] = schema
 
+    def register_schema(self, name: str, schema: dict | None) -> None:
+        """Attach/override a payload schema without touching the provider
+        (used by the schemas/ autoloader)."""
+        with self._lock:
+            if schema is not None:
+                self._schemas[name] = schema
+
     def get(self, name: str) -> FunctionHandler:
         try:
             return self._providers[name]

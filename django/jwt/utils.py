@@ -38,7 +38,9 @@ def load_jwt_config_from_settings():
     # JWKS URL for jku header - derive from issuer if not explicitly set
     jwks_url = getattr(settings, "JWT_JWKS_URL", None)
     if not jwks_url and issuer.startswith("http"):
-        jwks_url = f"{issuer}/auth/.well-known/jwks.json"
+        prefix = getattr(settings, "STAPEL_AUTH_SERVICE_PREFIX", "auth") or ""
+        prefix_part = f"/{prefix}" if prefix else ""
+        jwks_url = f"{issuer}{prefix_part}/.well-known/jwks.json"
 
     config_params = {
         "algorithm": algorithm,

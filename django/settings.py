@@ -216,6 +216,7 @@ COMMON_INSTALLED_APPS = [
     "stapel_core.django.apps.CommonDjangoConfig",
     "stapel_core.django.users",
     "stapel_core.django.outbox",
+    "stapel_core.django.taskstore",
 ]
 
 COMMON_MIDDLEWARE = [
@@ -383,9 +384,14 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-auth-service-change-this-i
 # =============================================================================
 # HOST CONFIGURATION
 # =============================================================================
-# IRON_HOST is the primary host variable (e.g., "stg.iron.com", "iron.com")
-# Other host-dependent settings are derived from it
-IRON_HOST = os.getenv('IRON_HOST', 'localhost')
+# STAPEL_HOST is the primary host variable (e.g., "stg.example.com").
+# IRON_HOST is honored as a legacy fallback for existing deployments.
+STAPEL_HOST = os.getenv('STAPEL_HOST', os.getenv('IRON_HOST', 'localhost'))
+IRON_HOST = STAPEL_HOST  # legacy alias — do not use in new code
+
+# Prefix of the service that owns login/admin-login (AdminLoginRedirect
+# middleware, JWKS discovery). Empty = no dedicated auth service.
+STAPEL_AUTH_SERVICE_PREFIX = os.getenv('STAPEL_AUTH_SERVICE_PREFIX', 'auth')
 
 # Allowed hosts - can be overridden via ALLOWED_HOSTS env, otherwise derived from IRON_HOST
 _allowed_hosts = os.getenv('ALLOWED_HOSTS', '')
@@ -393,7 +399,7 @@ if _allowed_hosts:
     ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(',') if h.strip()]
 else:
     # Auto-generate from IRON_HOST
-    ALLOWED_HOSTS = [IRON_HOST, 'localhost', '127.0.0.1']
+    ALLOWED_HOSTS = [STAPEL_HOST, 'localhost', '127.0.0.1']
 
 # CSRF trusted origins - required for Django 4+ with HTTPS
 # Can be set via CSRF_TRUSTED_ORIGINS env var (comma-separated)
@@ -402,7 +408,7 @@ _csrf_origins = os.getenv('CSRF_TRUSTED_ORIGINS', '')
 if _csrf_origins:
     CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins.split(',') if o.strip()]
 else:
-    CSRF_TRUSTED_ORIGINS = [f'https://{IRON_HOST}'] if IRON_HOST != 'localhost' else []
+    CSRF_TRUSTED_ORIGINS = [f'https://{STAPEL_HOST}'] if STAPEL_HOST != 'localhost' else []
 
 # JWT Configuration
 # Supports both symmetric (HS256) and asymmetric (RS256) algorithms
@@ -422,7 +428,7 @@ JWT_PRIVATE_KEY = base64.b64decode(_jwt_private_key_b64).decode('utf-8') if _jwt
 JWT_PUBLIC_KEY = base64.b64decode(_jwt_public_key_b64).decode('utf-8') if _jwt_public_key_b64 else ''
 
 # JWT issuer and audience - derived from IRON_HOST if not explicitly set
-JWT_ISSUER = os.getenv('JWT_ISSUER', f'https://{IRON_HOST}')
+JWT_ISSUER = os.getenv('JWT_ISSUER', f'https://{STAPEL_HOST}')
 JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'stapel')
 
 # Message bus backend

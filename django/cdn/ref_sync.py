@@ -14,7 +14,13 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
-TOPIC_CDN_REF_SYNC = "stapel.cdn.ref-sync"
+TOPIC_CDN_REF_SYNC = "stapel.cdn.ref-sync"  # default; override via setting
+
+
+def get_ref_sync_topic() -> str:
+    from django.conf import settings
+
+    return getattr(settings, "STAPEL_TOPIC_CDN_REF_SYNC", TOPIC_CDN_REF_SYNC)
 
 
 @dataclass
@@ -49,7 +55,7 @@ def sync_cdn_refs(service, entity_type, entity_id, old_refs, new_refs) -> RefSyn
 
     try:
         publish(
-            TOPIC_CDN_REF_SYNC,
+            get_ref_sync_topic(),
             Event(
                 event_type="cdn.ref.sync",
                 service=service,

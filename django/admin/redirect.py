@@ -13,6 +13,15 @@ from django.utils.deprecation import MiddlewareMixin
 logger = logging.getLogger(__name__)
 
 
+def _login_url() -> str:
+    """Centralized admin-login URL, derived from STAPEL_AUTH_SERVICE_PREFIX
+    instead of a hardcoded 'auth' service."""
+    from django.conf import settings
+
+    prefix = getattr(settings, 'STAPEL_AUTH_SERVICE_PREFIX', 'auth') or ''
+    return f"/{prefix}/admin/login/" if prefix else "/admin/login/"
+
+
 class AdminLoginRedirectMiddleware(MiddlewareMixin):
     """
     Middleware to redirect unauthenticated admin requests to centralized login.
@@ -39,13 +48,13 @@ class AdminLoginRedirectMiddleware(MiddlewareMixin):
             return None
 
         # Skip if this is already the login page
-        if '/auth/admin/login/' in request.path:
+        if _login_url() in request.path:
             return None
 
         # User is not authenticated — redirect to auth login.
         # This covers both "no tokens" and "expired/invalid tokens" cases.
         # Auth login view will reissue JWT tokens before redirecting back.
-        login_url = '/auth/admin/login/'
+        login_url = _login_url()
         next_url = request.get_full_path()
 
         redirect_url = f"{login_url}?{urlencode({'next': next_url})}"

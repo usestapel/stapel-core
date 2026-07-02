@@ -25,6 +25,9 @@ _DEFAULTS: dict[str, Any] = {
     # Validate payloads against schemas registered with @function/@on_action.
     # None = follow settings.DEBUG.
     "VALIDATE_SCHEMAS": None,
+    # Task execution: inline (in the consumer/relay process) | celery |
+    # dotted path to a callable(task_id).
+    "TASK_EXECUTOR": "inline",
     # Service name stamped into emitted events; falls back to SERVICE_NAME.
     "SERVICE": None,
 }
