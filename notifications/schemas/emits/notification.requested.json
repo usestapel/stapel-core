@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "notification.requested",
+  "description": "A service asks the notifications module to deliver a notification. Emitted by stapel_core.notifications.request_notification (topic stapel.notifications.requested). Validation is split across the seam: this edge (stapel-core) validates payload SHAPE only — notification_type is a non-empty string, content_html/content_text are strings when present — because core cannot import the notifications type registry; whether notification_type is actually registered is validated notifications-side, in the consumer and by `manage.py check_notifications`. Calls carrying content_html/content_text are the raw-content escape hatch: they may use an unregistered type (group defaults to 'system') and are rendered inside the base brand layout instead of a registered per-type template.",
+  "type": "object",
+  "required": ["notification_type"],
+  "properties": {
+    "notification_type": { "type": "string", "minLength": 1 },
+    "user_id":           { "type": ["string", "null"] },
+    "email":             { "type": ["string", "null"] },
+    "phone":             { "type": ["string", "null"] },
+    "language":          { "type": ["string", "null"] },
+    "variables":         { "type": "object" },
+    "content_html":      { "type": "string" },
+    "content_text":      { "type": "string" }
+  },
+  "additionalProperties": false
+}

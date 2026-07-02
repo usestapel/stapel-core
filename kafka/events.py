@@ -11,6 +11,10 @@ class EventType:
     PROFILE_CHANGED = "profile.changed"
     NOTIFICATION_REQUESTED = "notification.requested"
     USER_CONTACT_CHANGED = "user.contact.changed"
+    # DEPRECATED (0.3.x): the translate→notifications sync moved to the comm
+    # Action "translations.changed"; no stapel module emits or consumes this
+    # EventType anymore. Kept for deployments pinning the legacy Kafka
+    # contract; do not use in new code.
     TRANSLATIONS_CHANGED = "translations.changed"
 
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `notifications/schemas/emits/notification.requested.json` — the
+  `request_notification` payload is now a declared contract, including the
+  optional `content_html` / `content_text` raw-content escape hatch.
+  Validation is split across the seam (documented in the schema): core
+  validates payload shape at the edge, the notifications module validates
+  type-registry membership in its consumer and `check_notifications` lint.
+- `request_notification(..., content_html=, content_text=)` — raw body
+  threaded through the event payload for ad-hoc notifications without a
+  registered type/template. The function now raises `ValueError` early on
+  a malformed request (empty `notification_type`, non-string content).
+
+### Deprecated
+- `kafka.topics.TOPIC_TRANSLATIONS_CHANGED` and
+  `kafka.events.EventType.TRANSLATIONS_CHANGED` — the
+  translate→notifications sync moved to the comm Action
+  `translations.changed` (thin invalidation) + the `translate.resolve`
+  Function (pull). No stapel module uses the legacy Kafka contract anymore;
+  the constants stay for deployments that pin it.
+
+
 ## 0.3.0 — 2026-07-03
 
 ### Added

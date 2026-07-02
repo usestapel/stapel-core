@@ -27,6 +27,10 @@ DLQ_PREFIX = _setting("STAPEL_DLQ_PREFIX", "stapel.dlq")
 TOPIC_PROFILE_CHANGED = _setting("STAPEL_TOPIC_PROFILE_CHANGED", "stapel.profiles.profile-changed")
 TOPIC_NOTIFICATION_REQUESTED = _setting("STAPEL_TOPIC_NOTIFICATION_REQUESTED", "stapel.notifications.requested")
 TOPIC_USER_CONTACT_CHANGED = _setting("STAPEL_TOPIC_USER_CONTACT_CHANGED", "stapel.auth.user-contact-changed")
+# DEPRECATED (0.3.x): the translate→notifications sync moved to the comm
+# Action "translations.changed" (thin invalidation + translate.resolve pull);
+# nothing in the stapel repos publishes or consumes this topic anymore. Kept
+# for deployments pinning the legacy Kafka contract; do not use in new code.
 TOPIC_TRANSLATIONS_CHANGED = _setting("STAPEL_TOPIC_TRANSLATIONS_CHANGED", "stapel.translate.translations-changed")
 
 
