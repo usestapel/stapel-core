@@ -30,6 +30,9 @@ class EndpointInfo:
     path: str
     view_ref: str
     view_cls: type | None
+    # Name of the handler attribute on the class: the http verb for
+    # APIViews, the action name for ViewSets (e.g. "list", custom actions).
+    handler_name: str = ""
 
 
 def iter_api_endpoints() -> list[EndpointInfo]:
@@ -55,14 +58,18 @@ def iter_api_endpoints() -> list[EndpointInfo]:
                 for http_method, action in actions.items():
                     handler = getattr(cls, action, None)
                     ref = _callable_ref(handler, cls, action)
-                    endpoints.append(EndpointInfo(http_method.upper(), path, ref, cls))
+                    endpoints.append(
+                        EndpointInfo(http_method.upper(), path, ref, cls, action)
+                    )
             elif cls is not None:
                 for http_method in ("get", "post", "put", "patch", "delete"):
                     handler = getattr(cls, http_method, None)
                     if handler is None:
                         continue
                     ref = _callable_ref(handler, cls, http_method)
-                    endpoints.append(EndpointInfo(http_method.upper(), path, ref, cls))
+                    endpoints.append(
+                        EndpointInfo(http_method.upper(), path, ref, cls, http_method)
+                    )
             else:
                 ref = f"{callback.__module__}.{callback.__qualname__}"
                 endpoints.append(EndpointInfo("*", path, ref, None))

@@ -65,7 +65,9 @@ def stapel_postprocessing_hook(result, generator, request, public):
     for ep in iter_api_endpoints():
         if ep.view_cls is None:
             continue
-        handler = getattr(ep.view_cls, ep.method.lower(), None)
+        # handler_name is the action name for ViewSets — resolving by the
+        # http verb would miss @flow_step/@requires_verification on actions.
+        handler = getattr(ep.view_cls, ep.handler_name or ep.method.lower(), None)
         lookup[(ep.method, _openapi_path(ep.path))] = (ep.view_cls, handler)
 
     for path, methods in (result.get("paths") or {}).items():
