@@ -122,6 +122,8 @@ packages = [
     "stapel_core.django.taskstore.management",
     "stapel_core.django.taskstore.management.commands",
     "stapel_core.comm",
+    "stapel_core.flows",
+    "stapel_core.verification",
     "stapel_core.kafka",
     "stapel_core.notifications",
 ]

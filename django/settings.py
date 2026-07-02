@@ -239,7 +239,7 @@ def get_common_templates(base_dir: Path) -> List[dict]:
     return [
         {
             "BACKEND": "django.template.backends.django.DjangoTemplates",
-            "DIRS": [base_dir / "templates", "/app/stapel_core/django/templates"],
+            "DIRS": [base_dir / "templates", _CORE_TEMPLATES_DIR],
             "APP_DIRS": True,
             "OPTIONS": {
                 "context_processors": [
@@ -253,8 +253,13 @@ def get_common_templates(base_dir: Path) -> List[dict]:
     ]
 
 
+# Resolve shared template/static dirs from the installed package location —
+# works identically for vendored checkouts (/app/stapel_core) and
+# pip-installed wheels (site-packages/stapel_core).
+_CORE_TEMPLATES_DIR = str(Path(__file__).resolve().parent / "templates")
+
 # Path to common static files (for STATICFILES_DIRS)
-COMMON_STATIC_DIR = "/app/stapel_core/static"
+COMMON_STATIC_DIR = str(Path(__file__).resolve().parent.parent / "static")
 
 
 def get_staticfiles_dirs(base_dir: Path) -> List[str]:
@@ -264,8 +269,10 @@ def get_staticfiles_dirs(base_dir: Path) -> List[str]:
     service_static = base_dir / "static"
     if service_static.exists():
         dirs.append(str(service_static))
-    # Add common static dir
-    dirs.append(COMMON_STATIC_DIR)
+    # Add common static dir (skip when absent, e.g. minimal installs —
+    # avoids staticfiles.W004 noise)
+    if Path(COMMON_STATIC_DIR).exists():
+        dirs.append(COMMON_STATIC_DIR)
     return dirs
 
 def get_default_cache(redis_url: Optional[str] = None) -> dict:

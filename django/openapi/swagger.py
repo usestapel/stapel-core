@@ -50,6 +50,18 @@ def get_spectacular_settings(
             "VERSION": version,
         }
     )
+    # Flow membership (x-stapel-flows) and step-up verification contracts
+    # (x-stapel-verification + documented 403) on every operation.
+    hook = "stapel_core.django.openapi.extensions.stapel_postprocessing_hook"
+    # Preserve spectacular's default hooks (enum postprocessing) when the
+    # base settings don't define the key explicitly.
+    hooks = list(settings.get(
+        "POSTPROCESSING_HOOKS",
+        ["drf_spectacular.hooks.postprocess_schema_enums"],
+    ))
+    if hook not in hooks:
+        hooks.append(hook)
+    settings["POSTPROCESSING_HOOKS"] = hooks
     settings.update(extra_settings)
 
     return settings
