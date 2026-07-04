@@ -14,6 +14,8 @@ The building blocks every Stapel package sits on:
 - ``django.api`` — API conventions: ``StapelResponse``,
   ``StapelErrorResponse`` and ``StapelDataclassSerializer``.
 - ``gdpr`` — GDPR provider protocol and in-process registry.
+- ``netintel`` — IP intelligence seam (``classify_ip``, ``country_of``,
+  ``IpProfile``): pluggable provider, cached, fail-open.
 - ``django.users.AbstractStapelUser`` — base user model.
 - ``core`` — framework-agnostic JWT primitives (``JWTHandler``,
   ``TokenManager``, ``TokenBlacklist``, ``JWTConfig``).
@@ -47,6 +49,10 @@ _LAZY_EXPORTS = {
     "Flow": (".flows", "Flow"),
     "flow_step": (".flows", "flow_step"),
     "flow_registry": (".flows", "flow_registry"),
+    # netintel — IP classification seam (provider dotted-path, cached, fail-open)
+    "classify_ip": (".netintel", "classify_ip"),
+    "country_of": (".netintel", "country_of"),
+    "IpProfile": (".netintel", "IpProfile"),
     # verification — step-up (OTP/TOTP/passkey) on any endpoint
     "requires_verification": (".verification", "requires_verification"),
     "register_factor": (".verification", "register_factor"),

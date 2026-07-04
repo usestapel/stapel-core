@@ -41,6 +41,10 @@ nats = [
 sentry = [
     "sentry-sdk>=1.40",
 ]
+# MaxMindProvider (stapel_core.netintel) — offline GeoLite2/GeoIP2 lookups
+netintel-maxmind = [
+    "geoip2>=4.7",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
@@ -49,7 +53,7 @@ dev = [
     "celery>=5.3",
 ]
 all = [
-    "stapel-core[kafka,nats,sentry]",
+    "stapel-core[kafka,nats,sentry,netintel-maxmind]",
 ]
 
 [tool.pytest.ini_options]
@@ -128,6 +132,7 @@ packages = [
     "stapel_core.django.taskstore.management.commands",
     "stapel_core.comm",
     "stapel_core.flows",
+    "stapel_core.netintel",
     "stapel_core.verification",
     "stapel_core.kafka",
     "stapel_core.notifications",

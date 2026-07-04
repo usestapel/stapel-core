@@ -72,6 +72,59 @@ CAPTCHA_BACKEND = 'myapp.captcha.MyCaptchaVerifier'
 CAPTCHA_SECRET  = 'my-secret'
 ```
 
+The flat settings above keep working; the namespaced equivalent is
+`STAPEL_CAPTCHA = {"BACKEND": ..., "SECRET": ...}`.
+
+**Tiered challenge policy** — instead of a binary on/off, protect a view with
+a strictness level derived from the client's network class (via
+`stapel_core.netintel`):
+
+```python
+from stapel_core.django.captcha import captcha_protected
+
+class RegisterView(APIView):
+    @captcha_protected(action="register")
+    def post(self, request): ...
+```
+
+Levels: `none < invisible < interactive < interactive+ratelimit < block`.
+The default matrix (overridable via `STAPEL_CAPTCHA["CHALLENGE_MATRIX"]`,
+merged over the defaults) maps residential/unknown → invisible,
+datacenter/vpn → interactive, tor → interactive+ratelimit. Per-action
+overrides: `STAPEL_CAPTCHA["ACTION_OVERRIDES"] = {"register": "+1"}` (bump one
+level) or `{"payout": {"vpn": "block"}}`. The whole policy is swappable via
+`STAPEL_CAPTCHA["CHALLENGE_POLICY"]` (dotted path to a `ChallengePolicy`).
+`block` returns 403 `error.403.network_blocked`; rate limiting is not done
+here — middleware reads `request.stapel_challenge_level`. With no netintel
+provider configured every request classifies as `unknown` → behavior is
+identical to the classic binary captcha.
+
+---
+
+### `stapel_core.netintel` — IP intelligence (network class + geo)
+
+`classify_ip(ip) -> IpProfile{kind, asn, asn_org, country, confidence}` and
+`country_of(ip)`. Kind vocabulary: `residential | datacenter | vpn | tor |
+unknown`. Results are cached in the Django cache; provider errors fail open
+to `unknown` and never raise.
+
+```python
+STAPEL_NETINTEL = {
+    # dotted path / class / instance of a NetIntelProvider (replace seam)
+    "PROVIDER": "stapel_core.netintel.providers.MaxMindProvider",
+    "MAXMIND_ASN_DB": "/var/geoip/GeoLite2-ASN.mmdb",
+    "MAXMIND_COUNTRY_DB": "/var/geoip/GeoLite2-Country.mmdb",
+    "MAXMIND_ANONYMOUS_DB": "/var/geoip/GeoIP2-Anonymous-IP.mmdb",
+}
+```
+
+Built-in providers: `NullProvider` (default — always `unknown`),
+`MaxMindProvider` (offline mmdb, `pip install stapel-core[netintel-maxmind]`),
+`HttpJsonProvider` (ipinfo/IPQS-style HTTP APIs via `HTTP_URL_TEMPLATE` /
+`HTTP_API_KEY` / `HTTP_RESPONSE_MAPPER`). `client_ip(request)` honors
+`TRUSTED_PROXY_HEADER` (default: `REMOTE_ADDR` only — proxy headers are
+spoofable unless your edge overwrites them).
+
 ---
 
 ### `stapel_core.django.jwt` — JWT authentication

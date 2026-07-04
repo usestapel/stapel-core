@@ -36,6 +36,15 @@ class CaptchaVerifier(ABC):
 
         Never raise — network errors or service outages should return False
         so the endpoint stays available while logging the incident.
+
+        Backends MAY additionally accept an optional keyword-only ``level``
+        parameter (``def verify(self, token, ip=None, *, level=None)``) to
+        receive the challenge level decided by the challenge policy
+        (``stapel_core.captcha.policy``) — e.g. to force an interactive
+        challenge when ``level`` is ``"interactive"`` or stricter. The
+        ``@captcha_protected`` decorator passes ``level`` only to backends
+        whose signature declares it, so existing backends keep working
+        unchanged.
         """
 
 

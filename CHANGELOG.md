@@ -1,5 +1,47 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `stapel_core.netintel` — IP intelligence seam (docs/geo-network-trust.md
+  §0): `classify_ip(ip) -> IpProfile{kind, asn, asn_org, country,
+  confidence}`, `country_of(ip)`, `client_ip(request)`. Provider is a
+  dotted-path replace seam (`STAPEL_NETINTEL["PROVIDER"]`, default
+  `NullProvider` — always `unknown`); built-ins: `MaxMindProvider` (offline
+  GeoLite2/GeoIP2 mmdb, new optional extra `stapel-core[netintel-maxmind]`)
+  and `HttpJsonProvider` (generic ipinfo/IPQS-style HTTP lookup with a
+  response-mapper seam). Results cached in the Django cache
+  (`CACHE_ALIAS`/`CACHE_TTL`, key prefix `stapel-netintel:`); fail-open —
+  provider errors log once per provider class and return `unknown`, never
+  5xx. W-level system checks on the provider path. Root lazy exports:
+  `classify_ip`, `country_of`, `IpProfile`.
+- Tiered captcha challenge policy (docs/geo-network-trust.md §2):
+  `stapel_core.captcha.policy` with ordered levels `none < invisible <
+  interactive < interactive+ratelimit < block`, `ChallengePolicy` ABC and
+  the default `MatrixChallengePolicy` (netintel ip-kind →
+  `STAPEL_CAPTCHA["CHALLENGE_MATRIX"]` merged over builtin defaults →
+  `ACTION_OVERRIDES` `{action: {kind: level} | "+1"}`). Policy swappable via
+  `STAPEL_CAPTCHA["CHALLENGE_POLICY"]` (dotted path).
+- `@captcha_protected(action=...)` view decorator (`django/captcha.py`):
+  `none` passes, `block` → 403 with new registered key
+  `error.403.network_blocked`, other levels verify the captcha token; the
+  challenge level is passed to backends that opt into an optional `level`
+  keyword on `verify()` (legacy backends unchanged). Sets
+  `request.stapel_challenge_level` for rate-limit middleware (captcha does
+  not rate-limit) and logs every decision at INFO
+  (`ip_kind, action, level, allowed`).
+- `STAPEL_CAPTCHA` settings namespace (`captcha/conf.py`) with legacy
+  fallback: flat `CAPTCHA_BACKEND` / `CAPTCHA_SECRET` keep working;
+  `error.400.captcha_invalid` / `error.400.captcha_required` are now
+  registered error keys.
+
+### Compatibility
+- No behavior change without configuration: with the default `NullProvider`
+  every request classifies as `unknown` → challenge level `invisible`, which
+  reproduces the historical binary captcha exactly (pass when no secret is
+  configured, verify the token when a backend is configured). `CaptchaMixin`
+  and existing `CaptchaVerifier` subclasses are untouched.
+
 ## 0.3.1 — 2026-07-04
 ### Added
 - `notifications/schemas/emits/notification.requested.json` — the

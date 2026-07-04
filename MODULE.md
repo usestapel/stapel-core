@@ -35,7 +35,11 @@ points below; a generic fix or gap belongs **upstream** (see
 - `gdpr` — `GDPRProvider` ABC, in-process `gdpr_registry`,
   `GDPRServiceConsumerCommand` for microservices mode.
 - `captcha` — `CaptchaVerifier` ABC with turnstile / recaptcha / hcaptcha /
-  noop backends.
+  noop backends, plus the tiered challenge policy (`captcha/policy.py`,
+  `@captcha_protected`) driven by the client's network class.
+- `netintel` — IP intelligence seam: `classify_ip(ip) -> IpProfile`,
+  `country_of(ip)`, `client_ip(request)`; pluggable provider (MaxMind mmdb /
+  generic HTTP JSON / null), Django-cache-backed, fail-open.
 - `core` — framework-agnostic JWT primitives (`JWTHandler`, `TokenManager`,
   `TokenBlacklist`, `JWTConfig`).
 
@@ -154,11 +158,63 @@ core. `get_swagger_urls()` / `get_dev_urls()` provide the URL patterns; the
 DRF defaults (`DEFAULT_SCHEMA_CLASS = PermissionAwareAutoSchema`,
 `EXCEPTION_HANDLER`) are plain settings a project may override.
 
-### Captcha backends (`captcha/backends.py`)
+### Captcha backends & challenge policy — `STAPEL_CAPTCHA` (`captcha/`)
 
-`CAPTCHA_BACKEND` = `turnstile` | `recaptcha` | `hcaptcha` | `noop` | dotted
-path to a `CaptchaVerifier` subclass; `CAPTCHA_SECRET` empty → `NoopVerifier`
-(disabled). Serializers use `CaptchaMixin` (`django/captcha.py`).
+| Key | Default | Semantics | What it customizes |
+|---|---|---|---|
+| `BACKEND` | `None` (→ flat `CAPTCHA_BACKEND`, then `noop`) | replace | Verifier: `turnstile` \| `recaptcha` \| `hcaptcha` \| `noop` \| dotted path to a `CaptchaVerifier` subclass |
+| `SECRET` | `None` (→ flat `CAPTCHA_SECRET`) | replace | Backend secret; empty → `NoopVerifier` (captcha disabled) |
+| `CHALLENGE_MATRIX` | `{}` | **merge** over `DEFAULT_CHALLENGE_MATRIX` | ip-kind → level: residential/unknown → `invisible`, datacenter/vpn → `interactive`, tor → `interactive+ratelimit` |
+| `ACTION_OVERRIDES` | `{}` | merge (per action) | `{action: {kind: level} \| "+1"}`; `"+1"` bumps one level (saturates at `block`) |
+| `CHALLENGE_POLICY` | `stapel_core.captcha.policy.MatrixChallengePolicy` | replace (dotted path) | The whole `ChallengePolicy` (`level_for(request, action) -> level`) |
+
+The legacy flat `CAPTCHA_BACKEND` / `CAPTCHA_SECRET` settings keep working;
+`BACKEND`/`SECRET` are read from the `STAPEL_CAPTCHA` dict only (no env
+fallback — a stray generic `SECRET` env var must not enable captcha).
+
+Levels are ordered `none < invisible < interactive < interactive+ratelimit <
+block` (`CHALLENGE_LEVELS`, `bump_level`, `level_gte`). Serializers use
+`CaptchaMixin`; views use `@captcha_protected(action="register")`
+(`django/captcha.py`): `none` passes, `block` → 403
+`error.403.network_blocked`, other levels verify the token via the backend.
+Backends MAY accept an optional `level` keyword
+(`verify(token, ip=None, *, level=None)`) to force interactive challenges —
+the decorator passes it only to backends that declare it, so legacy
+two-argument backends work unchanged. Rate limiting is NOT performed by
+captcha: the decorator sets `request.stapel_challenge_level` and rate-limit
+middleware/hosts consume it (`interactive+ratelimit`). Every decision is
+logged at INFO (`ip_kind, action, level, allowed`) — the input of host-side
+antifraud scoring. With no netintel provider configured, every request
+classifies as `unknown` → `invisible`, i.e. exactly the historical binary
+behavior.
+
+### NetIntel providers — `STAPEL_NETINTEL` (`netintel/`)
+
+`classify_ip(ip) -> IpProfile{kind: residential|datacenter|vpn|tor|unknown,
+asn, asn_org, country, confidence}`, `country_of(ip)`, `client_ip(request)`.
+Fail-open by contract: provider errors log a warning once per provider class
+and return the unknown profile — `classify_ip` never raises. Root exports:
+`stapel_core.classify_ip` / `country_of` / `IpProfile` (lazy).
+
+| Key | Default | Semantics | What it customizes |
+|---|---|---|---|
+| `PROVIDER` | `stapel_core.netintel.providers.NullProvider` | replace (dotted path/class/instance) | The IP intelligence source (`NetIntelProvider` ABC: `classify(ip)`, optional `country(ip)`) |
+| `CACHE_ALIAS` | `"default"` | replace | Django cache used for results (key prefix `stapel-netintel:`) |
+| `CACHE_TTL` | `86400` | replace | Result TTL (s) |
+| `MAXMIND_ASN_DB` / `MAXMIND_COUNTRY_DB` / `MAXMIND_ANONYMOUS_DB` | `None` | replace | mmdb paths for `MaxMindProvider` (extra `stapel-core[netintel-maxmind]`); unset databases are skipped |
+| `EXTRA_DATACENTER_ASNS` | `[]` | **merge** over builtin `HOSTING_ASNS` | Extra ASNs treated as hosting/datacenter |
+| `HTTP_URL_TEMPLATE` / `HTTP_API_KEY` | `None` | replace | `HttpJsonProvider` endpoint (`{ip}` placeholder) and bearer key |
+| `HTTP_RESPONSE_MAPPER` | `None` (builtin mapper) | replace (dotted path/callable) | `mapper(data, ip) -> IpProfile` — adapts any ipinfo/IPQS-style JSON |
+| `TRUSTED_PROXY_HEADER` | `None` | replace | META key of the proxy-set client-IP header for `client_ip()`; default trusts `REMOTE_ADDR` only (proxy headers are spoofable) |
+
+System checks (W-level, registered by `stapel_core.django` app):
+`stapel_core.netintel.W001` (PROVIDER unimportable), `W002` (not a
+`NetIntelProvider`) — a broken provider degrades, it never blocks a deploy.
+MaxMind kind derivation: Anonymous-IP flags (tor > vpn > hosting) → ASN
+hosting list → org-name keyword heuristic → residential (ASN known) →
+unknown. `manage.py download_geolite` is a TODO (netintel package
+docstring). Consumers: captcha challenge policy, OAuth region resolution
+(stapel-auth), rate limits, analytics.
 
 ### GDPR providers (`gdpr.py`)
 

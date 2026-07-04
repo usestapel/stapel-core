@@ -25,6 +25,9 @@ class CommonDjangoConfig(AppConfig):
         """
         from django.conf import settings
 
+        # System checks (registered on import; W-level, never block deploys).
+        from stapel_core.netintel import checks as _netintel_checks  # noqa: F401
+
         # DRF caches api_settings on first access. If any module (e.g. drf-spectacular)
         # triggers that access before Django settings are fully loaded, the cache will
         # contain DRF defaults instead of our REST_FRAMEWORK config. Force a full reload
