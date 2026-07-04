@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 0.3.1 — 2026-07-04
 ### Added
 - `notifications/schemas/emits/notification.requested.json` — the
   `request_notification` payload is now a declared contract, including the
