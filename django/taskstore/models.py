@@ -33,6 +33,11 @@ class TaskRecord(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        # Pinned to the historical name so the 0.8.0 app-label rename
+        # (stapel_tasks -> stapel_taskstore) leaves the physical table
+        # untouched. Table names are internal (not a public contract); the
+        # label is what collided with the stapel-tasks module.
+        db_table = "stapel_tasks_taskrecord"
         ordering = ["created_at"]
         indexes = [
             models.Index(fields=["state", "deadline"], name="taskrec_deadline_idx"),

@@ -28,7 +28,7 @@ class Migration(migrations.Migration):
                 ("started_at", models.DateTimeField(blank=True, null=True)),
                 ("finished_at", models.DateTimeField(blank=True, null=True)),
             ],
-            options={"ordering": ["created_at"]},
+            options={"ordering": ["created_at"], "db_table": "stapel_tasks_taskrecord"},
         ),
         migrations.AddIndex(
             model_name="taskrecord",

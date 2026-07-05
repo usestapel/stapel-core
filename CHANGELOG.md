@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.8.0] - 2026-07-06
+
+### Changed — taskstore Django label renamed (frees `stapel_tasks` for the tasks module)
+
+- **`stapel_core.django.taskstore` app label: `stapel_tasks` → `stapel_taskstore`.**
+  The internal comm-**Task** persistence app (records for async named
+  background operations — module-communication §2.1) historically claimed the
+  Django label `stapel_tasks`. The new generic user-facing task/kanban module
+  **stapel-tasks** (0.1.0) owns that canonical label, and two apps cannot share
+  a label in one `INSTALLED_APPS` (`ImproperlyConfigured: Application labels
+  aren't unique`). Core vacates to `stapel_taskstore` so both coexist
+  (docs/tasks-module.md §2/§11). The two are unrelated: "comm Task" = a
+  background function; "stapel-tasks" = boards/cards/kanban. Renaming a label
+  is part of the public app contract, hence a **minor** bump.
+
+- **The physical table name is unchanged.** `TaskRecord` now pins
+  `Meta.db_table = "stapel_tasks_taskrecord"` (its historical auto-derived
+  name). This makes the rename **label-only**: no `ALTER TABLE`, no data
+  movement, lowest risk for existing deployments. Table names are internal
+  (not a contract); the label is what collided. `makemigrations --check` is
+  clean — no new migration is generated.
+
+- **Migration note for existing projects.** Django keys applied migrations and
+  content types by app *label*. After upgrading, relabel the history so Django
+  recognizes the app as already migrated (nothing physical changes):
+
+  ```sql
+  UPDATE django_migrations   SET app       = 'stapel_taskstore' WHERE app       = 'stapel_tasks';
+  UPDATE django_content_type SET app_label = 'stapel_taskstore' WHERE app_label = 'stapel_tasks';  -- if contenttypes is installed
+  ```
+
+  Alternative (no SQL): `python manage.py migrate stapel_taskstore --fake`
+  (leaves harmless stale `stapel_tasks` rows in `django_migrations`).
+  Projects that key `MIGRATION_MODULES`/`DATABASE_ROUTERS` by the old label
+  must update the key `stapel_tasks` → `stapel_taskstore`. Fresh installs need
+  nothing — they create `stapel_tasks_taskrecord` under the new label directly.
+
 ## [0.7.0] - 2026-07-06
 
 ### Added — `stapel_core.gateway`: privilege gateway mechanism (Studio SN-4)
