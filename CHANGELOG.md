@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.5.0] - 2026-07-05
+
+### Added — flow SA-document renderer: mermaid + endpoint tables + bilingual trees (flow-system.md §4)
+
+`generate_flow_docs` now renders a **pretty SA-document** through the new
+`STAPEL_FLOWS["FLOW_DOC_RENDERER"]` seam (dotted path; default
+`DefaultFlowDocRenderer`). Per flow: a GitHub-native `mermaid` step diagram
+(human = stadium node, HTTP = rectangle, action/function/task = subroutine;
+sequential edges), the numbered steps, and an **Endpoints** table carrying
+request/response serializers and the step-up **verification contract**
+(`scope` + factors). A module swaps the whole look by pointing the seam at
+its own class — no fork.
+
+- **Renderer chrome is localized** (`## Steps` / `## Шаги`, `Actors` /
+  `Актор(ы)`, table columns, `User action`) via a `language` argument, while
+  the *content* still resolves from i18n keys. Unknown languages fall back to
+  English chrome. This closes the piece deferred from 0.4.0 (§2 left the
+  chrome hardcoded). `render_flow_markdown` / `render_index_markdown` gained
+  an optional `language` parameter (default English — literal-only callers
+  are unaffected in wording except the scaffolding is now English, matching
+  `DOC_SOURCE_LANGUAGE`).
+- **`generate_project_docs`** — new management command: one **byte-stable
+  doc tree per `STAPEL_FLOWS["DOC_LANGUAGES"]`** language (`["en", "ru"]` by
+  default) from the single language-agnostic `flows.json`. Layout
+  `docs/flows/{flows.json, README.md, en/…, ru/…}`; the root README links
+  every language tree. Deterministic output makes the release-gate drift
+  check (`generate_project_docs` + `git diff --exit-code`) meaningful —
+  regeneration without source changes = zero diff.
+- New settings: `FLOW_DOC_RENDERER`, `DOC_LANGUAGES`. New public API:
+  `DefaultFlowDocRenderer`, `get_flow_doc_renderer`, `render_flow_markdown` /
+  `render_index_markdown` (now re-exported from `stapel_core.flows`).
+
+Additive: existing `generate_flow_docs`, `flows.json` schema and literal-only
+flows are unchanged.
+
+### Fixed — deterministic endpoint enumeration (docs + check_flows)
+
+`iter_api_endpoints` now skips the framework-auto `HEAD`/`OPTIONS` verbs on
+DRF ViewSets. DRF binds an auto `HEAD` (mirroring `GET`) into the view's
+`actions` mapping at *request* time, so whether an endpoint had been hit at
+runtime leaked into the rendered docs and the endpoint-coverage check — a
+byte-stable render (and the release-gate drift check) cannot depend on that.
+HEAD/OPTIONS are never business steps.
+
 ## [0.4.1] - 2026-07-05
 
 ### Fixed — netintel circuit-breaker concurrency + log hygiene (defensive)

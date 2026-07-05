@@ -29,6 +29,12 @@ seam — see ``stapel_core.flows.i18n``.
 See docs: flows-and-verification.md in the stapel workspace.
 """
 
+from .docs import (
+    DefaultFlowDocRenderer,
+    get_flow_doc_renderer,
+    render_flow_markdown,
+    render_index_markdown,
+)
 from .i18n import (
     flow_source_texts,
     load_app_catalogs,
@@ -43,12 +49,16 @@ from .registry import (
 )
 
 __all__ = [
+    "DefaultFlowDocRenderer",
     "Flow",
     "FlowStep",
     "autodiscover_flows",
     "flow_registry",
     "flow_step",
     "flow_source_texts",
+    "get_flow_doc_renderer",
     "load_app_catalogs",
+    "render_flow_markdown",
+    "render_index_markdown",
     "resolve_flow_texts",
 ]

@@ -19,8 +19,7 @@ from stapel_core.flows import autodiscover_flows, flow_registry, resolve_flow_te
 from stapel_core.flows.docs import (
     endpoint_index,
     export_json,
-    render_flow_markdown,
-    render_index_markdown,
+    get_flow_doc_renderer,
 )
 
 
@@ -64,9 +63,14 @@ class Command(BaseCommand):
                 cache_path=cache_path if options["llm"] else None,
             )
         index = endpoint_index()
+        renderer = get_flow_doc_renderer()
         for flow in flows:
-            (out / f"{flow.id}.md").write_text(render_flow_markdown(flow, index, texts=texts))
-        (out / "README.md").write_text(render_index_markdown(flows, index, texts=texts))
+            (out / f"{flow.id}.md").write_text(
+                renderer.render_flow(flow, index, texts, lang or None)
+            )
+        (out / "README.md").write_text(
+            renderer.render_index(flows, index, texts, lang or None)
+        )
         (out / "flows.json").write_text(export_json(flows, index))
         self.stdout.write(self.style.SUCCESS(
             f"wrote {len(flows)} flow doc(s) to {out}/"

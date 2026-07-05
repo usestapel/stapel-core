@@ -69,8 +69,13 @@ def test_markdown_and_json_render():
     flow.action("user.registered", order=2, note="создаются профили")
     md = render_flow_markdown(flow, {})
     assert "# Тестовый сценарий" in md
-    assert "Действие пользователя" in md
+    # renderer chrome defaults to English (DOC_SOURCE_LANGUAGE); content
+    # literals are unaffected. Russian chrome is opt-in via language="ru".
+    assert "User action" in md
     assert "`user.registered`" in md
+    assert "```mermaid" in md  # SA-doc carries a GitHub-native step diagram
+    md_ru = render_flow_markdown(flow, {}, language="ru")
+    assert "Действие пользователя" in md_ru
     idx = render_index_markdown([flow], {})
     assert "test.scenario" in idx
     data = export_json([flow], {})

@@ -175,6 +175,31 @@ creating a `flows.py`, no registration wiring needed. `manage.py
 generate_flow_docs --out docs/flows` renders markdown + `flows.json`;
 `manage.py check_flows [--allow SUBSTRING]` is the CI completeness gate.
 
+### Flow SA-document renderer (`flows/docs.py`, flow-system.md §4)
+
+`STAPEL_FLOWS["FLOW_DOC_RENDERER"]` (dotted path; default
+`DefaultFlowDocRenderer`) turns a `Flow` into a markdown SA-document: a
+GitHub-native `mermaid` step diagram, the numbered steps, and an
+**Endpoints** table with request/response serializers and the step-up
+verification contract (`scope` + factors). Point the seam at your own class
+to swap the whole look — no fork. Protocol: `render_flow(flow, index, texts,
+language)` / `render_index(flows, index, texts, language)`.
+
+The renderer's own scaffolding (headings, table columns, "User action") is
+localized by the `language` argument (`en`/`ru` built in; unknown → English)
+while the content resolves from i18n keys — so a module shipping only en/ru
+catalogs still renders any language with English chrome around translated
+content.
+
+`manage.py generate_project_docs --out docs/flows [--llm]` writes one
+**byte-stable tree per `STAPEL_FLOWS["DOC_LANGUAGES"]`** language (`["en",
+"ru"]` by default) from the single language-agnostic `flows.json`:
+`docs/flows/{flows.json, README.md, en/…, ru/…}`, the root README links each
+tree. The determinism is the point — regenerate + `git diff --exit-code` is
+the release-gate drift check (library-standard §4); a no-op regen is a no-op
+diff. The module README tags both trees, e.g.
+`[Flows (EN)](docs/flows/en/README.md) · [Флоу (RU)](docs/flows/ru/README.md)`.
+
 ### Flow i18n (`flows/i18n.py`, flow-system.md §2)
 
 Flow texts are i18n keys, not literals: each flow/step derives an implicit
