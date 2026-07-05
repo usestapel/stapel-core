@@ -217,6 +217,7 @@ COMMON_INSTALLED_APPS = [
     "stapel_core.django.users",
     "stapel_core.django.outbox",
     "stapel_core.django.taskstore",
+    "stapel_core.django.eventstore",
 ]
 
 COMMON_MIDDLEWARE = [

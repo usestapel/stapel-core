@@ -23,6 +23,7 @@ EXPECTED_ALL = sorted([
     "classify_ip",
     "country_of",
     "emit",
+    "eventstore",
     "mutate_and_emit",
     "flow_registry",
     "flow_step",
@@ -89,6 +90,15 @@ def test_signals_module_export():
     assert stapel_core.signals is signals_mod
     assert hasattr(stapel_core.signals, "user_registered")
     assert hasattr(stapel_core.signals, "payment_completed")
+
+
+def test_eventstore_module_export():
+    import stapel_core.eventstore as eventstore_mod
+
+    assert stapel_core.eventstore is eventstore_mod
+    assert hasattr(stapel_core.eventstore, "append")
+    assert hasattr(stapel_core.eventstore, "query")
+    assert hasattr(stapel_core.eventstore, "rollup")
 
 
 def test_unknown_attribute_raises_attribute_error():

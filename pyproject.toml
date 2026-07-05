@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.5.1"
+version = "0.6.0"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -130,6 +130,12 @@ packages = [
     "stapel_core.django.taskstore.migrations",
     "stapel_core.django.taskstore.management",
     "stapel_core.django.taskstore.management.commands",
+    "stapel_core.django.eventstore",
+    "stapel_core.django.eventstore.migrations",
+    "stapel_core.django.eventstore.management",
+    "stapel_core.django.eventstore.management.commands",
+    "stapel_core.eventstore",
+    "stapel_core.eventstore.backends",
     "stapel_core.comm",
     "stapel_core.flows",
     "stapel_core.lint",

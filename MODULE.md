@@ -40,6 +40,13 @@ points below; a generic fix or gap belongs **upstream** (see
 - `netintel` — IP intelligence seam: `classify_ip(ip) -> IpProfile`,
   `country_of(ip)`, `client_ip(request)`; pluggable provider (MaxMind mmdb /
   generic HTTP JSON / null), Django-cache-backed, fail-open.
+- `eventstore` — append-only stream seam for high-volume streams (LLM-call
+  ledger, gateway audit, analytics, delivery logs): `append` / `query`
+  (cursor read) / `rollup` / `purge`; buffered batch writes, generic nullable
+  identity columns (`project`/`task`/`container`), pluggable backend
+  (`PostgresEventStore` default with PG time-partitions / SQLite plain-table
+  degradation; ClickHouse the documented scale-out point), per-stream
+  retention.
 - `core` — framework-agnostic JWT primitives (`JWTHandler`, `TokenManager`,
   `TokenBlacklist`, `JWTConfig`).
 
@@ -360,6 +367,57 @@ AS396982 (Google Cloud) is the datacenter-only ASN. `manage.py
 download_geolite` is a TODO (netintel package docstring). Consumers: captcha
 challenge policy, OAuth region resolution (stapel-auth), rate limits,
 analytics.
+
+### Event store — `STAPEL_EVENTSTORE` (`eventstore/`)
+
+Append-only sink for high-volume streams that are written often, read as
+aggregates, grow without bound, and stay out of band with business
+transactions (LLM-call ledger, gateway audit, analytics, delivery logs — one
+core primitive, not N bespoke tables). Facade API (root export
+`stapel_core.eventstore`, lazy):
+
+- `append(stream, payload, *, ts=None, project=None, task=None, container=None)`
+  — buffered write. `append_batch(events)`, `flush()`.
+- `query(stream, *, after=None, limit=100, time_range=None, filters=None)
+  -> EventPage` — cursor read in `(ts, id)` order (id tie-break, so bursts
+  never skip/repeat); `EventPage.cursor` (opaque `Cursor` token) feeds the
+  next `after=`. `filters` match identity columns or payload keys.
+- `rollup(stream, *, group_by, sum_fields, time_range=None, filters=None,
+  into=None) -> list[RollupRow]` — group-by (identity columns or payload
+  keys) + sum-fields; `into=` upserts buckets into a rollup table (replace /
+  recompute semantics). Concrete rollups are the consumer's business.
+- `purge(stream, *, older_than) -> int` — retention mechanism.
+
+| Key | Default | Semantics | What it customizes |
+|---|---|---|---|
+| `BACKEND` | `…backends.postgres.PostgresEventStore` | replace (dotted path/class/instance) | The `EventStore` ABC impl (`append_batch`/`query`/`rollup`/`purge`) |
+| `ROUTES` | `{}` | **merge**-routing by stream name | Per-stream backend override (`{"analytics": "…ClickHouseEventStore"}`); unlisted streams use `BACKEND` |
+| `BUFFER_SIZE` | `500` | replace | Flush when the write buffer reaches N rows |
+| `BUFFER_INTERVAL` | `5.0` | replace | Flush when the oldest buffered event is ≥ N seconds old |
+| `BUFFER_SYNC` | `False` | replace | Write-through every append (tests/low-volume); reads always flush first |
+| `RETENTION` | `{}` | replace | Per-stream raw retention in days, applied by `manage.py sweep_eventstore` |
+| `RETENTION_ROLLUP` | `{}` | replace | Per-stream rollup retention in days (raw ≠ rollup) |
+| `PARTITION_PERIOD` | `"month"` | replace | PG time-partition granularity (`month`/`day`); structural only off PostgreSQL |
+
+`BACKEND`/`ROUTES` decide which store code runs and where a stream lands —
+generic names, so `AppSettings(no_env=…)` blocks a stray same-named env var
+from silently rerouting a stream (same guard as netintel `PROVIDER`).
+
+Default `PostgresEventStore` (`stapel_core.django.eventstore`, in
+`COMMON_INSTALLED_APPS`): append-only `EventRecord` `{stream, ts, payload
+jsonb, project/task/container nullable}` + `EventRollup`. On PostgreSQL the
+raw table is time-partitioned by `ts` (`django/eventstore/partitions.py` SQL
+generators; `manage.py eventstore_partition [--dry-run] [--periods-ahead N]`
+creates upcoming partitions idempotently; the parent-table conversion —
+`partitions.parent_ddl` — is a one-time ops/RunSQL step). **On the SQLite
+minimal profile it degrades to one plain table with no partitions** — same
+rows, same API; the partition command reports skipped rather than erroring.
+Rollup aggregation runs in Python so it is identical on every engine (pushing
+the GROUP BY into SQL / ClickHouse is the scale-out optimization). ClickHouse
+is the documented evolution point — the ABC already permits it; it is **not**
+implemented here (add a backend, flip `BACKEND`/`ROUTES`). Consumers (Studio
+steel thread): LLM-call ledger with the five-component usage split, gateway
+audit (SN-4), delivery logs.
 
 ### GDPR providers (`gdpr.py`)
 

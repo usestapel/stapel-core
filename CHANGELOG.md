@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.6.0] - 2026-07-06
+
+### Added — `stapel_core.eventstore`: append-only stream primitive (Studio SN-3′)
+
+- **One seam for the many high-volume append streams** (LLM-call ledger,
+  gateway audit, analytics, delivery logs) — written often, read as
+  aggregates, grow without bound, out of band with business transactions
+  (docs/data-storage-and-observability.md §1; studio-design §3, three storage
+  contours). Modules write through the facade, never a backend.
+- **`EventStore` ABC + backend seam** — `STAPEL_EVENTSTORE["BACKEND"]`
+  (dotted path); default `PostgresEventStore`. Per-stream override via
+  `STAPEL_EVENTSTORE["ROUTES"]` (merge-routing by stream name, like
+  bus-routing). ClickHouse is the documented scale-out evolution point — the
+  ABC already permits it; not implemented here.
+- **Facade API** — `append(stream, payload, *, ts, project, task, container)`,
+  `append_batch`, `query(stream, *, after, limit, time_range, filters)` →
+  `EventPage` (cursor read, `(ts, id)` tie-break so bursts never skip/repeat a
+  row), `rollup(stream, *, group_by, sum_fields, into=…)` → `RollupRow`s,
+  `purge(stream, *, older_than)`, `flush()`.
+- **Append-only rows** — `{stream (indexed), ts (indexed), payload jsonb,
+  project/task/container (generic, nullable, indexed)}`. Identity columns are
+  promoted out of the payload for cheap slicing; the framework does not ascribe
+  meaning to them.
+- **Write buffer** — batch-flush by size or interval (`BUFFER_SIZE` /
+  `BUFFER_INTERVAL`); flush runs the DB I/O outside the lock. `BUFFER_SYNC`
+  write-through fallback for tests/low-volume; reads flush first
+  (read-your-writes). `atexit` flush so buffered events are not lost.
+- **Generic rollup helper** — group-by (identity columns or payload keys) +
+  sum-fields, aggregated in Python so it is identical on every engine
+  (bool/non-numeric values skipped from sums). Optional `into=` upserts the
+  buckets into a rollup table with replace (recompute) semantics; concrete
+  rollups are the consumer's business.
+- **Per-stream retention** — `STAPEL_EVENTSTORE["RETENTION"]` /
+  `["RETENTION_ROLLUP"]` (raw ≠ rollup), applied by
+  `manage.py sweep_eventstore` (cron/beat).
+- **PostgreSQL time-partitioning** — `django/eventstore/partitions.py` SQL
+  generators (`parent_ddl` range-partitioned parent, `ensure_partitions_sql`,
+  `create/drop_partition_sql`) driven by `manage.py eventstore_partition`
+  (idempotent, `--dry-run`). **SQLite minimal profile degrades to one plain
+  table, no partitions** (documented); the partition command reports skipped
+  rather than erroring.
+- App `stapel_core.django.eventstore` added to `COMMON_INSTALLED_APPS`
+  (models `EventRecord`/`EventRollup`, migration `0001_initial`).
+
+Tests: append/cursor paging + tie-break, identity/payload filters, half-open
+time ranges, buffer (size/interval/sync/flush), rollup (group/sum/into/replace),
+retention purge + sweep command, stream routing, cursor token round-trip,
+partition SQL generation (structural — Postgres not available locally) and
+SQLite plain-table degradation. Base 1101 → 1133.
+
 ## [0.5.1] - 2026-07-05
 
 ### Fixed — RevisionMixin: phantom revision on `save(update_fields=...)` + duplicate issuance under concurrency (review H-3)

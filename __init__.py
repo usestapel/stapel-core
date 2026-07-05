@@ -16,6 +16,9 @@ The building blocks every Stapel package sits on:
 - ``gdpr`` — GDPR provider protocol and in-process registry.
 - ``netintel`` — IP intelligence seam (``classify_ip``, ``country_of``,
   ``IpProfile``): pluggable provider, cached, fail-open.
+- ``eventstore`` — append-only stream seam (``append``, ``query``,
+  ``rollup``, ``purge``): buffered writes, cursor reads, Postgres default
+  (ClickHouse the documented scale-out point).
 - ``django.users.AbstractStapelUser`` — base user model.
 - ``core`` — framework-agnostic JWT primitives (``JWTHandler``,
   ``TokenManager``, ``TokenBlacklist``, ``JWTConfig``).
@@ -68,6 +71,8 @@ _LAZY_EXPORTS = {
     "AppSettings": (".conf", "AppSettings"),
     # signals — in-process business milestones (module export)
     "signals": (".signals", None),
+    # eventstore — append-only stream seam (module export)
+    "eventstore": (".eventstore", None),
     # API conventions — responses, errors, serializers
     "StapelResponse": (".django.api.errors", "StapelResponse"),
     "StapelErrorResponse": (".django.api.errors", "StapelErrorResponse"),
