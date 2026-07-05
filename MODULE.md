@@ -63,6 +63,7 @@ instances (e.g. `verification_settings` below).
 |---|---|---|
 | `ACTION_TRANSPORT` | `"inprocess"` | Action delivery: `inprocess` \| `bus` \| `memory` (`bus` delegates to `stapel_core.bus`) |
 | `OUTBOX_ENABLED` | `True` | Route every `emit()` through the transactional outbox (disable only in tests) |
+| `EMIT_OUTSIDE_ATOMIC` | `"warn"` | `emit()` with the outbox on but outside `transaction.atomic()`: `warn` (log with stack) \| `error` (raise `EmitOutsideAtomicError`) \| `allow`. Set `error` in module test settings to gate on it |
 | `FUNCTION_TRANSPORT` | `"inprocess"` | Function RPC: `inprocess` \| `nats` \| `http` \| dotted path to `transport(name, payload, timeout=None)` (e.g. gRPC) |
 | `FUNCTION_ROUTES` | `{}` | http transport: longest-prefix map of function name → base URL, e.g. `{"cdn.": "http://svc-cdn:8000/cdn"}` |
 | `FUNCTION_TIMEOUT` | `5.0` | Default Function call timeout (seconds) |
@@ -81,6 +82,45 @@ Registration seams: `@on_action(name, schema=...)` / `subscribe_action()`
 `register_function()` (exactly one provider per Function),
 `@task_handler(kind)` / `register_task()` (one executor per Task kind).
 Registries: `action_registry`, `function_registry` (`comm/registry.py`).
+
+### Outbox atomicity — `mutate_and_emit()` + emit-check (`comm/actions.py`, `lint/emit_check.py`)
+
+The outbox guarantee — *the event leaves iff the surrounding transaction
+commits* — is a seam, not a discipline. The canonical mutation+emit pattern:
+
+```python
+from stapel_core.comm import mutate_and_emit
+
+with mutate_and_emit() as emit_event:
+    listing.status = ListingStatus.PUBLISHED
+    listing.save(update_fields=["status"])
+    emit_event("listing.published", {"listing_id": str(listing.pk)},
+               key=str(listing.pk))
+```
+
+Everything in the block commits or rolls back as one unit; the yielded
+callable has the exact `emit()` signature (0..N calls per block, refuses to
+run once the block exits). `with mutate_and_emit():` without `as` is valid
+when emits happen through `emit_*` helper functions inside the block.
+Nesting inside a wider `transaction.atomic()` joins the outer transaction.
+
+Mechanical guards behind it (they also protect plain `emit()`):
+
+- a failed emit inside an atomic block marks the transaction rollback-only
+  before propagating — swallowing the exception cannot commit the mutation
+  without its event (the categories C1 bug class);
+- `emit()` outside any atomic block (mutation and outbox row in separate
+  transactions — the listings L2 bug class; also emit inside `on_commit`
+  callbacks) is flagged per `EMIT_OUTSIDE_ATOMIC` above;
+- `python -m stapel_core.lint.emit_check .` — static CI gate for the same
+  classes (EMIT001 emit in except, EMIT002 swallowed emit, EMIT003
+  mutation+emit without shared atomic, EMIT004 emit in on_commit). Lexical
+  only; suppress a proven false positive with `# emit-check: ok — <reason>`.
+  Module repos run it in pre-commit/CI next to ruff.
+
+Review checklist for data-holding modules: every emit is atomic with its
+mutation, and a `test_failing_emit_rolls_back`-class test exists (see
+`tests/test_emit_atomicity.py` here for the reference shapes).
 
 ### Bus backends — `STAPEL_BUS_BACKEND` (`bus/router.py`)
 
@@ -261,6 +301,11 @@ after the star-import; env vars drive deployment differences.
   `transaction.atomic()` guarantees the event exists iff the transaction
   committed. Calling `bus.publish()` directly from request code, or setting
   `OUTBOX_ENABLED = False` outside tests, breaks that guarantee.
+- **Do not emit outside the mutating transaction, and never swallow an emit
+  failure.** Use `mutate_and_emit()` (above); `save()`-then-`emit()` without
+  a shared atomic block, `try/except` around `emit`, and `emit` inside
+  `on_commit` callbacks are all flagged by the emit-check gate and the
+  `EMIT_OUTSIDE_ATOMIC` runtime guard.
 - **Do not hardcode transports in module code.** `ACTION_TRANSPORT`,
   `FUNCTION_TRANSPORT`, `TASK_DISPATCH`, `STAPEL_BUS_BACKEND` are deployment
   configuration; module code must work identically in monolith (inprocess)

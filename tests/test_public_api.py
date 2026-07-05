@@ -23,6 +23,7 @@ EXPECTED_ALL = sorted([
     "classify_ip",
     "country_of",
     "emit",
+    "mutate_and_emit",
     "flow_registry",
     "flow_step",
     "function",

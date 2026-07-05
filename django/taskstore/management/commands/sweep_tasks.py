@@ -5,7 +5,7 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from stapel_core.comm.actions import emit
+from stapel_core.comm.actions import mutate_and_emit
 from stapel_core.comm.tasks import TASK_FAILED
 from stapel_core.django.taskstore.models import TaskRecord
 
@@ -22,18 +22,22 @@ class Command(BaseCommand):
         )
         count = 0
         for record in expired:
-            record.state = TaskRecord.FAILED
-            record.error = "deadline exceeded"
-            record.finished_at = now
-            record.save(update_fields=["state", "error", "finished_at"])
-            emit(
-                TASK_FAILED,
-                {
-                    "task_id": str(record.pk),
-                    "kind": record.kind,
-                    "error": "deadline exceeded",
-                    "correlation_id": record.correlation_id,
-                },
-            )
+            # FAILED state + task.failed event commit together, per record —
+            # a crash mid-sweep leaves the rest expired (next run catches
+            # them), never failed-but-unannounced.
+            with mutate_and_emit() as emit_event:
+                record.state = TaskRecord.FAILED
+                record.error = "deadline exceeded"
+                record.finished_at = now
+                record.save(update_fields=["state", "error", "finished_at"])
+                emit_event(
+                    TASK_FAILED,
+                    {
+                        "task_id": str(record.pk),
+                        "kind": record.kind,
+                        "error": "deadline exceeded",
+                        "correlation_id": record.correlation_id,
+                    },
+                )
             count += 1
         self.stdout.write(f"sweep_tasks: failed {count} expired task(s)")

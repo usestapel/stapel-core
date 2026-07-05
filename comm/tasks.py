@@ -131,7 +131,7 @@ def start(
     from django.utils import timezone
 
     from ..django.taskstore.models import TaskRecord
-    from .actions import emit
+    from .actions import mutate_and_emit
 
     deadline = None
     if deadline_seconds:
@@ -139,19 +139,23 @@ def start(
 
         deadline = timezone.now() + timedelta(seconds=deadline_seconds)
 
-    record = TaskRecord.objects.create(
-        kind=kind,
-        payload=payload or {},
-        max_attempts=max_attempts,
-        deadline=deadline,
-        correlation_id=correlation_id,
-        callback=callback,
-    )
-    emit(
-        TASK_REQUESTED,
-        {"task_id": str(record.pk), "kind": kind},
-        key=correlation_id or str(record.pk),
-    )
+    # Record + requested-event are one transaction (joining the caller's
+    # atomic block when present): a task must never exist unannounced, nor
+    # be announced without existing.
+    with mutate_and_emit() as emit_event:
+        record = TaskRecord.objects.create(
+            kind=kind,
+            payload=payload or {},
+            max_attempts=max_attempts,
+            deadline=deadline,
+            correlation_id=correlation_id,
+            callback=callback,
+        )
+        emit_event(
+            TASK_REQUESTED,
+            {"task_id": str(record.pk), "kind": kind},
+            key=correlation_id or str(record.pk),
+        )
     if comm_setting("TASK_DISPATCH", "action") == "inline":
         # Tests/scripts: run right here, synchronously, via the inline
         # executor path. The emitted event above stays (outbox audit
@@ -224,7 +228,6 @@ def execute(task_id: str) -> None:
     from django.utils import timezone
 
     from ..django.taskstore.models import TaskRecord
-    from .actions import emit
 
     with transaction.atomic():
         record = (
@@ -241,7 +244,7 @@ def execute(task_id: str) -> None:
 
     handler = _handlers.get(record.kind)
     if handler is None:  # requested-event routed here by mistake
-        _park(record, "no local handler", emit)
+        _park(record, "no local handler")
         return
 
     try:
@@ -249,49 +252,65 @@ def execute(task_id: str) -> None:
     except Exception as exc:
         logger.exception("task %s (%s) failed", task_id, record.kind)
         if record.attempts < record.max_attempts:
-            TaskRecord.objects.filter(pk=record.pk).update(
-                state=TaskRecord.PENDING, error=repr(exc)[:2000]
-            )
-            # Re-announce through the outbox so the retry survives crashes.
-            emit(TASK_REQUESTED, {"task_id": str(record.pk), "kind": record.kind})
+            _requeue(record, repr(exc)[:2000])
         else:
-            _park(record, repr(exc)[:2000], emit)
+            _park(record, repr(exc)[:2000])
         return
 
-    record.state = TaskRecord.DONE
-    record.result = result
-    record.error = ""
-    record.finished_at = timezone.now()
-    record.save(update_fields=["state", "result", "error", "finished_at"])
-    emit(
-        TASK_COMPLETED,
-        {
-            "task_id": str(record.pk),
-            "kind": record.kind,
-            "correlation_id": record.correlation_id,
-        },
-        key=record.correlation_id or str(record.pk),
-    )
+    from .actions import mutate_and_emit
+
+    # DONE state + completed-event commit together — a task must never be
+    # marked DONE with its announcement lost (or vice versa).
+    with mutate_and_emit() as emit_event:
+        record.state = TaskRecord.DONE
+        record.result = result
+        record.error = ""
+        record.finished_at = timezone.now()
+        record.save(update_fields=["state", "result", "error", "finished_at"])
+        emit_event(
+            TASK_COMPLETED,
+            {
+                "task_id": str(record.pk),
+                "kind": record.kind,
+                "correlation_id": record.correlation_id,
+            },
+            key=record.correlation_id or str(record.pk),
+        )
     _run_callback(record)
 
 
-def _park(record, error: str, emit) -> None:
+def _requeue(record, error: str) -> None:
+    """Handled-failure transition: back to PENDING + re-announce, atomically
+    (the re-announce rides the outbox so the retry survives crashes)."""
+    from .actions import mutate_and_emit
+
+    with mutate_and_emit() as emit_event:
+        type(record).objects.filter(pk=record.pk).update(
+            state=record.PENDING, error=error
+        )
+        emit_event(TASK_REQUESTED, {"task_id": str(record.pk), "kind": record.kind})
+
+
+def _park(record, error: str) -> None:
     from django.utils import timezone
 
-    record.state = record.FAILED
-    record.error = error
-    record.finished_at = timezone.now()
-    record.save(update_fields=["state", "error", "finished_at"])
-    emit(
-        TASK_FAILED,
-        {
-            "task_id": str(record.pk),
-            "kind": record.kind,
-            "error": error,
-            "correlation_id": record.correlation_id,
-        },
-        key=record.correlation_id or str(record.pk),
-    )
+    from .actions import mutate_and_emit
+
+    with mutate_and_emit() as emit_event:
+        record.state = record.FAILED
+        record.error = error
+        record.finished_at = timezone.now()
+        record.save(update_fields=["state", "error", "finished_at"])
+        emit_event(
+            TASK_FAILED,
+            {
+                "task_id": str(record.pk),
+                "kind": record.kind,
+                "error": error,
+                "correlation_id": record.correlation_id,
+            },
+            key=record.correlation_id or str(record.pk),
+        )
     _run_callback(record)
 
 

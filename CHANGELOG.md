@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.3.3] - 2026-07-05
+
+### Added — outbox atomicity as a seam (docs/module-extension-gaps.md §"Системный паттерн")
+
+Two module repos independently broke the outbox guarantee ("the event
+leaves iff the surrounding transaction commits") the same two ways
+(categories C1: swallowed emit failure; listings L2: save and emit in
+separate transactions). This release turns the discipline into mechanism:
+
+- `stapel_core.comm.mutate_and_emit(using=None, savepoint=True)` — context
+  manager for the canonical mutation+emit pattern: everything in the block
+  (ORM writes and outbox rows) commits or rolls back as one unit. Yields an
+  emit callable with the exact `emit()` signature (0..N calls; refuses to
+  run after the block exits); plain `emit()` / `emit_*` helpers inside the
+  block get the same protection, so `with mutate_and_emit():` without `as`
+  is a valid form. Root lazy export `stapel_core.mutate_and_emit`.
+- Runtime guards in `emit()` (outbox mode):
+  - emit *outside* `transaction.atomic()` now warns by default (the outbox
+    row would commit detached from the mutation; also fires for emit inside
+    `on_commit` callbacks). New `STAPEL_COMM["EMIT_OUTSIDE_ATOMIC"]`:
+    `"warn"` (default) | `"error"` (raises new `EmitOutsideAtomicError`) |
+    `"allow"`. Set `"error"` in module test settings to make it a gate.
+  - a failed emit inside an atomic block marks the transaction
+    rollback-only before propagating — even a caller that swallows the
+    exception (the C1 anti-pattern) cannot commit the mutation without its
+    event.
+- `stapel_core.lint.emit_check` — AST-based CI gate
+  (`python -m stapel_core.lint.emit_check [paths]`, also runnable as a
+  standalone file): EMIT001 emit in `except` handler, EMIT002 emit
+  swallowed by broad except (C1), EMIT003 mutation+emit in one function
+  without a shared atomic construct (L2), EMIT004 emit in an `on_commit`
+  lambda. Suppression: `# emit-check: ok — <reason>`. Purely lexical by
+  design — see the module docstring for limitations; the runtime guards
+  cover what the static pass cannot. Wired into this repo's pre-commit /
+  pre-push hooks and CI.
+
+### Fixed
+
+- The emit-check gate flagged five instances of the L2 bug class in core
+  itself; all now go through `mutate_and_emit()`:
+  - `comm.tasks.start()` — task record and `task.requested` event were in
+    separate transactions when the caller held no atomic block (a crash
+    between them left a PENDING task that was never announced);
+  - `comm.tasks.execute()` — DONE state + `task.completed` event;
+  - `comm.tasks` retry path (new `_requeue()` helper) — PENDING reset +
+    re-announce, previously emitted inside the except handler;
+  - `comm.tasks._park()` — FAILED state + `task.failed` event (signature
+    change: internal helper, no longer takes `emit`);
+  - `manage.py sweep_tasks` — per-record FAILED state + `task.failed`.
+
 ## [0.3.2] - 2026-07-05
 
 ### Added

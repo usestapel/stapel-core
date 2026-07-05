@@ -39,6 +39,7 @@ except Exception:  # editable/vendored checkout without dist-info
 _LAZY_EXPORTS = {
     # comm — Actions, Functions, long-running tasks
     "emit": (".comm", "emit"),
+    "mutate_and_emit": (".comm", "mutate_and_emit"),
     "on_action": (".comm", "on_action"),
     "call": (".comm", "call"),
     "function": (".comm", "function"),

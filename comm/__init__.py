@@ -8,13 +8,16 @@ Action — fire-and-forget fact ("user.deleted"). At-least-once, async,
 0..N subscribers. Emitted through the transactional outbox: the event
 leaves iff the surrounding DB transaction commits.
 
-    from stapel_core.comm import emit, on_action
+    from stapel_core.comm import emit, mutate_and_emit, on_action
 
     @on_action("user.deleted")
     def erase(event):
         Profile.objects.filter(user_id=event.payload["user_id"]).delete()
 
-    emit("user.deleted", {"user_id": str(user.pk)})
+    # mutation + emit in ONE transaction (the canonical outbox pattern):
+    with mutate_and_emit() as emit_event:
+        user.delete()
+        emit_event("user.deleted", {"user_id": str(user.pk)})
 
 Function — synchronous call with a result ("cdn.media_exists"). Exactly
 one provider per name.
@@ -33,7 +36,7 @@ run Actions over the bus (Kafka/NATS) and Functions over internal HTTP.
 See docs/module-communication.md in the stapel workspace for the design.
 """
 
-from .actions import deliver, emit, on_action, subscribe_action
+from .actions import deliver, emit, mutate_and_emit, on_action, subscribe_action
 from .tasks import (
     TaskNotFound,
     TaskStatus,
@@ -45,6 +48,7 @@ from .tasks import (
 from .config import comm_setting
 from .exceptions import (
     CommError,
+    EmitOutsideAtomicError,
     FunctionCallError,
     FunctionNotRegistered,
     FunctionRouteNotConfigured,
@@ -54,6 +58,7 @@ from .registry import action_registry, function_registry
 
 __all__ = [
     "emit",
+    "mutate_and_emit",
     "start",
     "status",
     "task_handler",
@@ -70,6 +75,7 @@ __all__ = [
     "function_registry",
     "comm_setting",
     "CommError",
+    "EmitOutsideAtomicError",
     "FunctionCallError",
     "FunctionNotRegistered",
     "FunctionRouteNotConfigured",

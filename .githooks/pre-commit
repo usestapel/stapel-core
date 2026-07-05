@@ -2,4 +2,6 @@
 set -e
 echo "Running ruff lint check..."
 ruff check . --select E,F,W --ignore E501
+echo "Running emit-check (outbox atomicity)..."
+python3 lint/emit_check.py .
 echo "Lint check passed."

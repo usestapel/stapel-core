@@ -8,11 +8,12 @@ delivery is at-least-once, exactly like a broker.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from typing import Callable
 
 from ..bus.event import Event
 from .config import comm_setting, service_name
-from .exceptions import ActionDeliveryError
+from .exceptions import ActionDeliveryError, EmitOutsideAtomicError
 from .registry import ActionHandler, action_registry
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,23 @@ def emit(
     Inside transaction.atomic() the event is persisted with the transaction
     and delivered after commit; a rollback discards it — the event never
     lies about state that was not committed.
+
+    Two runtime guards protect that guarantee (outbox mode only):
+
+    - Called *outside* an atomic block, the outbox row would commit on its
+      own, detached from the mutation it describes (the listings L2 bug:
+      crash between save() and emit() = published-but-unindexed forever).
+      Behavior per ``STAPEL_COMM["EMIT_OUTSIDE_ATOMIC"]``: ``"warn"``
+      (default, logs with caller location), ``"error"`` (raises
+      :class:`EmitOutsideAtomicError`), ``"allow"``. This also fires for
+      emit inside an ``on_commit`` callback — an event written *after*
+      commit is lost if the process dies in between.
+    - If emit fails inside an atomic block, the transaction is marked
+      rollback-only before the exception propagates. Even a caller that
+      swallows the exception (the categories C1 bug) cannot commit the
+      mutation without its event: they commit together or not at all.
+
+    Prefer :func:`mutate_and_emit` for the mutation+emit pattern.
     """
     event = Event(
         event_type=name,
@@ -58,13 +76,115 @@ def emit(
         version=version,
         key=key,
     )
-    action_registry.validate(name, event.payload)
 
-    if comm_setting("OUTBOX_ENABLED", True):
-        _emit_via_outbox(event)
-    else:
+    if not comm_setting("OUTBOX_ENABLED", True):
+        action_registry.validate(name, event.payload)
         deliver(event)
+        return event
+
+    from django.db import transaction
+
+    connection = transaction.get_connection()
+    if not connection.in_atomic_block:
+        _emit_outside_atomic(name)
+    try:
+        action_registry.validate(name, event.payload)
+        _emit_via_outbox(event)
+    except Exception:
+        # Swallow-proofing: a failed emit must never let the surrounding
+        # mutation commit without its event. Marking the transaction
+        # rollback-only makes catching this exception harmless — the atomic
+        # block rolls back regardless.
+        if connection.in_atomic_block:
+            transaction.set_rollback(True)
+        raise
     return event
+
+
+def _emit_outside_atomic(name: str) -> None:
+    mode = comm_setting("EMIT_OUTSIDE_ATOMIC", "warn")
+    if mode == "allow":
+        return
+    message = (
+        "emit(%r) called outside transaction.atomic(): the outbox row commits "
+        "detached from the mutation it describes. Wrap mutation+emit in "
+        "stapel_core.comm.mutate_and_emit() (or transaction.atomic())."
+    )
+    if mode == "error":
+        raise EmitOutsideAtomicError(message % name)
+    logger.warning(message, name, stack_info=True)
+
+
+@contextmanager
+def mutate_and_emit(using: str | None = None, *, savepoint: bool = True):
+    """Mutation + emit as one transaction — the canonical outbox pattern.
+
+        from stapel_core.comm import mutate_and_emit
+
+        with mutate_and_emit() as emit:
+            listing.status = ListingStatus.PUBLISHED
+            listing.save(update_fields=["status"])
+            emit("listing.published", {"listing_id": str(listing.pk)},
+                 key=str(listing.pk))
+
+    Everything in the block — the ORM writes and the outbox rows — commits
+    or rolls back as one unit; delivery happens after commit. The yielded
+    callable has the exact :func:`emit` signature and may be called any
+    number of times (0..N: conditional emits and fanouts are fine); plain
+    ``emit()`` and ``emit_*`` helper functions called inside the block get
+    the same protection, so ``with mutate_and_emit():`` without ``as`` is a
+    valid self-documenting form.
+
+    Guards (beyond ``transaction.atomic(using, savepoint)`` semantics):
+
+    - a failed emit marks the transaction rollback-only, so swallowing the
+      exception inside the block still rolls the whole mutation back;
+    - the yielded callable raises ``RuntimeError`` if it leaks out of the
+      block and is called after exit (its emit would be a separate
+      transaction);
+    - nesting inside a wider ``transaction.atomic()`` is safe — everything
+      joins the outer transaction, events still leave only on outer commit.
+
+    Delivery stays at-least-once (outbox relay retries) — subscribers must
+    be idempotent, exactly as with plain ``emit()``.
+    """
+    from django.db import transaction
+
+    emitter = _ScopedEmitter()
+    try:
+        with transaction.atomic(using=using, savepoint=savepoint):
+            yield emitter
+    finally:
+        emitter._active = False
+
+
+class _ScopedEmitter:
+    """emit() bound to a mutate_and_emit() block; inert once the block exits."""
+
+    __slots__ = ("_active", "events")
+
+    def __init__(self) -> None:
+        self._active = True
+        self.events: list[Event] = []
+
+    def __call__(
+        self,
+        name: str,
+        payload: dict | None = None,
+        *,
+        key: str | None = None,
+        version: int = 1,
+        service: str | None = None,
+    ) -> Event:
+        if not self._active:
+            raise RuntimeError(
+                "mutate_and_emit() emitter used after its block exited — this "
+                "emit would run in a separate transaction, detached from the "
+                "mutation. Emit inside the with-block."
+            )
+        event = emit(name, payload, key=key, version=version, service=service)
+        self.events.append(event)
+        return event
 
 
 def _emit_via_outbox(event: Event) -> None:

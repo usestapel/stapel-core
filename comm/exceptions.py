@@ -32,3 +32,15 @@ class ActionDeliveryError(CommError):
 
 class SchemaValidationError(CommError):
     """Payload does not match the registered schema."""
+
+
+class EmitOutsideAtomicError(CommError):
+    """emit() was called outside transaction.atomic() while the outbox is on.
+
+    The outbox guarantee — the event leaves iff the surrounding transaction
+    commits — only holds when the outbox row is written inside the same
+    transaction as the business mutation. Outside atomic the row commits on
+    its own, detached from whatever mutation it describes. Raised only when
+    ``STAPEL_COMM["EMIT_OUTSIDE_ATOMIC"] = "error"``; the default is a
+    logged warning.
+    """

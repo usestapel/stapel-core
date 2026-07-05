@@ -10,6 +10,10 @@ _DEFAULTS: dict[str, Any] = {
     # Write every emit() through the transactional outbox. Disable only in
     # tests that assert synchronous delivery.
     "OUTBOX_ENABLED": True,
+    # emit() with the outbox on but outside transaction.atomic() breaks the
+    # "event leaves iff the transaction commits" guarantee (the outbox row
+    # commits detached from the mutation). warn (default) | error | allow.
+    "EMIT_OUTSIDE_ATOMIC": "warn",
     # inprocess | nats | http | dotted path to a transport callable.
     # nats is the recommended RPC between services: one multiplexed
     # connection per process, protocol-level timeouts, queue-group load
