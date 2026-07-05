@@ -175,6 +175,37 @@ creating a `flows.py`, no registration wiring needed. `manage.py
 generate_flow_docs --out docs/flows` renders markdown + `flows.json`;
 `manage.py check_flows [--allow SUBSTRING]` is the CI completeness gate.
 
+### Flow i18n (`flows/i18n.py`, flow-system.md §2)
+
+Flow texts are i18n keys, not literals: each flow/step derives an implicit
+key (`flow.<id>.title` / `flow.<id>.description` /
+`flow.<id>.step.<order>.note`; explicit `title_key`/`description_key`/
+`note_key` parameters override) while the in-code literal stays the
+canonical English source text and the render fallback — literal-only flows
+work unchanged. `flows.json` carries keys + literals + API bindings and is
+language-agnostic.
+
+Rendering in language X (`resolve_flow_texts(flows, lang)`, or `manage.py
+generate_flow_docs --lang X [--llm]`) resolves each key through:
+
+1. committed per-app catalogs `<app>/translations/flows.<lang>.json`
+   (merged over INSTALLED_APPS, later apps win — modules ship en/ru,
+   reviewed as code; stapel-auth is the reference);
+2. the `translate.resolve` comm Function (host-project values, best-effort,
+   fills only keys the catalogs do not cover);
+3. the **`STAPEL_FLOWS["DOC_TRANSLATOR"]` seam** (opt-in via `--llm` /
+   `llm=True`) — dotted path; the default `CommDocTranslator` calls the
+   `llm.translate` comm Function *by name* (core never imports the agent
+   package). Output goes through a content-hash cache file (commit it):
+   regeneration without source changes = zero LLM calls, zero diff — the
+   same byte-stable discipline as `dump_translations`;
+4. the source literal.
+
+`STAPEL_FLOWS["DOC_SOURCE_LANGUAGE"]` (default `"en"`) declares the literal
+language passed to the translator. A custom translator is any class with
+`translate(entries: dict[key, source_text], source_language,
+target_language) -> dict[key, text]`.
+
 ### Error registry (`django/api/errors.py`)
 
 `register_service_errors({key: template})` adds service-specific error keys
@@ -327,7 +358,7 @@ delivery guarantees; cross-module facts still go through comm Actions.
 | `consume_actions [--topics ...] [--group ...]` | Bus→registry bridge: consume remote Actions into local `@on_action` handlers |
 | `serve_functions` | NATS Function server: expose this service's registered Functions (queue group = service name) |
 | `sweep_tasks` | Fail comm Tasks past their deadline (cron / celery beat) |
-| `generate_flow_docs --out DIR` | Render flow markdown + `flows.json` |
+| `generate_flow_docs --out DIR [--lang X] [--llm] [--llm-cache FILE]` | Render flow markdown + `flows.json`; `--lang` resolves i18n keys, `--llm` machine-translates missing keys (content-hash cached) |
 | `check_flows [--allow SUBSTRING]` | CI gate: flow documentation completeness |
 | `staff_group`, `reset_sequences` | Staff group fixture management; DB sequence reset |
 

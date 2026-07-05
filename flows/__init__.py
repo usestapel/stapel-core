@@ -18,9 +18,22 @@ completeness. One endpoint may participate in several flows.
     LOGIN.action("user.registered", order=3, note="Emitted on first login")
     LOGIN.human(order=0, note="User enters their email")
 
+Texts are i18n-keyed (flow-system.md §2): the literals above are the
+canonical (English) source texts, each flow/step derives an implicit key
+(``flow.<id>.title`` / ``flow.<id>.step.<order>.note``; explicit
+``title_key``/``description_key``/``note_key`` override). Rendering in a
+language resolves the keys via per-app ``translations/flows.<lang>.json``
+catalogs, the ``translate.resolve`` comm Function and the DOC_TRANSLATOR
+seam — see ``stapel_core.flows.i18n``.
+
 See docs: flows-and-verification.md in the stapel workspace.
 """
 
+from .i18n import (
+    flow_source_texts,
+    load_app_catalogs,
+    resolve_flow_texts,
+)
 from .registry import (
     Flow,
     FlowStep,
@@ -35,4 +48,7 @@ __all__ = [
     "autodiscover_flows",
     "flow_registry",
     "flow_step",
+    "flow_source_texts",
+    "load_app_catalogs",
+    "resolve_flow_texts",
 ]

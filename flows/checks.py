@@ -5,6 +5,8 @@ Rules:
 - every flow has a non-empty title and a description of >= MIN_DESCRIPTION
   characters;
 - every step carries a non-empty note;
+- steps within a flow have distinct i18n note keys (colliding implicit
+  keys — same order twice — would silently share one catalog entry);
 - action/function/task steps reference names that exist in the comm
   registries or committed schemas (best-effort when registries are empty).
 """
@@ -52,10 +54,19 @@ def check_flows(extra_allowlist: tuple[str, ...] = ()) -> list[FlowIssue]:
             ))
         if not f.steps:
             issues.append(FlowIssue("error", f"{f.id}: flow has no steps"))
+        seen_keys: dict[str, int] = {}
         for s in f.steps:
             if not s.note.strip():
                 issues.append(FlowIssue(
                     "error", f"{f.id}: step {s.kind}:{s.ref or s.order} has an empty note"
+                ))
+            seen_keys[s.note_key] = seen_keys.get(s.note_key, 0) + 1
+        for key, n in seen_keys.items():
+            if n > 1:
+                issues.append(FlowIssue(
+                    "error",
+                    f"{f.id}: {n} steps share the i18n key {key!r} — give the "
+                    "steps distinct orders or explicit note_key values",
                 ))
 
     # 2. Endpoint coverage

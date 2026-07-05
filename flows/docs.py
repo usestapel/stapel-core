@@ -115,19 +115,31 @@ def _serializer_names(view_cls) -> dict[str, str]:
     return out
 
 
-def render_flow_markdown(flow: Flow, index: dict[str, list[EndpointInfo]]) -> str:
-    lines = [f"# {flow.title}", ""]
+def render_flow_markdown(
+    flow: Flow,
+    index: dict[str, list[EndpointInfo]],
+    texts: dict[str, str] | None = None,
+) -> str:
+    """Render one flow as markdown.
+
+    *texts* is an i18n key → text mapping (see ``flows.i18n.
+    resolve_flow_texts``); missing keys fall back to the in-code literals,
+    so literal-only flows and callers render exactly as before.
+    """
+    _t = (texts or {}).get
+    lines = [f"# {_t(flow.title_key, flow.title)}", ""]
     lines += [f"`{flow.id}`", ""]
     if flow.actors:
         lines += ["**Актор(ы):** " + ", ".join(flow.actors), ""]
-    lines += [flow.description.strip(), "", "## Шаги", ""]
+    lines += [_t(flow.description_key, flow.description).strip(), "", "## Шаги", ""]
 
     for i, step in enumerate(flow.sorted_steps(), 1):
+        note = _t(step.note_key, step.note)
         if step.kind == STEP_HTTP:
             eps = index.get(step.ref, [])
             if eps:
                 for ep in eps[:1]:
-                    lines.append(f"{i}. **{ep.method} `{ep.path}`** — {step.note}")
+                    lines.append(f"{i}. **{ep.method} `{ep.path}`** — {note}")
                     if ep.view_cls is not None:
                         sers = _serializer_names(ep.view_cls)
                         if sers:
@@ -145,22 +157,23 @@ def render_flow_markdown(flow: Flow, index: dict[str, list[EndpointInfo]]) -> st
                                 f"факторы: {', '.join(factors)}"
                             )
             else:
-                lines.append(f"{i}. **HTTP** `{step.ref}` — {step.note} "
+                lines.append(f"{i}. **HTTP** `{step.ref}` — {note} "
                              f"_(эндпоинт не найден в URLConf)_")
         elif step.kind in (STEP_ACTION, STEP_FUNCTION, STEP_TASK):
             kind_label = {STEP_ACTION: "Action", STEP_FUNCTION: "Function",
                           STEP_TASK: "Task"}[step.kind]
-            lines.append(f"{i}. **{kind_label} `{step.ref}`** — {step.note}")
+            lines.append(f"{i}. **{kind_label} `{step.ref}`** — {note}")
         elif step.kind == STEP_HUMAN:
-            lines.append(f"{i}. **Действие пользователя** — {step.note}")
+            lines.append(f"{i}. **Действие пользователя** — {note}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_index_markdown(flows: list[Flow], index) -> str:
+def render_index_markdown(flows: list[Flow], index, texts: dict[str, str] | None = None) -> str:
+    _t = (texts or {}).get
     lines = ["# Флоу", "", "| ID | Название | Шагов |", "|---|---|---|"]
     for f in flows:
-        lines.append(f"| [`{f.id}`]({f.id}.md) | {f.title} | {len(f.steps)} |")
+        lines.append(f"| [`{f.id}`]({f.id}.md) | {_t(f.title_key, f.title)} | {len(f.steps)} |")
     lines += ["", "## Эндпоинт → флоу", ""]
     reverse: dict[str, set[str]] = {}
     for f in flows:
@@ -174,11 +187,20 @@ def render_index_markdown(flows: list[Flow], index) -> str:
 
 
 def export_json(flows: list[Flow], index) -> str:
+    """flows.json — the language-agnostic machine artifact (§2).
+
+    Carries the i18n keys plus the canonical source literals (structure +
+    API bindings are one contract; language lives on the presentation layer
+    where the keys are resolved).
+    """
     payload = []
     for f in flows:
         steps = []
         for s in f.sorted_steps():
-            entry = {"kind": s.kind, "order": s.order, "note": s.note, "ref": s.ref}
+            entry = {
+                "kind": s.kind, "order": s.order,
+                "note": s.note, "note_key": s.note_key, "ref": s.ref,
+            }
             if s.kind == STEP_HTTP:
                 entry["endpoints"] = [
                     {"method": ep.method, "path": ep.path}
@@ -186,7 +208,9 @@ def export_json(flows: list[Flow], index) -> str:
                 ]
             steps.append(entry)
         payload.append({
-            "id": f.id, "title": f.title, "description": f.description,
+            "id": f.id,
+            "title": f.title, "title_key": f.title_key,
+            "description": f.description, "description_key": f.description_key,
             "actors": f.actors, "steps": steps,
         })
     return json.dumps(payload, ensure_ascii=False, indent=2)

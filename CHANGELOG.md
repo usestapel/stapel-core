@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.4.0] - 2026-07-05
+
+### Added — flow i18n: keys instead of literals (flow-system.md §2, first-instance)
+
+Flow texts are now i18n keys; the in-code literal stays the canonical
+English source text and the render fallback, so **existing literal-only
+flows keep working unchanged** (the keys are derived implicitly).
+
+- `Flow` carries `title_key`/`description_key` (implicit
+  `flow.<id>.title` / `flow.<id>.description`; explicit kwargs override);
+  every step carries `note_key` (implicit `flow.<id>.step.<order>.note`;
+  `note_key=` kwarg on `@flow_step` and `Flow.action/.function/.task/
+  .human` overrides). `_stapel_flows` memberships include `note_key`.
+- `flows.json` (`export_json`) now includes `title_key`,
+  `description_key` and per-step `note_key` alongside the literals —
+  the artifact is language-agnostic: keys + structure + API bindings are
+  one contract, language lives on the presentation layer. Additive for
+  existing consumers.
+- New `stapel_core.flows.i18n` — the resolution engine
+  (`resolve_flow_texts(flows, language, ...)`), chain:
+  1. committed per-app catalogs `<app>/translations/flows.<lang>.json`
+     (merge over INSTALLED_APPS, later apps win);
+  2. `translate.resolve` comm Function (best-effort, host DB values, only
+     keys the catalogs don't cover);
+  3. `STAPEL_FLOWS["DOC_TRANSLATOR"]` dotted-path seam (opt-in `llm=True`)
+     — default `CommDocTranslator` calls `llm.translate` by comm name
+     (core stays L0-clean); guarded by a content-hash cache
+     (`DocTranslationCache`, committed file): regeneration without source
+     changes = zero LLM calls and zero diff (byte-stable, like
+     `dump_translations`);
+  4. the source literal — rendering never breaks.
+  `STAPEL_FLOWS["DOC_SOURCE_LANGUAGE"]` (default `"en"`) declares the
+  literal language. Public exports: `resolve_flow_texts`,
+  `flow_source_texts`, `load_app_catalogs`.
+- `generate_flow_docs` gained `--lang X`, `--llm`, `--llm-cache FILE`:
+  markdown is rendered with resolved texts; `flows.json` stays
+  language-agnostic. (`render_flow_markdown` / `render_index_markdown`
+  accept an optional `texts` mapping.)
+- `check_flows`: new error when several steps of one flow share an i18n
+  note key (colliding implicit keys — same `order` twice — would silently
+  share one catalog entry).
+
+Reference migration: the three stapel-auth flows (en literals + en/ru
+catalogs) — the pattern every module copies. Full bilingual doc trees,
+README links and the release gate are flow-system.md §4 (next step).
+
 ## [0.3.3] - 2026-07-05
 
 ### Added — outbox atomicity as a seam (docs/module-extension-gaps.md §"Системный паттерн")
