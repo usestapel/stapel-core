@@ -101,7 +101,7 @@
   unavailable (S5).
 - Root export `stapel_core.gateway` (lazy). 86 new tests (1221 total).
 
-
+## [0.6.0] - 2026-07-06
 
 ### Added — `stapel_core.eventstore`: append-only stream primitive (Studio SN-3′)
 
