@@ -1,6 +1,70 @@
 # Changelog
 
-## [0.6.0] - 2026-07-06
+## [0.7.0] - 2026-07-06
+
+### Added — `stapel_core.gateway`: privilege gateway mechanism (Studio SN-4)
+
+- **The security primitive behind "capability, not credentials"**
+  (system-design §5.9; studio-design §2.3): untrusted code in a project
+  container calls declared **verbs** through one known endpoint; every
+  key/password/script stays behind the gateway in the control plane (S1).
+  This module is the OSS mechanism only — concrete verbs and policies are
+  the deployment's (Studio's) business.
+- **Verb declaration** — name + mandatory JSON schema for arguments +
+  policy `{tiers, rate_limit, require_confirmation, audit_stream}` +
+  handler (dotted path or callable): `register_verb()` / `@gateway.verb`
+  in `AppConfig.ready()`. **Merge-registry** with
+  `STAPEL_GATEWAY["VERBS"]`: settings entries patch a code-declared verb
+  per key (policy merges per field), declare settings-only verbs, or
+  disable a verb with `None`. **Deny-by-default**: an undeclared verb
+  does not exist (404, no capability enumeration).
+- **Scope tokens** (`issue_token` / `verify_token` / `rotate_token` /
+  `revoke_token` / `purge_expired_tokens`) — project-scoped, short-lived
+  (`TOKEN_TTL`, 1h). Contract decision: **opaque, stored as sha256 only**
+  (per the flow-mcp trade-off — tokens are few, verification is one
+  indexed lookup, and instant revocation beats saving it; a signed token
+  needs a revocation table anyway). `sgw_` prefix for secret scanners;
+  optional bindings to a `container` and a `network` (exact IP or CIDR).
+  Rotation keeps bindings, kills the old token (optional grace window).
+- **Network identity check** — three-factor authorization on the HTTP
+  door (project id = addressing, token = right to speak, network = the
+  physical caller): `STAPEL_GATEWAY["NETWORK_VERIFIER"]` seam;
+  the default enforces the token's bound IP/CIDR from `REMOTE_ADDR`
+  (never a forwarded header — proxy trust belongs in a custom verifier);
+  `REQUIRE_NETWORK_BINDING` makes unbound tokens unusable over HTTP.
+- **Two call surfaces** — HTTP for containers
+  (`gateway.get_gateway_urls()` → `POST api/_gateway/<verb>/`,
+  `Authorization: Bearer sgw_…`, statuses 200/202/400/401/403/404/429/
+  502/500) and comm Functions for control-plane callers
+  (`gateway.invoke`, `gateway.confirm` — registered by the
+  `stapel_core.django.gateway` app, which is opt-in, not in
+  `COMMON_INSTALLED_APPS`: a privilege surface is mounted deliberately).
+- **Audit without holes (S6)** — exactly one line per invocation outcome
+  (executed ok/failed, denied by any check incl. token/network/config
+  errors, parked pending, confirmed, rejected, expired) with who/what/
+  when/channel/ip/token/args (fingerprinted over `AUDIT_ARGS_MAXLEN`).
+  Sink is a dotted-path seam (`AUDIT_SINK`), default appends to
+  `stapel_core.eventstore` stream `audit` (per-verb `policy.audit_stream`
+  override). Sink failure is fail-closed and fail-noisy (`AuditFailure`).
+- **Policy engine** — `STAPEL_GATEWAY["POLICY_ENGINE"]` seam; the default
+  checks tiers (unresolvable tier on a restricted verb **denies**;
+  `TIER_RESOLVER` seam) and rate limits (`"30/m"`-style, fixed window,
+  counted per `(verb, project)`; `RATE_LIMITER` seam, cache-backed
+  default; malformed limit = config error, never "unlimited").
+- **Two-phase confirmation** — `require_confirmation` parks the validated
+  call as a `PendingAction` row (TTL `CONFIRMATION_TTL`, 15 min) and
+  returns `202 {confirmation_id}`; execution takes `gateway.confirm(id,
+  approved_by=…)` — comm/Python only, deliberately absent from the
+  container surface (a hijacked agent must not confirm its own
+  destructive action). The confirmed leg re-runs schema + policy, is
+  claimed atomically (no double-execute), and stamps `confirmed_by` into
+  context and audit.
+- Optional extra `stapel-core[gateway]` (jsonschema) — verb-args
+  validation is mandatory and fails **closed** when the validator is
+  unavailable (S5).
+- Root export `stapel_core.gateway` (lazy). 86 new tests (1221 total).
+
+
 
 ### Added — `stapel_core.eventstore`: append-only stream primitive (Studio SN-3′)
 

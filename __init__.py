@@ -19,6 +19,8 @@ The building blocks every Stapel package sits on:
 - ``eventstore`` — append-only stream seam (``append``, ``query``,
   ``rollup``, ``purge``): buffered writes, cursor reads, Postgres default
   (ClickHouse the documented scale-out point).
+- ``gateway`` — privilege gateway: declared verbs with policies, scope
+  tokens, network identity, audit — capability without credentials.
 - ``django.users.AbstractStapelUser`` — base user model.
 - ``core`` — framework-agnostic JWT primitives (``JWTHandler``,
   ``TokenManager``, ``TokenBlacklist``, ``JWTConfig``).
@@ -73,6 +75,8 @@ _LAZY_EXPORTS = {
     "signals": (".signals", None),
     # eventstore — append-only stream seam (module export)
     "eventstore": (".eventstore", None),
+    # gateway — privilege gateway mechanism (module export)
+    "gateway": (".gateway", None),
     # API conventions — responses, errors, serializers
     "StapelResponse": (".django.api.errors", "StapelResponse"),
     "StapelErrorResponse": (".django.api.errors", "StapelErrorResponse"),

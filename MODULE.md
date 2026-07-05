@@ -47,6 +47,14 @@ points below; a generic fix or gap belongs **upstream** (see
   (`PostgresEventStore` default with PG time-partitions / SQLite plain-table
   degradation; ClickHouse the documented scale-out point), per-stream
   retention.
+- `gateway` — privilege gateway mechanism: declared **verbs** (name + JSON
+  schema + policy `{tiers, rate_limit, require_confirmation, audit_stream}`
+  + handler) in a deny-by-default merge-registry; project-scoped opaque
+  scope tokens (issue/verify/rotate/revoke) with network-identity binding;
+  HTTP door for containers + comm Functions (`gateway.invoke` /
+  `gateway.confirm`) for the control plane; two-phase confirmation; one
+  audit line per outcome into the eventstore. Capability without
+  credentials (system-design §5.9).
 - `core` — framework-agnostic JWT primitives (`JWTHandler`, `TokenManager`,
   `TokenBlacklist`, `JWTConfig`).
 
@@ -418,6 +426,67 @@ is the documented evolution point — the ABC already permits it; it is **not**
 implemented here (add a backend, flip `BACKEND`/`ROUTES`). Consumers (Studio
 steel thread): LLM-call ledger with the five-component usage split, gateway
 audit (SN-4), delivery logs.
+
+### Privilege gateway — `STAPEL_GATEWAY` (`gateway/`)
+
+The mechanism behind "the agent gets the *capability*, never the
+*credentials*" (system-design §5.9). A **verb** = name + mandatory JSON
+schema for its arguments + policy + handler; untrusted code in a project
+container reaches one endpoint with the declared verbs and nothing else —
+keys, passwords and scripts stay behind the gateway. Root export
+`stapel_core.gateway` (lazy).
+
+**Threat model (short).** The container is hostile (prompt-injected agent,
+malicious dependency — S5). It cannot: call an undeclared verb
+(deny-by-default registry; 404 without enumeration), pass unvalidated
+input (schema check is mandatory and fails closed without a validator),
+speak without a live project-scoped token (opaque, sha256-at-rest,
+short-lived, instantly revocable), speak *about* another project (token
+scope + optional body cross-check + network identity), outrun its quota
+(per-`(verb, project)` rate limit), execute a destructive verb alone
+(two-phase confirmation resolves only via the control-plane comm/Python
+surface — never the container door), or act invisibly (every outcome —
+executed/denied/pending/confirmed/rejected/expired — is one audit line;
+sink failure fails closed and noisy). Residual risk: the default audit
+sink buffers through the eventstore `WriteBuffer` — a strict deployment
+sets `STAPEL_EVENTSTORE["BUFFER_SYNC"]` or plugs a synchronous
+`AUDIT_SINK`. Confirmation and token issuance are control-plane APIs; the
+`stapel_core.django.gateway` app is **opt-in** (not in
+`COMMON_INSTALLED_APPS`) — mount the privilege surface deliberately.
+
+Declaring and calling:
+
+```python
+from stapel_core import gateway
+
+@gateway.verb("send_email", schema={...}, policy={
+    "tiers": ["starter", "business"], "rate_limit": "30/h",
+    "require_confirmation": False, "audit_stream": "audit"})
+def send_email(args: dict, caller: gateway.CallerContext): ...
+
+issued = gateway.issue_token("proj-1", container="c-1", network="10.0.7.4")
+# containers: urls.py += gateway.get_gateway_urls()
+#   POST api/_gateway/send_email/  Authorization: Bearer sgw_…  {"args": {...}}
+# control plane: call("gateway.invoke", {...}) / call("gateway.confirm", {...})
+# tokens: verify_token / rotate_token(grace=…) / revoke_token / purge_expired_tokens
+```
+
+| Key | Default | Semantics | What it customizes |
+|---|---|---|---|
+| `VERBS` | `{}` | **merge** over `register_verb()` | Per-verb patch (policy merges per key, schema/handler replace), settings-only verbs, or `None` to disable a verb (deny-by-default again) |
+| `POLICY_ENGINE` | `…policy.DefaultPolicyEngine` | replace (dotted path) | Allow/deny brain; subclass, `super().check()`, add rules (budgets, freeze windows). Unresolvable tier on a restricted verb **denies** |
+| `RATE_LIMITER` | `…ratelimit.CacheRateLimiter` | replace (dotted path) | Quota store; default Django-cache fixed window per `(verb, project)` |
+| `AUDIT_SINK` | `…audit.eventstore_sink` | replace (dotted path) | `callable(stream, payload, *, project, container)`; failures propagate as `AuditFailure` |
+| `AUDIT_STREAM` | `"audit"` | replace | Default eventstore stream (per-verb: `policy.audit_stream`) |
+| `AUDIT_ARGS_MAXLEN` | `2048` | replace | Args longer than this (canonical JSON) become a sha256 fingerprint on the audit line |
+| `TOKEN_TTL` | `3600` | replace | Scope-token lifetime (seconds) |
+| `NETWORK_VERIFIER` | `…network.default_verifier` | replace (dotted path) | `callable(ip, token) -> bool`; default enforces the token's bound IP/CIDR from `REMOTE_ADDR` only (proxy trust = custom verifier) |
+| `REQUIRE_NETWORK_BINDING` | `False` | replace | `True` refuses HTTP calls with tokens that carry no network binding (strict fleet posture) |
+| `TIER_RESOLVER` | `None` | replace (dotted path) | `callable(project) -> tier` when the caller carries none |
+| `CONFIRMATION_TTL` | `900` | replace | Pending (`require_confirmation`) actions expire after N seconds |
+
+All trust-deciding keys are `no_env` — a stray same-named env var can never
+swap the policy engine, the audit sink, or the network verifier.
 
 ### GDPR providers (`gdpr.py`)
 

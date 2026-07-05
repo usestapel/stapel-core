@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.6.0"
+version = "0.7.0"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -45,6 +45,10 @@ sentry = [
 netintel-maxmind = [
     "geoip2>=4.7",
 ]
+# Privilege gateway (stapel_core.gateway) — mandatory verb-args validation
+gateway = [
+    "jsonschema>=4.18",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
@@ -53,7 +57,7 @@ dev = [
     "celery>=5.3",
 ]
 all = [
-    "stapel-core[kafka,nats,sentry,netintel-maxmind]",
+    "stapel-core[kafka,nats,sentry,netintel-maxmind,gateway]",
 ]
 
 [tool.pytest.ini_options]
@@ -134,6 +138,9 @@ packages = [
     "stapel_core.django.eventstore.migrations",
     "stapel_core.django.eventstore.management",
     "stapel_core.django.eventstore.management.commands",
+    "stapel_core.django.gateway",
+    "stapel_core.django.gateway.migrations",
+    "stapel_core.gateway",
     "stapel_core.eventstore",
     "stapel_core.eventstore.backends",
     "stapel_core.comm",
