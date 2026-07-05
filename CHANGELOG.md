@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.2] - 2026-07-05
 
 ### Added
 - `stapel_core.netintel` — IP intelligence seam (docs/geo-network-trust.md
