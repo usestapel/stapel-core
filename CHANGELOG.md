@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.5.1] - 2026-07-05
+
+### Fixed — RevisionMixin: phantom revision on `save(update_fields=...)` + duplicate issuance under concurrency (review H-3)
+
+- **Phantom revision.** `save(update_fields=["draft"])` used to bump the
+  in-memory `revision` (and every post_save receiver / emitted event carried
+  it) while the DB kept the old number — the next content change reused the
+  phantom number and a sync client that had stored it from the event skipped
+  that change forever. New contract: `update_fields` **without** `"revision"`
+  means a scoped non-synced write — **no bump**; DB row, instance and
+  post_save events stay consistent on the current revision. Passing
+  `update_fields=[..., "revision"]` is the explicit opt-in to bump-and-persist
+  (that path already worked and is unchanged). Plain `save()` is unchanged.
+- **Duplicate issuance.** The docstring promised `select_for_update`, but no
+  lock existed: two concurrent saves read the same `MAX(revision)` and shared
+  a number, so `get_changes_since` lost one of them. Issuance is now
+  serialized: PostgreSQL — `pg_advisory_xact_lock` keyed on the table, held
+  to COMMIT (unique **and** commit-ordered numbers across processes); other
+  backends (SQLite minimal profile, where `SELECT ... FOR UPDATE` is
+  unavailable) — a process-local mutex per (db alias, table) around
+  issue+commit. Documented caveat: outside PostgreSQL the mutex releases
+  before an *outer* `transaction.atomic` commits — multi-threaded writers
+  with long outer transactions should use PostgreSQL (or SQLite
+  `"transaction_mode": "IMMEDIATE"`).
+- `save()` now respects `using=` / the DB router when issuing revisions
+  (`transaction.atomic(using=...)` + `.using(...)` aggregate).
+
+Tests: update_fields persist/event consistency, H-3 sync-loss repro, one-shot
+iterable `update_fields`, nested-atomic regression, threaded uniqueness
+(8 threads × 5 saves — doubles as the sqlite-compatibility check).
+
 ## [0.5.0] - 2026-07-05
 
 ### Added — flow SA-document renderer: mermaid + endpoint tables + bilingual trees (flow-system.md §4)

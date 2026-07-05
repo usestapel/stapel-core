@@ -369,6 +369,28 @@ management command subclassing `GDPRServiceConsumerCommand` with
 `gdpr_service_name` matching an entry in `GDPR_COLLECTING_SERVICES`
 (microservices).
 
+### Revision sync contract — `RevisionMixin` (`django/models.py`, `django/api/revision.py`)
+
+Every model that participates in client sync inherits `RevisionMixin`
+(`revision` + `deleted`, `get_changes_since`, DRF plumbing in
+`django/api/revision.py`). The save contract (0.5.1):
+
+- `save()` — content change: revision bumps to `MAX(revision)+1`.
+- `save(update_fields=[...])` **without** `"revision"` — scoped non-synced
+  write (drafts, counters): **no bump**. DB row, instance and post_save
+  receivers all keep the current revision — never a phantom number.
+- `save(update_fields=[..., "revision"])` — explicit opt-in: bump is issued
+  and persisted with the listed fields.
+
+Issuance is concurrency-safe: on PostgreSQL a transaction-scoped advisory
+lock (`pg_advisory_xact_lock` keyed on the table) serializes issue→COMMIT
+across processes (numbers are unique and commit-ordered — `get_changes_since`
+never skips); on other backends (SQLite minimal profile) a process-local
+mutex per (alias, table) serializes issue+commit. Caveat: outside PostgreSQL,
+when the save is nested in a long outer `transaction.atomic` the mutex
+releases before the outer COMMIT — multi-threaded writers there should use
+PostgreSQL or SQLite `"transaction_mode": "IMMEDIATE"`.
+
 ### Signals (`signals.py`)
 
 In-process seams for host projects (analytics, cache warm-up,
