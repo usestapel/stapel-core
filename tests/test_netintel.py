@@ -252,6 +252,54 @@ def test_circuit_breaker_resets_after_a_success():
         assert "203.0.113.150" not in str(netintel._breaker)
 
 
+def test_breaker_failure_counter_is_locked_under_concurrency():
+    """The breaker counter is a shared read-modify-write; concurrent failures
+    must not drop increments or the breaker would open later than the
+    threshold. Each of THREADS threads records one failure; the counter must
+    end up exactly THREADS (no lost updates)."""
+    import threading
+
+    name = "ConcurrentProvider"
+    THREADS = 40
+    barrier = threading.Barrier(THREADS)
+
+    def worker():
+        barrier.wait()  # maximize contention on the RMW
+        for _ in range(5):
+            netintel._breaker_record_failure(name, 1.0)
+
+    threads = [threading.Thread(target=worker) for _ in range(THREADS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert netintel._breaker[name][0] == THREADS * 5
+
+
+def test_warned_providers_reset_on_state_reset():
+    """Log hygiene: _reset_state (setting_changed / test reset) clears the
+    warned-provider set so a config change re-warns instead of staying silent
+    forever for the process."""
+    netintel._warned_providers.add("StaleProvider")
+    netintel._reset_state()
+    assert "StaleProvider" not in netintel._warned_providers
+
+
+def test_setting_change_re_warns_after_provider_reconfigured(caplog):
+    """End-to-end: the once-per-provider warning fires again after a
+    setting_changed reset, not just once per process."""
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": RaisingProvider}):
+        with caplog.at_level("WARNING", logger="stapel_core.netintel"):
+            classify_ip("203.0.113.40")
+    # override_settings exit fires setting_changed -> _reset_state clears warned.
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": RaisingProvider}):
+        with caplog.at_level("WARNING", logger="stapel_core.netintel"):
+            classify_ip("203.0.113.41")
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 2
+
+
 # ---------------------------------------------------------------------------
 # H2 — provider is memoized; MaxMind Reader opened once, not per request
 # ---------------------------------------------------------------------------

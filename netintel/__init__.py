@@ -55,7 +55,8 @@ _warned_providers: set[str] = set()
 _BREAKER_THRESHOLD = 5
 
 # provider class name -> [consecutive_failures, open_until_epoch_seconds].
-# Guarded by _provider_lock. Reset on setting_changed and by tests.
+# All access (reads and the RMW increment) is guarded by _provider_lock via
+# the _breaker_* helpers. Reset on setting_changed and by tests.
 _breaker: dict[str, list[float]] = {}
 
 # Memoized provider instance (H2): _resolve_provider used to build a NEW
@@ -82,6 +83,7 @@ def _reset_state(*, setting=None, **kwargs) -> None:
     with _provider_lock:
         _provider_instance = None
         _breaker.clear()
+        _warned_providers.clear()
 
 
 try:  # Django present — keep the singleton honest across override_settings.
@@ -134,27 +136,34 @@ def _resolve_provider() -> NetIntelProvider:
 
 def _breaker_is_open(provider_name: str) -> bool:
     """True while *provider_name*'s breaker is tripped (skip the provider)."""
-    state = _breaker.get(provider_name)
-    if state is None:
+    with _provider_lock:
+        state = _breaker.get(provider_name)
+        if state is None:
+            return False
+        open_until = state[1]
+        if open_until and time.monotonic() < open_until:
+            return True
         return False
-    open_until = state[1]
-    if open_until and time.monotonic() < open_until:
-        return True
-    return False
 
 
 def _breaker_record_success(provider_name: str) -> None:
-    _breaker.pop(provider_name, None)
+    with _provider_lock:
+        _breaker.pop(provider_name, None)
 
 
 def _breaker_record_failure(provider_name: str, window: float) -> None:
-    state = _breaker.get(provider_name)
-    if state is None:
-        state = [0.0, 0.0]
-        _breaker[provider_name] = state
-    state[0] += 1
-    if state[0] >= _BREAKER_THRESHOLD:
-        state[1] = time.monotonic() + max(1.0, window)
+    # The failure counter is a shared read-modify-write (state[0] += 1); under
+    # concurrent fail-open on N threads an unlocked increment would drop counts
+    # and trip the breaker later than the threshold. Hold _provider_lock so the
+    # counter is exact and the breaker opens on the Nth real failure.
+    with _provider_lock:
+        state = _breaker.get(provider_name)
+        if state is None:
+            state = [0.0, 0.0]
+            _breaker[provider_name] = state
+        state[0] += 1
+        if state[0] >= _BREAKER_THRESHOLD:
+            state[1] = time.monotonic() + max(1.0, window)
 
 
 def _warn_once(provider_name: str, exc: Exception) -> None:

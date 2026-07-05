@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.1] - 2026-07-05
+
+### Fixed — netintel circuit-breaker concurrency + log hygiene (defensive)
+
+- `netintel._breaker_*` now take `_provider_lock` for all breaker state access.
+  The failure counter is a shared read-modify-write (`state[0] += 1`); under a
+  concurrent fail-open flood on N threads the unlocked increment dropped counts,
+  so the breaker opened *later* than its threshold. The module comment claiming
+  the state was "guarded by `_provider_lock`" is now true. Behaviour change is
+  strictly a faster, exact trip on the Nth real failure; no API change.
+- `_reset_state` now clears `_warned_providers` too. Previously the
+  once-per-provider fail-open warning stayed suppressed for the whole process
+  even across `setting_changed` / `override_settings` reconfiguration — a config
+  change now re-warns. Logging only.
+
 ## [0.4.0] - 2026-07-05
 
 ### Added — flow i18n: keys instead of literals (flow-system.md §2, first-instance)
