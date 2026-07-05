@@ -226,7 +226,28 @@ middleware/hosts consume it (`interactive+ratelimit`). Every decision is
 logged at INFO (`ip_kind, action, level, allowed`) — the input of host-side
 antifraud scoring. With no netintel provider configured, every request
 classifies as `unknown` → `invisible`, i.e. exactly the historical binary
-behavior.
+behavior. `remoteip` sent to siteverify and the IP in logs use
+`netintel.client_ip` — the *same* trust model as classification (REMOTE_ADDR
+unless `TRUSTED_PROXY_HEADER` is set), not a separate `X-Forwarded-For` read.
+
+**Tiering is currently nominal for the builtin backends.** The three builtin
+verifiers (`Turnstile`/`Recaptcha`/`Hcaptcha`) do not declare the `level`
+kwarg, so every level above `none`/`block` verifies the token *identically* —
+the *effect* of the tier is carried by `request.stapel_challenge_level`
+(rate-limit middleware) and by the 403 at `block`, not by a stricter token
+check. Genuine per-level verification needs a custom backend that (a) accepts
+`level` and (b) is paired with a frontend channel that renders the matching
+widget strictness (Turnstile interactive vs managed) and/or enforces a
+reCAPTCHA-v3 score threshold. The `level` kwarg seam exists precisely so such
+a backend drops in without touching the builtins. See the M2 note in the
+change log for the proposed future contract.
+
+`ACTION_OVERRIDES` bumping (`"+1"`) **saturates at `block`**: applied to an
+already-strict kind (e.g. `tor` → `interactive+ratelimit`, or `vpn` on a
+matrix that raised it) a single `"+1"` can reach `block` and 403 the request.
+`block` is otherwise never produced by the default matrix — blocking a
+network class is always an explicit host decision, so audit `"+1"` overrides
+against the strict rows of the matrix.
 
 ### NetIntel providers — `STAPEL_NETINTEL` (`netintel/`)
 
@@ -240,21 +261,49 @@ and return the unknown profile — `classify_ip` never raises. Root exports:
 |---|---|---|---|
 | `PROVIDER` | `stapel_core.netintel.providers.NullProvider` | replace (dotted path/class/instance) | The IP intelligence source (`NetIntelProvider` ABC: `classify(ip)`, optional `country(ip)`) |
 | `CACHE_ALIAS` | `"default"` | replace | Django cache used for results (key prefix `stapel-netintel:`) |
-| `CACHE_TTL` | `86400` | replace | Result TTL (s) |
+| `CACHE_TTL` | `86400` | replace | Positive result TTL (s) |
+| `NEGATIVE_CACHE_TTL` | `60` | replace | Fail-open (unknown) result TTL (s) — short, so a provider outage self-heals but does not hammer an unhealthy provider on every miss |
 | `MAXMIND_ASN_DB` / `MAXMIND_COUNTRY_DB` / `MAXMIND_ANONYMOUS_DB` | `None` | replace | mmdb paths for `MaxMindProvider` (extra `stapel-core[netintel-maxmind]`); unset databases are skipped |
 | `EXTRA_DATACENTER_ASNS` | `[]` | **merge** over builtin `HOSTING_ASNS` | Extra ASNs treated as hosting/datacenter |
 | `HTTP_URL_TEMPLATE` / `HTTP_API_KEY` | `None` | replace | `HttpJsonProvider` endpoint (`{ip}` placeholder) and bearer key |
 | `HTTP_RESPONSE_MAPPER` | `None` (builtin mapper) | replace (dotted path/callable) | `mapper(data, ip) -> IpProfile` — adapts any ipinfo/IPQS-style JSON |
 | `TRUSTED_PROXY_HEADER` | `None` | replace | META key of the proxy-set client-IP header for `client_ip()`; default trusts `REMOTE_ADDR` only (proxy headers are spoofable) |
 
+`PROVIDER`, `HTTP_URL_TEMPLATE`, `HTTP_API_KEY` and `TRUSTED_PROXY_HEADER`
+carry trust/security weight and have generic names, so they are **never**
+sourced from a same-named environment variable (an `AppSettings(no_env=…)`
+guard) — they resolve only from the `STAPEL_NETINTEL` dict, a flat Django
+setting, or the default. This mirrors captcha's `BACKEND`/`SECRET`: a stray
+env var must not silently change which header is trusted or which provider
+runs.
+
+Resilience under load: `classify_ip` memoizes the provider instance
+module-level (so `MaxMindProvider`'s per-instance mmdb `Reader`s — mmap + fd —
+are opened once, not per request; lazy open is `threading.Lock`-guarded for
+the shared singleton). Provider errors fail open, are cached for
+`NEGATIVE_CACHE_TTL` (per-IP), and advance a small consecutive-failure
+**circuit breaker**: after 5 straight failures the provider is skipped for a
+short window (local unknown) so a flood of *distinct* IPs against an
+unhealthy provider cannot pin every request on it. `HttpJsonProvider` does a
+**blocking** `requests.get` on the request path and is **not** intended for a
+production hot path — use the offline `MaxMindProvider` there; reserve
+`HttpJsonProvider` for low-volume/offline enrichment.
+
 System checks (W-level, registered by `stapel_core.django` app):
 `stapel_core.netintel.W001` (PROVIDER unimportable), `W002` (not a
 `NetIntelProvider`) — a broken provider degrades, it never blocks a deploy.
 MaxMind kind derivation: Anonymous-IP flags (tor > vpn > hosting) → ASN
 hosting list → org-name keyword heuristic → residential (ASN known) →
-unknown. `manage.py download_geolite` is a TODO (netintel package
-docstring). Consumers: captcha challenge policy, OAuth region resolution
-(stapel-auth), rate limits, analytics.
+unknown. The builtin `HOSTING_ASNS` list (AWS/Azure/GCP/Cloudflare/Fastly/…)
+is a **heuristic fallback only and intentionally incomplete**; the accurate
+source of truth is the offline MaxMind **Anonymous-IP** database
+(`MAXMIND_ANONYMOUS_DB`, `is_hosting_provider`), consulted first. Without that
+mmdb the ASN heuristic under-detects datacenter/VPN egress. AS15169 (Google's
+main ASN) is deliberately excluded — it also carries consumer traffic;
+AS396982 (Google Cloud) is the datacenter-only ASN. `manage.py
+download_geolite` is a TODO (netintel package docstring). Consumers: captcha
+challenge policy, OAuth region resolution (stapel-auth), rate limits,
+analytics.
 
 ### GDPR providers (`gdpr.py`)
 

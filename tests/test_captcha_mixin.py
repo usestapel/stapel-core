@@ -14,20 +14,40 @@ class _Req:
 
 
 class TestExtractIp:
-    def test_x_forwarded_for_first(self):
-        req = _Req()
-        req.META = {"HTTP_X_FORWARDED_FOR": "  203.0.113.5 , 10.0.0.1"}
-        assert _extract_ip(req) == "203.0.113.5"
+    # L1: _extract_ip delegates to netintel.client_ip, so the remoteip sent to
+    # siteverify and the IP in logs use the SAME trust model as classification
+    # — REMOTE_ADDR only, unless a TRUSTED_PROXY_HEADER is configured.
 
-    def test_falls_back_to_x_real_ip(self):
+    def test_spoofable_headers_ignored_by_default(self):
+        req = _Req()
+        req.META = {
+            "HTTP_X_FORWARDED_FOR": "  203.0.113.5 , 10.0.0.1",
+            "HTTP_X_REAL_IP": "198.51.100.7",
+            "REMOTE_ADDR": "192.0.2.9",
+        }
+        # not the client-supplied (spoofable) headers — the real peer address
+        assert _extract_ip(req) == "192.0.2.9"
+
+    def test_x_real_ip_not_trusted_by_default(self):
         req = _Req()
         req.META = {"HTTP_X_REAL_IP": "198.51.100.7"}
-        assert _extract_ip(req) == "198.51.100.7"
+        assert _extract_ip(req) is None
 
-    def test_falls_back_to_remote_addr(self):
+    def test_uses_remote_addr(self):
         req = _Req()
         req.META = {"REMOTE_ADDR": "192.0.2.9"}
         assert _extract_ip(req) == "192.0.2.9"
+
+    def test_trusted_proxy_header_opt_in(self):
+        req = _Req()
+        req.META = {
+            "HTTP_X_FORWARDED_FOR": "203.0.113.5, 10.0.0.1",
+            "REMOTE_ADDR": "10.0.0.1",
+        }
+        with override_settings(
+            STAPEL_NETINTEL={"TRUSTED_PROXY_HEADER": "HTTP_X_FORWARDED_FOR"},
+        ):
+            assert _extract_ip(req) == "203.0.113.5"
 
     def test_none_request(self):
         assert _extract_ip(None) is None

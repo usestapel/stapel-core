@@ -35,10 +35,17 @@ class AppSettings:
         namespace: str,
         defaults: dict[str, Any],
         import_strings: Iterable[str] = (),
+        no_env: Iterable[str] = (),
     ) -> None:
         self.namespace = namespace
         self.defaults = dict(defaults)
         self.import_strings = frozenset(import_strings)
+        # Keys that must never fall back to an environment variable: their
+        # names are generic enough (PROVIDER, TRUSTED_PROXY_HEADER, …) that a
+        # stray same-named env var could silently change a trust/security
+        # decision. They still resolve via the namespace dict, a flat Django
+        # setting, or the default — an explicit env var is simply ignored.
+        self.no_env = frozenset(no_env)
         self._cache: dict[str, Any] = {}
         self._connect_reload()
 
@@ -66,9 +73,10 @@ class AppSettings:
         flat = getattr(settings, key, _EMPTY)
         if flat is not _EMPTY:
             return flat
-        env = os.environ.get(key)
-        if env is not None:
-            return env
+        if key not in self.no_env:
+            env = os.environ.get(key)
+            if env is not None:
+                return env
         if key in self.defaults:
             return self.defaults[key]
         raise AttributeError(f"{self.namespace} has no setting {key!r}")

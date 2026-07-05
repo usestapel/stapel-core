@@ -55,7 +55,9 @@ def test_validate_captcha_token_noop_passthrough():
 
 
 def test_validate_captcha_token_success_forwards_ip():
-    request = _Request({"HTTP_X_FORWARDED_FOR": "203.0.113.5"})
+    # remoteip uses netintel.client_ip's trust model (REMOTE_ADDR by default),
+    # consistent with classification — not a spoofable X-Forwarded-For header.
+    request = _Request({"REMOTE_ADDR": "203.0.113.5"})
     with override_settings(CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="s"):
         with mock.patch("requests.post") as post:
             post.return_value.json.return_value = {"success": True}

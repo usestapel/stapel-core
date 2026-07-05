@@ -15,20 +15,32 @@ which caches and fails open to the unknown profile.
 from __future__ import annotations
 
 import logging
+import threading
 from abc import ABC, abstractmethod
 
 from .types import IpKind, IpProfile, unknown_profile
 
 logger = logging.getLogger(__name__)
 
-#: Small builtin heuristic list of well-known hosting/cloud ASNs. Not meant
-#: to be complete — an offline Anonymous-IP/hosting database is the accurate
-#: source; extend per deployment via STAPEL_NETINTEL["EXTRA_DATACENTER_ASNS"].
+#: Small builtin heuristic list of well-known hosting/cloud/CDN ASNs. It is
+#: deliberately NOT complete and is only a fallback: the accurate signal is an
+#: offline MaxMind Anonymous-IP database (``is_hosting_provider``), which the
+#: kind-derivation consults first. Extend per deployment via
+#: ``STAPEL_NETINTEL["EXTRA_DATACENTER_ASNS"]``.
+#:
+#: Note on scope: only ASNs that serve *exclusively* infra/CDN egress belong
+#: here. AS15169 (Google's main ASN) is intentionally absent — it also carries
+#: consumer/residential Google traffic, so flagging it as datacenter would
+#: mis-tier real users; AS396982 (Google Cloud) is the datacenter-only ASN.
 HOSTING_ASNS = frozenset({
     16509,   # Amazon AWS
     14618,   # Amazon AES
+    7224,    # Amazon AWS (additional)
     8075,    # Microsoft Azure
-    396982,  # Google Cloud
+    8068,    # Microsoft (Azure / corp range)
+    396982,  # Google Cloud (datacenter-only; NOT AS15169, see note above)
+    13335,   # Cloudflare
+    54113,   # Fastly
     14061,   # DigitalOcean
     16276,   # OVH
     24940,   # Hetzner
@@ -107,6 +119,12 @@ class MaxMindProvider(NetIntelProvider):
         self._anonymous_db = anonymous_db
         self._extra_datacenter_asns = extra_datacenter_asns
         self._readers: dict[str, object] = {}
+        # The provider is memoized module-level (netintel._resolve_provider)
+        # and therefore shared across worker threads. geoip2 Reader objects
+        # are safe for concurrent reads, but this lazy open is a
+        # check-then-set that two threads could race — guard it so each mmdb
+        # Reader (mmap + file descriptor) is opened exactly once.
+        self._reader_lock = threading.Lock()
 
     @staticmethod
     def _import_geoip2():
@@ -123,8 +141,11 @@ class MaxMindProvider(NetIntelProvider):
     def _reader(self, path: str, database_mod):
         reader = self._readers.get(path)
         if reader is None:
-            reader = database_mod.Reader(path)
-            self._readers[path] = reader
+            with self._reader_lock:
+                reader = self._readers.get(path)
+                if reader is None:
+                    reader = database_mod.Reader(path)
+                    self._readers[path] = reader
         return reader
 
     def _datacenter_asns(self) -> set[int]:

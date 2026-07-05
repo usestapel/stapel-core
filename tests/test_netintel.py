@@ -32,8 +32,10 @@ from stapel_core.netintel.providers import default_response_mapper
 @pytest.fixture(autouse=True)
 def _reset_warned():
     netintel._warned_providers.clear()
+    netintel._reset_state()
     yield
     netintel._warned_providers.clear()
+    netintel._reset_state()
 
 
 class CountingProvider(NetIntelProvider):
@@ -47,7 +49,11 @@ class CountingProvider(NetIntelProvider):
 
 
 class RaisingProvider(NetIntelProvider):
+    def __init__(self):
+        self.calls = 0
+
     def classify(self, ip):
+        self.calls += 1
         raise RuntimeError("boom")
 
 
@@ -169,15 +175,22 @@ def test_cache_alias_setting_respected():
 # ---------------------------------------------------------------------------
 
 
-def test_raising_provider_fails_open_and_is_not_cached(caplog):
-    with override_settings(STAPEL_NETINTEL={"PROVIDER": RaisingProvider}):
-        with caplog.at_level("WARNING", logger="stapel_core.netintel"):
-            assert classify_ip("203.0.113.20").kind == IpKind.UNKNOWN
-        # not cached: a second call reaches the provider again (fails again)
-        assert classify_ip("203.0.113.20").kind == IpKind.UNKNOWN
+def test_raising_provider_fails_open_and_is_negative_cached(caplog):
+    # H1: a provider error fails open AND is cached (short NEGATIVE_CACHE_TTL)
+    # so a repeat lookup of the same IP does not hammer the unhealthy provider.
+    provider = RaisingProvider()
     from django.core.cache import cache
 
-    assert cache.get(CACHE_KEY_PREFIX + "203.0.113.20") is None
+    cache.delete(CACHE_KEY_PREFIX + "203.0.113.20")
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": provider}):
+        with caplog.at_level("WARNING", logger="stapel_core.netintel"):
+            assert classify_ip("203.0.113.20").kind == IpKind.UNKNOWN
+        # second call served from the negative cache — provider NOT re-hit
+        assert classify_ip("203.0.113.20").kind == IpKind.UNKNOWN
+        assert provider.calls == 1
+        cached = cache.get(CACHE_KEY_PREFIX + "203.0.113.20")
+    assert cached is not None and cached.kind == IpKind.UNKNOWN
+    cache.delete(CACHE_KEY_PREFIX + "203.0.113.20")
 
 
 def test_provider_failure_warns_once_per_class(caplog):
@@ -197,6 +210,172 @@ def test_classify_never_raises_on_cache_error():
     with override_settings(STAPEL_NETINTEL={"PROVIDER": provider}):
         with mock.patch.object(netintel, "_cache", return_value=broken_cache):
             assert classify_ip("203.0.113.30").kind == IpKind.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# H1 — circuit breaker (flood of DISTINCT IPs against an unhealthy provider)
+# ---------------------------------------------------------------------------
+
+
+def test_circuit_breaker_stops_hitting_unhealthy_provider():
+    provider = RaisingProvider()
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": provider}):
+        # Distinct IPs each miss the per-IP negative cache and reach the
+        # provider — until enough consecutive failures trip the breaker.
+        for i in range(netintel._BREAKER_THRESHOLD):
+            assert classify_ip(f"203.0.113.{100 + i}").kind == IpKind.UNKNOWN
+        assert provider.calls == netintel._BREAKER_THRESHOLD
+        # Breaker now open: a brand-new IP is served locally, provider untouched.
+        assert classify_ip("203.0.113.200").kind == IpKind.UNKNOWN
+        assert provider.calls == netintel._BREAKER_THRESHOLD
+
+
+def test_circuit_breaker_resets_after_a_success():
+    profile = IpProfile(ip="x", kind=IpKind.RESIDENTIAL)
+
+    class _FlakyProvider(NetIntelProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def classify(self, ip):
+            self.calls += 1
+            if self.calls <= 2:
+                raise RuntimeError("boom")
+            return profile
+
+    provider = _FlakyProvider()
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": provider}):
+        classify_ip("203.0.113.150")  # fail
+        classify_ip("203.0.113.151")  # fail
+        # a success clears the consecutive-failure count (breaker never opened)
+        assert classify_ip("203.0.113.152").kind == IpKind.RESIDENTIAL
+        assert "203.0.113.150" not in str(netintel._breaker)
+
+
+# ---------------------------------------------------------------------------
+# H2 — provider is memoized; MaxMind Reader opened once, not per request
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_provider_is_memoized():
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": CountingProvider}):
+        first = netintel._resolve_provider()
+        second = netintel._resolve_provider()
+    assert first is second
+
+
+def test_setting_changed_invalidates_memoized_provider():
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": CountingProvider}):
+        first = netintel._resolve_provider()
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": CountingProvider}):
+        second = netintel._resolve_provider()
+    assert first is not second  # override_settings fired setting_changed
+
+
+def test_maxmind_reader_opened_once_across_calls():
+    opens: dict[str, int] = {}
+
+    def _counting_geoip2(records):
+        modules = _fake_geoip2(records)
+        real_reader = modules["geoip2.database"].Reader
+
+        class CountingReader(real_reader):
+            def __init__(self, path):
+                opens[path] = opens.get(path, 0) + 1
+                super().__init__(path)
+
+        modules["geoip2.database"].Reader = CountingReader
+        modules["geoip2"].database.Reader = CountingReader
+        return modules
+
+    records = {
+        "asn.mmdb": {"asn": _asn(16509, "Amazon")},
+        "country.mmdb": {"country": _country("US")},
+        "anon.mmdb": {"anonymous_ip": _anon(hosting=True)},
+    }
+    provider = MaxMindProvider(
+        asn_db="asn.mmdb", country_db="country.mmdb", anonymous_db="anon.mmdb",
+    )
+    with mock.patch.dict(sys.modules, _counting_geoip2(records)):
+        provider.classify("192.0.2.1")
+        provider.classify("192.0.2.2")
+        provider.classify("192.0.2.3")
+    # Three classify calls, but each mmdb Reader is opened exactly once.
+    assert opens == {"asn.mmdb": 1, "country.mmdb": 1, "anon.mmdb": 1}
+
+
+# ---------------------------------------------------------------------------
+# M1 — input normalization (equivalent spellings share one key/lookup)
+# ---------------------------------------------------------------------------
+
+
+def test_equivalent_ipv6_forms_share_one_lookup():
+    provider = CountingProvider(IpProfile(ip="x", kind=IpKind.DATACENTER))
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": provider}):
+        classify_ip("2001:db8::1")
+        classify_ip("2001:0db8:0000:0000:0000:0000:0000:0001")  # same address
+        classify_ip("[2001:db8::1]")  # bracketed
+        classify_ip("2001:db8::1%eth0")  # zone id
+    assert provider.calls == 1  # one canonical key → one provider lookup
+
+
+def test_normalized_cache_key_is_canonical():
+    provider = CountingProvider()
+    fake_cache = mock.MagicMock()
+    fake_cache.get.return_value = None
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": provider}):
+        with mock.patch.object(netintel, "_cache", return_value=fake_cache):
+            classify_ip("2001:0DB8:0000::0001")
+    key = fake_cache.set.call_args[0][0]
+    assert key == CACHE_KEY_PREFIX + "2001:db8::1"
+
+
+def test_garbage_input_fails_open_without_provider_call():
+    provider = CountingProvider()
+    with override_settings(STAPEL_NETINTEL={"PROVIDER": provider}):
+        assert classify_ip("not-an-ip").kind == IpKind.UNKNOWN
+        assert classify_ip("evil\r\nkey injection").kind == IpKind.UNKNOWN
+    assert provider.calls == 0
+
+
+# ---------------------------------------------------------------------------
+# M3 — sensitive netintel keys must not be sourced from the environment
+# ---------------------------------------------------------------------------
+
+
+def test_sensitive_netintel_keys_ignore_env(monkeypatch):
+    from stapel_core.netintel.conf import netintel_settings
+
+    monkeypatch.setenv("TRUSTED_PROXY_HEADER", "HTTP_X_FORWARDED_FOR")
+    monkeypatch.setenv("PROVIDER", "os.getcwd")
+    monkeypatch.setenv("HTTP_API_KEY", "leaked")
+    netintel_settings.reload()
+    try:
+        assert netintel_settings.TRUSTED_PROXY_HEADER is None
+        assert netintel_settings.HTTP_API_KEY is None
+        assert netintel_settings.PROVIDER == (
+            "stapel_core.netintel.providers.NullProvider"
+        )
+    finally:
+        netintel_settings.reload()
+
+
+def test_no_env_flag_is_targeted():
+    import os
+
+    from stapel_core.conf import AppSettings
+
+    settings_obj = AppSettings(
+        "STAPEL_TEST_NS", defaults={"A": "da", "B": "db"}, no_env=("A",),
+    )
+    os.environ["A"] = "envA"
+    os.environ["B"] = "envB"
+    try:
+        assert settings_obj.A == "da"    # no_env key: env ignored, default wins
+        assert settings_obj.B == "envB"  # normal key: env still honored
+    finally:
+        del os.environ["A"]
+        del os.environ["B"]
 
 
 # ---------------------------------------------------------------------------
