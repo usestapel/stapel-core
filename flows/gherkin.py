@@ -31,6 +31,8 @@ which is what makes the release-gate drift check meaningful (flow-system.md
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from .registry import (
     STEP_ACTION,
@@ -39,6 +41,7 @@ from .registry import (
     STEP_HUMAN,
     STEP_TASK,
     Flow,
+    FlowStep,
 )
 
 # ---------------------------------------------------------------------------
@@ -320,10 +323,110 @@ def render_fixtures(language: str | None = None) -> str:
     ])
 
 
+# ---------------------------------------------------------------------------
+# flows.json loader — generate from the machine artifact, no Django needed
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _JsonEndpoint:
+    """Endpoint binding lifted from flows.json (duck-types EndpointInfo)."""
+
+    method: str
+    path: str
+
+
+@dataclass
+class FlowSpec:
+    """A flow reconstructed from flows.json (duck-types :class:`Flow`).
+
+    Deliberately *not* a :class:`Flow`: constructing one registers it in the
+    global registry, which a loader must never do (id collisions with the
+    live flows). Carries exactly what the renderers and
+    ``resolve_flow_texts`` consume.
+    """
+
+    id: str
+    title: str
+    description: str
+    title_key: str
+    description_key: str
+    actors: list[str] = field(default_factory=list)
+    steps: list[FlowStep] = field(default_factory=list)
+
+    def sorted_steps(self) -> list[FlowStep]:
+        return sorted(self.steps, key=FlowStep.sort_key)
+
+
+def load_flows_json(payload: list[dict]) -> tuple[list[FlowSpec], dict]:
+    """Rebuild ``(flows, endpoint index)`` from an exported flows.json.
+
+    The inverse of :func:`stapel_core.flows.docs.export_json` — lets the
+    Gherkin projection run from the committed machine artifact (a codegen
+    output, a reference snapshot) without booting the Django instance that
+    produced it. The endpoint index maps step ``ref`` → the bindings the
+    artifact recorded.
+    """
+    flows: list[FlowSpec] = []
+    index: dict[str, list[_JsonEndpoint]] = {}
+    for f in payload:
+        steps = []
+        for s in f.get("steps", []):
+            steps.append(FlowStep(
+                kind=s["kind"], order=s["order"], note=s.get("note", ""),
+                ref=s.get("ref", ""), note_key=s.get("note_key", ""),
+            ))
+            for ep in s.get("endpoints", []):
+                bindings = index.setdefault(s.get("ref", ""), [])
+                if not any(b.method == ep["method"] and b.path == ep["path"]
+                           for b in bindings):
+                    bindings.append(_JsonEndpoint(ep["method"], ep["path"]))
+        flows.append(FlowSpec(
+            id=f["id"], title=f.get("title", ""),
+            description=f.get("description", ""),
+            title_key=f.get("title_key", ""),
+            description_key=f.get("description_key", ""),
+            actors=list(f.get("actors", [])), steps=steps,
+        ))
+    flows.sort(key=lambda f: f.id)
+    return flows, index
+
+
+# ---------------------------------------------------------------------------
+# Bundle writer — one self-consistent language bundle on disk
+# ---------------------------------------------------------------------------
+
+def write_language_bundle(
+    flows: list,
+    index: dict,
+    bundle_dir: Path,
+    language: str | None,
+    texts: dict[str, str] | None,
+) -> None:
+    """Write one language bundle: ``<flow_id>.feature`` per flow +
+    ``steps/flows.steps.ts`` + ``steps/fixtures.ts``.
+
+    Shared by ``generate_flow_features`` (live registry) and flows.json-based
+    generation (:func:`load_flows_json`); byte-stable either way.
+    """
+    steps_dir = bundle_dir / "steps"
+    steps_dir.mkdir(parents=True, exist_ok=True)
+    for flow in flows:
+        (bundle_dir / f"{flow.id}.feature").write_text(
+            render_feature(flow, index, texts, language)
+        )
+    (steps_dir / "flows.steps.ts").write_text(
+        render_step_defs(flows, index, texts, language)
+    )
+    (steps_dir / "fixtures.ts").write_text(render_fixtures(language))
+
+
 __all__ = [
     "GHERKIN",
+    "FlowSpec",
     "gherkin_keywords",
+    "load_flows_json",
     "render_feature",
     "render_fixtures",
     "render_step_defs",
+    "write_language_bundle",
 ]

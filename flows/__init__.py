@@ -36,10 +36,13 @@ from .docs import (
     render_index_markdown,
 )
 from .gherkin import (
+    FlowSpec,
     gherkin_keywords,
+    load_flows_json,
     render_feature,
     render_fixtures,
     render_step_defs,
+    write_language_bundle,
 )
 from .i18n import (
     flow_source_texts,
@@ -57,6 +60,7 @@ from .registry import (
 __all__ = [
     "DefaultFlowDocRenderer",
     "Flow",
+    "FlowSpec",
     "FlowStep",
     "autodiscover_flows",
     "flow_registry",
@@ -65,10 +69,12 @@ __all__ = [
     "get_flow_doc_renderer",
     "gherkin_keywords",
     "load_app_catalogs",
+    "load_flows_json",
     "render_feature",
     "render_fixtures",
     "render_flow_markdown",
     "render_index_markdown",
     "render_step_defs",
     "resolve_flow_texts",
+    "write_language_bundle",
 ]

@@ -279,6 +279,79 @@ def test_generate_flow_features_writes_bilingual_byte_stable_bundles(tmp_path):
     assert before == after
 
 
+# ---------------------------------------------------------------------------
+# flows.json loader — generation from the machine artifact
+# ---------------------------------------------------------------------------
+
+def _flows_json_payload():
+    return [{
+        "id": "test.fromjson",
+        "title": "From JSON",
+        "title_key": "flow.test.fromjson.title",
+        "description": "Rebuilt from the machine artifact.",
+        "description_key": "flow.test.fromjson.description",
+        "actors": ["Anonymous user"],
+        "steps": [
+            {"kind": "human", "order": 0, "note": "User enters email",
+             "note_key": "flow.test.fromjson.step.0.note", "ref": ""},
+            {"kind": "http", "order": 1, "note": "Request the code",
+             "note_key": "flow.test.fromjson.step.1.note",
+             "ref": "app.views.V.post",
+             "endpoints": [{"method": "POST", "path": "/api/login/"}]},
+            {"kind": "action", "order": 2, "note": "Emitted on first login",
+             "note_key": "flow.test.fromjson.step.2.note",
+             "ref": "user.registered"},
+        ],
+    }]
+
+
+def test_load_flows_json_rebuilds_flows_and_index():
+    from stapel_core.flows import load_flows_json
+
+    flows, index = load_flows_json(_flows_json_payload())
+    assert len(flows) == 1
+    flow = flows[0]
+    assert flow.id == "test.fromjson"
+    assert [s.kind for s in flow.sorted_steps()] == ["human", "http", "action"]
+    assert index["app.views.V.post"][0].method == "POST"
+    assert index["app.views.V.post"][0].path == "/api/login/"
+    # loading must not register anything in the global flow registry
+    assert flow_registry.all() == []
+
+
+@override_settings(ROOT_URLCONF="tests.test_flow_gherkin")
+def test_json_loaded_flows_render_identically_to_live_registry():
+    from stapel_core.flows import load_flows_json
+    from stapel_core.flows.docs import export_json
+    import json as jsonlib
+
+    live = _flow("test.parity")
+    live.human(order=0, note="The user enters their email")
+    flow_step(live, order=1, note="Request a one-time code")(_LoginView.post)
+    live.action("user.registered", order=2, note="Emitted on first login")
+    live_index = endpoint_index()
+
+    payload = jsonlib.loads(export_json([live], live_index))
+    loaded_flows, loaded_index = load_flows_json(payload)
+
+    assert render_feature(live, live_index) == \
+        render_feature(loaded_flows[0], loaded_index)
+    assert render_step_defs([live], live_index) == \
+        render_step_defs(loaded_flows, loaded_index)
+
+
+def test_write_language_bundle_writes_features_and_steps(tmp_path):
+    from stapel_core.flows import load_flows_json, write_language_bundle
+
+    flows, index = load_flows_json(_flows_json_payload())
+    write_language_bundle(flows, index, tmp_path / "en", "en", None)
+    assert (tmp_path / "en" / "test.fromjson.feature").is_file()
+    assert (tmp_path / "en" / "steps" / "flows.steps.ts").is_file()
+    assert (tmp_path / "en" / "steps" / "fixtures.ts").is_file()
+    steps = (tmp_path / "en" / "steps" / "flows.steps.ts").read_text()
+    assert 'stapel.client.request("/api/login/", { method: "POST" })' in steps
+
+
 def test_generate_flow_features_no_flows_warns(tmp_path):
     from stapel_core.django.management.commands.generate_flow_features import (
         Command,

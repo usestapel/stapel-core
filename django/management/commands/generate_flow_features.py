@@ -32,10 +32,8 @@ from django.core.management.base import BaseCommand
 from stapel_core.flows import (
     autodiscover_flows,
     flow_registry,
-    render_feature,
-    render_fixtures,
-    render_step_defs,
     resolve_flow_texts,
+    write_language_bundle,
 )
 from stapel_core.flows.docs import endpoint_index
 from stapel_core.i18n import project_languages
@@ -79,22 +77,14 @@ class Command(BaseCommand):
 
         for lang in languages:
             bundle = out / lang
-            steps_dir = bundle / "steps"
-            steps_dir.mkdir(parents=True, exist_ok=True)
+            bundle.mkdir(parents=True, exist_ok=True)  # the --llm cache lives here
             texts = resolve_flow_texts(
                 flows, lang,
                 llm=options["llm"],
                 cache_path=(bundle / f"flow-i18n-cache.{lang}.json")
                 if options["llm"] else None,
             )
-            for flow in flows:
-                (bundle / f"{flow.id}.feature").write_text(
-                    render_feature(flow, index, texts, lang)
-                )
-            (steps_dir / "flows.steps.ts").write_text(
-                render_step_defs(flows, index, texts, lang)
-            )
-            (steps_dir / "fixtures.ts").write_text(render_fixtures(lang))
+            write_language_bundle(flows, index, bundle, lang, texts)
 
         (out / "README.md").write_text(self._language_index(languages))
         self.stdout.write(self.style.SUCCESS(
