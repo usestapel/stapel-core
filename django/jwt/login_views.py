@@ -40,7 +40,10 @@ class JWTCookieLoginView(LoginView):
                 next_url = request.GET.get('next', '')
                 # Prevent redirect loop - if next is login page, go to admin index
                 if not next_url or '/login' in next_url:
-                    next_url = '/auth/admin/'
+                    # Deployment-canonical admin index (mount/script-prefix
+                    # aware) instead of a hardcoded root-relative path.
+                    from stapel_core.django.mounts import admin_index_url
+                    next_url = admin_index_url()
                 logger.info(f"Staff user {request.user} redirecting to {next_url}")
                 return redirect(next_url)
             else:

@@ -12,9 +12,15 @@ def stapel_services(_request):
     This context processor adds a list of available services with their URLs
     to the admin template context, enabling cross-service navigation.
 
-    Services are defined in stapel_core.core.config.STAPEL_SERVICES.
+    Services are defined in stapel_core.core.config.STAPEL_SERVICES. URLs are
+    built through the current script prefix (stapel_core.django.mounts
+    convention) so navigation survives sub-path deployments.
     """
+    from django.urls import get_script_prefix
+
     from stapel_core.core.config import STAPEL_SERVICES
+
+    root = get_script_prefix()
 
     # Get current service prefix
     current_prefix = getattr(settings, 'URL_PREFIX', '').rstrip('/')
@@ -23,8 +29,8 @@ def stapel_services(_request):
     services = []
     for service in STAPEL_SERVICES:
         prefix = service['prefix']
-        admin_url = f"/{prefix}/admin/" if prefix else "/admin/"
-        swagger_url = f"/{prefix}/swagger/" if prefix else "/swagger/"
+        admin_url = f"{root}{prefix}/admin/" if prefix else f"{root}admin/"
+        swagger_url = f"{root}{prefix}/swagger/" if prefix else f"{root}swagger/"
 
         services.append({
             'name': service['name'],
@@ -35,12 +41,12 @@ def stapel_services(_request):
         })
 
     # Current service swagger URL
-    current_swagger_url = f"/{current_prefix}/swagger/" if current_prefix else "/swagger/"
+    current_swagger_url = f"{root}{current_prefix}/swagger/" if current_prefix else f"{root}swagger/"
 
     # Dashboard URL (only for services that have dashboards)
     # Currently only translate service has a dashboard
     dashboard_urls = {
-        'translate': '/translate/dashboard/',
+        'translate': f'{root}translate/dashboard/',
     }
     current_dashboard_url = dashboard_urls.get(current_prefix)
 
@@ -50,4 +56,3 @@ def stapel_services(_request):
         'current_service_prefix': current_prefix,
         'current_dashboard_url': current_dashboard_url,
     }
-

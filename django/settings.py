@@ -329,9 +329,15 @@ SESSION_COOKIE_SECURE = False  # set True in prod
 CSRF_USE_SESSIONS = False
 # Note: Each service should override CSRF_COOKIE_NAME in their base.py settings
 
-# Default login URLs (can override per service)
-LOGIN_URL = "/auth/admin/login/"
-LOGOUT_REDIRECT_URL = "/auth/admin/login/"
+# Default login URLs (can override per service) — derived lazily from the
+# mount registry (stapel_core.django.mounts) instead of a hardcoded
+# root-relative path. With default settings (STAPEL_AUTH_SERVICE_PREFIX =
+# "auth") this evaluates to the historical "/auth/admin/login/"; a monolith
+# with STAPEL_AUTH_SERVICE_PREFIX = "" gets reverse("admin:login"); both
+# follow any mount/script prefix the deployment adds.
+from stapel_core.django.mounts import lazy_admin_login_url  # noqa: E402
+LOGIN_URL = lazy_admin_login_url()
+LOGOUT_REDIRECT_URL = lazy_admin_login_url()
 
 # REST Framework sensible defaults (can be overridden)
 

@@ -33,6 +33,10 @@ class CommonDjangoConfig(AppConfig):
         # Secret-provider seam checks (stapel_core.secrets): W-level — the env
         # default always works; a broken custom provider surfaces here.
         from stapel_core.secrets import checks as _secrets_checks  # noqa: F401
+        # URL-mounting checks (stapel_core.django.checks): E-level for
+        # LOGIN_URL/redirect settings pointing at an unresolvable path —
+        # otherwise every login_required ends in a user-facing 404.
+        from stapel_core.django import checks as _mounts_checks  # noqa: F401
 
         # DRF caches api_settings on first access. If any module (e.g. drf-spectacular)
         # triggers that access before Django settings are fully loaded, the cache will

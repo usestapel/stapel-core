@@ -125,8 +125,19 @@ class CustomSpectacularSwaggerView:
     """
 
     @staticmethod
-    def _get_custom_script(current_prefix: str, services: list) -> bytes:
-        """Generate custom script with service navigation."""
+    def _get_custom_script(
+        current_prefix: str,
+        services: list,
+        admin_url: str = "/admin/",
+        logout_url: str = "/auth/admin/logout/",
+        root: str = "/",
+    ) -> bytes:
+        """Generate custom script with service navigation.
+
+        All URLs are computed server-side through the script prefix
+        (stapel_core.django.mounts convention) so the navigation works when
+        the deployment is mounted under a path prefix.
+        """
         # Build services JSON for JS
         import json
 
@@ -245,7 +256,7 @@ class CustomSpectacularSwaggerView:
         topbar.id = 'stapel-topbar';
         topbar.className = 'stapel-topbar';
 
-        const adminUrl = currentPrefix ? '/' + currentPrefix + '/admin/' : '/admin/';
+        const adminUrl = '{admin_url}';
 
         let servicesHtml = '';
         services.forEach(svc => {{
@@ -268,16 +279,16 @@ class CustomSpectacularSwaggerView:
                     '<div class="stapel-svc-menu-title" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;">Tools</div>' +
                     '<div class="stapel-svc-item">' +
                         '<span>Translator Dashboard</span>' +
-                        '<span class="links"><a href="/translate/dashboard/">Open</a></span>' +
+                        '<span class="links"><a href="{root}translate/dashboard/">Open</a></span>' +
                     '</div>' +
                     '<div class="stapel-svc-menu-title" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;">Monitoring</div>' +
                     '<div class="stapel-svc-item">' +
                         '<span>Grafana</span>' +
-                        '<span class="links"><a href="/monitoring/grafana/d/stapel-home/stapel-system-overview" target="_blank">Open</a></span>' +
+                        '<span class="links"><a href="{root}monitoring/grafana/d/stapel-home/stapel-system-overview" target="_blank">Open</a></span>' +
                     '</div>' +
                     '<div class="stapel-svc-item">' +
                         '<span>Prometheus</span>' +
-                        '<span class="links"><a href="/monitoring/prometheus/" target="_blank">Open</a></span>' +
+                        '<span class="links"><a href="{root}monitoring/prometheus/" target="_blank">Open</a></span>' +
                     '</div>' +
                 '</div>' +
             '</div>';
@@ -288,7 +299,7 @@ class CustomSpectacularSwaggerView:
     function fixLogoutUrl() {{
         const logoutLink = document.querySelector('a[href*="/accounts/logout"]');
         if (logoutLink) {{
-            logoutLink.href = '/auth/admin/logout/';
+            logoutLink.href = '{logout_url}';
         }}
     }}
 
@@ -329,9 +340,15 @@ class CustomSpectacularSwaggerView:
                 # Inject custom JavaScript with service navigation
                 if hasattr(response, "content") and b"swagger-ui" in response.content:
                     from django.conf import settings
+                    from django.urls import get_script_prefix
 
                     from stapel_core.core.config import STAPEL_SERVICES
+                    from stapel_core.django.mounts import (
+                        admin_index_url,
+                        get_mount,
+                    )
 
+                    root = get_script_prefix()
                     current_prefix = getattr(settings, "URL_PREFIX", "").rstrip("/")
                     services = []
                     for svc in STAPEL_SERVICES:
@@ -340,16 +357,30 @@ class CustomSpectacularSwaggerView:
                             {
                                 "name": svc["name"],
                                 "prefix": prefix,
-                                "admin_url": f"/{prefix}/admin/"
+                                "admin_url": f"{root}{prefix}/admin/"
                                 if prefix
-                                else "/admin/",
-                                "swagger_url": f"/{prefix}/swagger/"
+                                else f"{root}admin/",
+                                "swagger_url": f"{root}{prefix}/swagger/"
                                 if prefix
-                                else "/swagger/",
+                                else f"{root}swagger/",
                             }
                         )
 
-                    custom_script = get_custom_script(current_prefix, services)
+                    # This service's admin + the deployment's logout target,
+                    # derived from the mount registry (script-prefix aware).
+                    auth_mount = get_mount("auth")
+                    if auth_mount is not None and auth_mount.external:
+                        logout_url = f"{root}{auth_mount.prefix}admin/logout/"
+                    else:
+                        logout_url = f"{admin_index_url()}logout/"
+
+                    custom_script = get_custom_script(
+                        current_prefix,
+                        services,
+                        admin_url=admin_index_url(),
+                        logout_url=logout_url,
+                        root=root,
+                    )
                     response.content = response.content.replace(
                         b"</body>", custom_script + b"</body>"
                     )

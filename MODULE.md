@@ -702,6 +702,52 @@ JWT/CORS/session env-driven config, `get_default_database()`,
 Everything is a plain module-level name — a service overrides by assignment
 after the star-import; env vars drive deployment differences.
 
+### URL mounting — `STAPEL_MOUNTS` (`django/mounts.py`)
+
+Where modules live in *this* deployment, as a merge-over-builtins registry —
+cross-module URL targets are **derived** from it, never hardcoded
+root-relative. Two mount kinds: **local** (in this URLconf; resolved with
+`reverse()` via the mount's URL namespace, so include-prefix mounting and
+`SCRIPT_NAME`/`FORCE_SCRIPT_NAME` both work) and **external** (a sibling
+service behind the same proxy; script-prefix + declared path prefix).
+
+```python
+# builtins: admin (local, namespace "admin"),
+#           auth (external at f"{STAPEL_AUTH_SERVICE_PREFIX}/" when non-empty;
+#                 default "auth" = historical microservices layout)
+STAPEL_MOUNTS = {
+    "auth": {"prefix": "sso/", "external": True},  # move the auth service
+    "auth": None,                                   # monolith: no auth service
+    "admin": {"prefix": "backoffice/admin/", "namespace": "admin"},
+}
+# derived (lazy, mount/script-prefix aware):
+#   LOGIN_URL = LOGOUT_REDIRECT_URL = lazy_admin_login_url()   (the default)
+#   admin_login_url() / admin_index_url() / mount_path(key, suffix)
+#   mount_reverse(key, name)  — reverse inside a local mount's namespace
+```
+
+With default settings the derived `LOGIN_URL` evaluates to the historical
+`"/auth/admin/login/"` — existing deploys are unchanged. A monolith sets
+`STAPEL_AUTH_SERVICE_PREFIX = ""` and login derives to `reverse("admin:login")`,
+which follows any prefix the project is mounted under. `AdminLoginRedirectMiddleware`,
+`JWTCookieLoginView`, the admin/swagger service navigation and
+`setup_centralized_admin_login()` all build their targets through this
+mechanism. Mount labels (`name=`) are the feed for future `NAV_LINKS`.
+
+System checks (tag `stapel_mounts`, `django/checks.py`):
+`stapel_core.mounts.E001/E002` — `LOGIN_URL` / `LOGOUT_REDIRECT_URL` /
+`LOGIN_REDIRECT_URL` pointing at a path this URLconf cannot `resolve()` (and
+that matches no declared external mount) fails `manage.py check` at deploy
+time instead of 404-ing users after redirect; `E003` — malformed
+`STAPEL_MOUNTS`; `W001` — Django's untouched stock defaults
+(`/accounts/login|profile/`) that this URLconf does not serve.
+
+**Module convention:** a stapel module never emits an absolute URL path —
+only `reverse()` / URL names / this registry. Settings that hold URL targets
+should be URL names (`LOGIN_REDIRECT_URL = "admin:index"`) or lazy
+derivations, so the module works at the domain root, under a service prefix,
+and in a monolith mounted under any sub-path.
+
 ## Anti-patterns
 
 - **Do not import other stapel modules from core** (or from each other).
@@ -734,6 +780,11 @@ after the star-import; env vars drive deployment differences.
 - **Do not read `getattr(settings, ...)` ad hoc in a stapel package** — expose
   an `AppSettings` namespace so keys, defaults and dotted-path seams stay
   discoverable.
+- **Do not hardcode root-relative URL paths** (`"/auth/admin/login/"`,
+  `redirect("/admin/")`, `build_absolute_uri("/auth/api/...")`). Every such
+  string silently assumes the module sits at the domain root and 404s the
+  moment the deployment mounts the project under a prefix. Use `reverse()`,
+  URL names in settings, or the mount registry (`django/mounts.py`).
 - **Action subscribers must be idempotent** — delivery is at-least-once
   (outbox retries, broker redelivery).
 

@@ -490,6 +490,7 @@ def setup_centralized_admin_login(admin_site, auth_service_prefix: str = "auth")
 
     from django.conf import settings
     from django.shortcuts import redirect
+    from django.urls import get_script_prefix
 
     # Get current service URL prefix
     url_prefix = getattr(settings, "URL_PREFIX", "")
@@ -498,10 +499,12 @@ def setup_centralized_admin_login(admin_site, auth_service_prefix: str = "auth")
         """Redirect to centralized auth service for login."""
         # Get the page the user was trying to access
         # If 'next' parameter exists, use it; otherwise default to current service admin
-        next_url = request.GET.get("next", f"/{url_prefix}admin/")
+        # (script-prefix aware — survives sub-path deployments).
+        root = get_script_prefix()
+        next_url = request.GET.get("next", f"{root}{url_prefix}admin/")
 
         # Build login URL with next parameter
-        login_url = f"/{auth_service_prefix}/admin/login/"
+        login_url = f"{root}{auth_service_prefix}/admin/login/"
         if next_url and next_url != login_url:
             login_url = f"{login_url}?{urlencode({'next': next_url})}"
 
@@ -538,7 +541,7 @@ def get_admin_logout_urlpattern(
     """
     from django.conf import settings
     from django.shortcuts import redirect
-    from django.urls import path
+    from django.urls import get_script_prefix, path
 
     from stapel_core.django.jwt.views import JWTLogoutView
 
@@ -550,7 +553,9 @@ def get_admin_logout_urlpattern(
             request._jwt_skip_cookie_update = True
             super().post(request)
 
-            redirect_response = redirect(f"/{auth_service_prefix}/admin/login/")
+            redirect_response = redirect(
+                f"{get_script_prefix()}{auth_service_prefix}/admin/login/"
+            )
 
             cookie_name = getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt")
             refresh_cookie_name = getattr(

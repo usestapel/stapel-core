@@ -14,12 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 def _login_url() -> str:
-    """Centralized admin-login URL, derived from STAPEL_AUTH_SERVICE_PREFIX
-    instead of a hardcoded 'auth' service."""
-    from django.conf import settings
+    """Deployment-canonical admin-login URL, derived from the mount registry
+    (stapel_core.django.mounts): an external auth service when
+    STAPEL_AUTH_SERVICE_PREFIX / STAPEL_MOUNTS declares one, the locally
+    mounted admin (reverse-based, mount/script-prefix aware) otherwise."""
+    from stapel_core.django.mounts import admin_login_url
 
-    prefix = getattr(settings, 'STAPEL_AUTH_SERVICE_PREFIX', 'auth') or ''
-    return f"/{prefix}/admin/login/" if prefix else "/admin/login/"
+    return admin_login_url()
 
 
 class AdminLoginRedirectMiddleware(MiddlewareMixin):
@@ -27,8 +28,8 @@ class AdminLoginRedirectMiddleware(MiddlewareMixin):
     Middleware to redirect unauthenticated admin requests to centralized login.
 
     When a user tries to access an admin page without being authenticated,
-    this middleware redirects them to /auth/admin/login/ with a 'next' parameter
-    pointing to the original requested URL.
+    this middleware redirects them to the deployment's admin login (see
+    _login_url) with a 'next' parameter pointing to the original URL.
     """
 
     def process_request(self, request):
@@ -47,14 +48,15 @@ class AdminLoginRedirectMiddleware(MiddlewareMixin):
         if hasattr(request, 'user') and request.user.is_authenticated:
             return None
 
+        login_url = _login_url()
+
         # Skip if this is already the login page
-        if _login_url() in request.path:
+        if login_url in request.path:
             return None
 
         # User is not authenticated — redirect to auth login.
         # This covers both "no tokens" and "expired/invalid tokens" cases.
         # Auth login view will reissue JWT tokens before redirecting back.
-        login_url = _login_url()
         next_url = request.get_full_path()
 
         redirect_url = f"{login_url}?{urlencode({'next': next_url})}"

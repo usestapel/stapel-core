@@ -217,6 +217,50 @@
   so these guards only ever fire on the "deployed as downloaded" mistake, not
   on a normally-configured project.
 
+### Added — `stapel_core.django.mounts`: canonical URL mounting (arch-monolith-mounting)
+
+- **`stapel_core.django.mounts`** — the mount registry: where modules live in
+  *this* deployment, merge-over-builtins like every other Stapel registry
+  (`STAPEL_MOUNTS` setting; builtins: local `admin` with URL namespace
+  `admin`, external `auth` at `f"{STAPEL_AUTH_SERVICE_PREFIX}/"` when that
+  setting is non-empty). Local mounts resolve with `reverse()` (correct under
+  include-prefix mounting *and* `SCRIPT_NAME`/`FORCE_SCRIPT_NAME`); external
+  mounts (sibling services behind the same proxy) are script-prefix +
+  declared prefix. API: `get_mounts` / `get_mount` / `mount_path` /
+  `mount_reverse` / `admin_login_url` / `admin_index_url` +
+  `lazy_admin_login_url` / `lazy_admin_index_url` for settings modules.
+  Root cause fixed (found live on a sub-path-mounted project): `LOGIN_URL`
+  and every cross-module target were hardcoded root-relative, so a project
+  mounted whole under a prefix redirected anonymous users to
+  `/admin/login/` → `/auth/admin/login/` → 404.
+
+- **`LOGIN_URL` / `LOGOUT_REDIRECT_URL` defaults are now lazily derived**
+  from the registry instead of the hardcoded `"/auth/admin/login/"`.
+  Backward compatible: with default settings the derivation evaluates to
+  exactly the old value; a monolith sets `STAPEL_AUTH_SERVICE_PREFIX = ""`
+  and gets `reverse("admin:login")`, which follows any mount prefix. The
+  same derivation now feeds `AdminLoginRedirectMiddleware`,
+  `JWTCookieLoginView`'s post-login fallback (was hardcoded
+  `/auth/admin/`), `setup_centralized_admin_login()` /
+  `get_admin_logout_urlpattern()` (now script-prefix aware), and the
+  admin/swagger cross-service navigation (`django/admin/context.py`,
+  `django/openapi/swagger.py` — URLs built through `get_script_prefix()`).
+
+- **System checks (tag `stapel_mounts`, `django/checks.py`)** —
+  `stapel_core.mounts.E001/E002`: `LOGIN_URL` / `LOGOUT_REDIRECT_URL` /
+  `LOGIN_REDIRECT_URL` pointing at a path this URLconf cannot `resolve()`
+  (and matching no declared external mount) is a **deploy-time error**, not a
+  user-facing 404 after redirect; URL-name values are `reverse()`-verified.
+  `E003`: malformed `STAPEL_MOUNTS`. `W001`: Django's untouched stock
+  defaults (`/accounts/login/`, `/accounts/profile/`) that don't resolve —
+  warning only, a pure-API service that never redirects there should not be
+  blocked.
+
+- **Module convention pinned (MODULE.md)**: a stapel module never emits an
+  absolute URL path — only `reverse()` / URL names / the mount registry.
+  URL-target settings should be URL names (`LOGIN_REDIRECT_URL =
+  "admin:index"`) or lazy derivations.
+
 ## [0.8.0] - 2026-07-06
 
 ### Changed — taskstore Django label renamed (frees `stapel_tasks` for the tasks module)
