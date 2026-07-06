@@ -1,58 +1,49 @@
+"""Context processor for Django admin service navigation (admin-suite AS-4).
+
+The registries live in :mod:`stapel_core.django.nav`; this processor just
+exposes their render-ready output to ``admin/base_site.html``. The service
+list comes from the ``STAPEL_SERVICES`` deploy-config (env-JSON, monolith
+fallback), the extra sections from the two-channel ``NAV_LINKS`` registry —
+no service list or dashboard map is hardcoded here anymore.
 """
-Context processor for Django admin to add service navigation.
-"""
 
-from django.conf import settings
+from stapel_core.django.nav import (
+    NavConfigError,
+    build_services,
+    current_dashboard_url,
+    current_swagger_url,
+    nav_sections,
+)
 
 
-def stapel_services(_request):
+def stapel_services(request):
+    """Add Stapel cross-service navigation to the admin template context.
+
+    Fails soft: a malformed ``STAPEL_SERVICES`` / ``NAV_LINKS`` (already
+    E-flagged by the ``stapel_nav`` system check) must not 500 the admin —
+    the block simply renders empty.
     """
-    Add Stapel services navigation to admin context.
+    user = getattr(request, "user", None)
+    try:
+        services = build_services()
+        sections = nav_sections(user)
+        dashboard_url = current_dashboard_url(user)
+    except NavConfigError:
+        services, sections, dashboard_url = [], {}, None
 
-    This context processor adds a list of available services with their URLs
-    to the admin template context, enabling cross-service navigation.
-
-    Services are defined in stapel_core.core.config.STAPEL_SERVICES. URLs are
-    built through the current script prefix (stapel_core.django.mounts
-    convention) so navigation survives sub-path deployments.
-    """
-    from django.urls import get_script_prefix
-
-    from stapel_core.core.config import STAPEL_SERVICES
-
-    root = get_script_prefix()
-
-    # Get current service prefix
-    current_prefix = getattr(settings, 'URL_PREFIX', '').rstrip('/')
-
-    # Build services list with URLs and active status
-    services = []
-    for service in STAPEL_SERVICES:
-        prefix = service['prefix']
-        admin_url = f"{root}{prefix}/admin/" if prefix else f"{root}admin/"
-        swagger_url = f"{root}{prefix}/swagger/" if prefix else f"{root}swagger/"
-
-        services.append({
-            'name': service['name'],
-            'admin_url': admin_url,
-            'swagger_url': swagger_url,
-            'prefix': prefix,
-            'is_active': current_prefix == prefix or (not current_prefix and not prefix),
-        })
-
-    # Current service swagger URL
-    current_swagger_url = f"{root}{current_prefix}/swagger/" if current_prefix else f"{root}swagger/"
-
-    # Dashboard URL (only for services that have dashboards)
-    # Currently only translate service has a dashboard
-    dashboard_urls = {
-        'translate': f'{root}translate/dashboard/',
-    }
-    current_dashboard_url = dashboard_urls.get(current_prefix)
+    from stapel_core.django.mounts import admin_login_url
+    from stapel_core.django.nav import _current_prefix
 
     return {
-        'stapel_services': services,
-        'current_swagger_url': current_swagger_url,
-        'current_service_prefix': current_prefix,
-        'current_dashboard_url': current_dashboard_url,
+        "stapel_services": services,
+        # "All Services" collapses when the deployment has a single service
+        # (a monolith or a one-service stack) — the section is redundant then.
+        "stapel_services_multi": len(services) > 1,
+        "stapel_nav_sections": sections,
+        "current_swagger_url": current_swagger_url(),
+        "current_service_prefix": _current_prefix(),
+        "current_dashboard_url": dashboard_url,
+        # Deployment-canonical admin-login path (mounts registry, script-prefix
+        # aware) — lets module dashboards drop hardcoded "/auth/admin/login".
+        "stapel_admin_login_url": admin_login_url(),
     }

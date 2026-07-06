@@ -133,27 +133,36 @@ class TestOtherAdminClasses:
 
 
 class TestStapelServicesContext:
-    def test_defaults_without_url_prefix(self):
-        from stapel_core.core.config import STAPEL_SERVICES
-
+    def test_registry_driven_services(self, settings):
+        # Services now come from the STAPEL_SERVICES deploy-config (AS-4),
+        # not a framework hardcode.
+        settings.STAPEL_SERVICES = [
+            {"name": "Auth", "prefix": "auth"},
+            {"name": "Translate", "prefix": "translate"},
+        ]
         ctx = stapel_services(None)
-        assert len(ctx["stapel_services"]) == len(STAPEL_SERVICES)
-        assert ctx["current_swagger_url"] == "/swagger/"
+        assert len(ctx["stapel_services"]) == 2
+        assert ctx["stapel_services_multi"] is True
         assert ctx["current_service_prefix"] == ""
-        assert ctx["current_dashboard_url"] is None
+        # Swagger not mounted in the package harness (no ROOT_URLCONF) — the
+        # introspection env-gate hides the Swagger links.
+        assert ctx["current_swagger_url"] is None
         auth = ctx["stapel_services"][0]
         assert auth["admin_url"] == "/auth/admin/"
-        assert auth["swagger_url"] == "/auth/swagger/"
+        assert auth["swagger_url"] is None
         assert auth["is_active"] is False
 
-    def test_active_service_and_dashboard(self, settings):
+    def test_monolith_fallback_single_service(self, settings):
+        # No STAPEL_SERVICES → one implicit service derived from URL_PREFIX;
+        # "All Services" collapses (stapel_services_multi False).
+        settings.STAPEL_SERVICES = None
         settings.URL_PREFIX = "translate/"
         ctx = stapel_services(None)
+        assert len(ctx["stapel_services"]) == 1
+        assert ctx["stapel_services_multi"] is False
         assert ctx["current_service_prefix"] == "translate"
-        assert ctx["current_swagger_url"] == "/translate/swagger/"
-        assert ctx["current_dashboard_url"] == "/translate/dashboard/"
         active = [s for s in ctx["stapel_services"] if s["is_active"]]
-        assert [s["name"] for s in active] == ["Translate"]
+        assert len(active) == 1 and active[0]["prefix"] == "translate"
 
 
 # ---------------------------------------------------------------------------

@@ -131,17 +131,21 @@ class CustomSpectacularSwaggerView:
         admin_url: str = "/admin/",
         logout_url: str = "/auth/admin/logout/",
         root: str = "/",
+        sections: list | None = None,
     ) -> bytes:
         """Generate custom script with service navigation.
 
         All URLs are computed server-side through the script prefix
         (stapel_core.django.mounts convention) so the navigation works when
-        the deployment is mounted under a path prefix.
+        the deployment is mounted under a path prefix. *services* and
+        *sections* come from the STAPEL_SERVICES / NAV_LINKS registries
+        (admin-suite AS-4) — nothing is hardcoded here.
         """
-        # Build services JSON for JS
+        # Build JSON blobs for the injected JS (registry-driven, not hardcoded)
         import json
 
         services_json = json.dumps(services)
+        sections_json = json.dumps(sections or [])
 
         return f"""
 <style>
@@ -248,6 +252,7 @@ class CustomSpectacularSwaggerView:
 (function() {{
     const currentPrefix = '{current_prefix}';
     const services = {services_json};
+    const navSections = {sections_json};
 
     function createNavbar() {{
         if (document.getElementById('stapel-topbar')) return;
@@ -261,35 +266,42 @@ class CustomSpectacularSwaggerView:
         let servicesHtml = '';
         services.forEach(svc => {{
             const isActive = svc.prefix === currentPrefix ? ' active' : '';
+            const apiLink = svc.swagger_url ? '<a href="' + svc.swagger_url + '">API</a>' : '';
             servicesHtml += '<div class="stapel-svc-item' + isActive + '">' +
                 '<span>' + svc.name + '</span>' +
                 '<span class="links">' +
                     '<a href="' + svc.admin_url + '">Admin</a>' +
-                    '<a href="' + svc.swagger_url + '">API</a>' +
+                    apiLink +
                 '</span>' +
             '</div>';
         }});
+
+        // Extra sections (Tools / Monitoring / Dashboards) — from NAV_LINKS,
+        // grouped and pre-filtered by the viewer's clearance server-side.
+        const titleStyle = 'margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;';
+        let sectionsHtml = '';
+        navSections.forEach(section => {{
+            sectionsHtml += '<div class="stapel-svc-menu-title" style="' + titleStyle + '">' +
+                section.title + '</div>';
+            section.links.forEach(link => {{
+                const target = link.external ? ' target="_blank"' : '';
+                sectionsHtml += '<div class="stapel-svc-item">' +
+                    '<span>' + link.title + '</span>' +
+                    '<span class="links"><a href="' + link.url + '"' + target + '>Open</a></span>' +
+                '</div>';
+            }});
+        }});
+
+        const allServicesHtml = services.length > 1
+            ? '<div class="stapel-svc-menu-title">All Services</div>' + servicesHtml
+            : '';
 
         topbar.innerHTML = '<a href="' + adminUrl + '" class="stapel-admin-btn">Admin</a>' +
             '<div class="stapel-svc-dropdown">' +
                 '<button class="stapel-svc-btn">Services ▾</button>' +
                 '<div class="stapel-svc-menu">' +
-                    '<div class="stapel-svc-menu-title">All Services</div>' +
-                    servicesHtml +
-                    '<div class="stapel-svc-menu-title" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;">Tools</div>' +
-                    '<div class="stapel-svc-item">' +
-                        '<span>Translator Dashboard</span>' +
-                        '<span class="links"><a href="{root}translate/dashboard/">Open</a></span>' +
-                    '</div>' +
-                    '<div class="stapel-svc-menu-title" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px;">Monitoring</div>' +
-                    '<div class="stapel-svc-item">' +
-                        '<span>Grafana</span>' +
-                        '<span class="links"><a href="{root}monitoring/grafana/d/stapel-home/stapel-system-overview" target="_blank">Open</a></span>' +
-                    '</div>' +
-                    '<div class="stapel-svc-item">' +
-                        '<span>Prometheus</span>' +
-                        '<span class="links"><a href="{root}monitoring/prometheus/" target="_blank">Open</a></span>' +
-                    '</div>' +
+                    allServicesHtml +
+                    sectionsHtml +
                 '</div>' +
             '</div>';
 
@@ -342,29 +354,33 @@ class CustomSpectacularSwaggerView:
                     from django.conf import settings
                     from django.urls import get_script_prefix
 
-                    from stapel_core.core.config import STAPEL_SERVICES
                     from stapel_core.django.mounts import (
                         admin_index_url,
                         get_mount,
                     )
+                    from stapel_core.django.nav import (
+                        NavConfigError,
+                        build_services,
+                        nav_sections,
+                    )
 
                     root = get_script_prefix()
                     current_prefix = getattr(settings, "URL_PREFIX", "").rstrip("/")
-                    services = []
-                    for svc in STAPEL_SERVICES:
-                        prefix = svc["prefix"]
-                        services.append(
-                            {
-                                "name": svc["name"],
-                                "prefix": prefix,
-                                "admin_url": f"{root}{prefix}/admin/"
-                                if prefix
-                                else f"{root}admin/",
-                                "swagger_url": f"{root}{prefix}/swagger/"
-                                if prefix
-                                else f"{root}swagger/",
-                            }
-                        )
+
+                    # Service list + extra sections from the STAPEL_SERVICES /
+                    # NAV_LINKS registries (admin-suite AS-4). Fail soft — a
+                    # malformed registry (E-flagged by the system check) must
+                    # not 500 the docs. Swagger is mounted here (we are inside
+                    # its view), so the per-service API links are shown.
+                    try:
+                        services = build_services(include_swagger=True)
+                        viewer = getattr(request, "user", None)
+                        sections = [
+                            {"title": name.capitalize(), "links": links}
+                            for name, links in nav_sections(viewer).items()
+                        ]
+                    except NavConfigError:
+                        services, sections = [], []
 
                     # This service's admin + the deployment's logout target,
                     # derived from the mount registry (script-prefix aware).
@@ -380,6 +396,7 @@ class CustomSpectacularSwaggerView:
                         admin_url=admin_index_url(),
                         logout_url=logout_url,
                         root=root,
+                        sections=sections,
                     )
                     response.content = response.content.replace(
                         b"</body>", custom_script + b"</body>"

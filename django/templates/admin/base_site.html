@@ -168,9 +168,14 @@
 
 {% block branding %}
 <h1 id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></h1>
-{% if stapel_services and user.is_authenticated %}
+{# Service navigation — driven entirely by the STAPEL_SERVICES / NAV_LINKS #}
+{# registries (admin-suite AS-4). No hardcoded service list, dashboard map, #}
+{# or Tools/Monitoring links live here anymore. #}
+{% if user.is_authenticated and stapel_services %}
 <div class="stapel-nav">
+    {% if current_swagger_url %}
     <a href="{{ current_swagger_url }}" class="stapel-swagger-btn">Swagger</a>
+    {% endif %}
     {% if current_dashboard_url %}
     <a href="{{ current_dashboard_url }}" class="stapel-dashboard-btn">Dashboard</a>
     {% endif %}
@@ -180,6 +185,7 @@
             Services ▾
         </button>
         <div class="stapel-dropdown-content">
+            {% if stapel_services_multi %}
             <div class="stapel-dropdown-section">
                 <div class="stapel-dropdown-title">All Services</div>
                 {% for service in stapel_services %}
@@ -187,41 +193,25 @@
                     <span>{{ service.name }}</span>
                     <span class="links">
                         <a href="{{ service.admin_url }}">Admin</a>
-                        <a href="{{ service.swagger_url }}">API</a>
+                        {% if service.swagger_url %}<a href="{{ service.swagger_url }}">API</a>{% endif %}
                     </span>
                 </div>
                 {% endfor %}
             </div>
+            {% endif %}
+            {% for section, links in stapel_nav_sections.items %}
             <div class="stapel-dropdown-section">
-                <div class="stapel-dropdown-title">Tools</div>
+                <div class="stapel-dropdown-title">{{ section|capfirst }}</div>
+                {% for link in links %}
                 <div class="stapel-dropdown-item">
-                    <span>Translator Dashboard</span>
+                    <span>{{ link.title }}</span>
                     <span class="links">
-                        <a href="/translate/dashboard/">Open</a>
+                        <a href="{{ link.url }}"{% if link.external %} target="_blank"{% endif %}>Open</a>
                     </span>
                 </div>
+                {% endfor %}
             </div>
-            <div class="stapel-dropdown-section">
-                <div class="stapel-dropdown-title">Monitoring</div>
-                <div class="stapel-dropdown-item">
-                    <span>Grafana</span>
-                    <span class="links">
-                        <a href="/monitoring/grafana/d/stapel-home/stapel-system-overview" target="_blank">Open</a>
-                    </span>
-                </div>
-                <div class="stapel-dropdown-item">
-                    <span>Prometheus</span>
-                    <span class="links">
-                        <a href="/monitoring/prometheus/" target="_blank">Open</a>
-                    </span>
-                </div>
-                <div class="stapel-dropdown-item">
-                    <span>Kafka UI</span>
-                    <span class="links">
-                        <a href="/monitoring/kafka-ui/" target="_blank">Open</a>
-                    </span>
-                </div>
-            </div>
+            {% endfor %}
         </div>
     </div>
 </div>

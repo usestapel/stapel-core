@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+### Added / Changed — cross-service navigation registries (admin-suite AS-4)
+
+Service navigation is no longer hardcoded in the framework — the legacy-legacy
+`STAPEL_SERVICES` list in `core/config.py` and the Tools/Monitoring/dashboard
+links baked into `admin/base_site.html` + the Swagger inject were policy in a
+mechanism (§2.1). Both move to deploy-config:
+
+- **`STAPEL_SERVICES` — deploy-config env-JSON** (§2.2), read by
+  `stapel_core.django.nav.get_services`:
+  `STAPEL_SERVICES='[{"name":"Auth","prefix":"auth"},{"name":"Billing","prefix":"billing"}]'`
+  (a Django-setting list of the same shape also works). Written by the project
+  generators (`stapel-create-project` seeds it, `stapel-new-service` appends a
+  row — the same discipline as `STAPEL_BUS_ROUTES`), never by the framework. A
+  monolith leaves it unset: a single implicit service is derived from
+  `URL_PREFIX` and the "All Services" section collapses. **The hardcoded
+  `stapel_core.core.config.STAPEL_SERVICES` list is removed** — consumers read
+  the registry.
+- **`STAPEL_ADMIN["NAV_LINKS"]` — two-channel merge-registry** (§2.3) for the
+  Tools/Monitoring/Dashboards sections: a module registers its own dashboard in
+  `AppConfig.ready()` via `register_nav_link(key, section=..., title=...,
+  url=..., requires="staff", external=False)` (channel 1, re-exported from
+  `stapel_core.django.admin`); the project adds/patches/removes via the setting
+  (channel 2 — a partial dict patches a code link, a full dict adds one, `None`
+  removes). Sections (`tools`, `monitoring`, `dashboards`) are fixed by the
+  mechanism; contents are policy. The framework ships **no** monitoring links —
+  those are three lines of the project's deploy config.
+- **Two render gates**: every link is filtered by the viewer's admissibility
+  (`requires` — staff / superuser / an AS-1 clearance level; the target's own
+  perimeter — nginx `auth_request`, `IsStaffUserForSwagger` — still guards the
+  destination), and the **Swagger links respect the introspection env-gate** —
+  they render only when this deployment actually mounts the schema
+  (`get_dev_urls` mounts `/swagger/` only for `DJANGO_ENV in {local, dev}`,
+  detected by reversing `swagger-ui`).
+- **Surfaces**: the admin `base_site.html` and the Swagger UI inject
+  (`CustomSpectacularSwaggerView`) both render from the registries via the
+  `stapel_services` context processor / `nav_sections` — the hardcoded sections
+  are gone.
+- **System checks** (tag `stapel_nav`): `E001` malformed `STAPEL_SERVICES`
+  env-JSON, `E002` malformed `STAPEL_ADMIN["NAV_LINKS"]` overlay — the render
+  layer fails soft (never 500s the admin), so the check is what surfaces the
+  misconfiguration at deploy time.
+- Tests: `tests/test_nav.py` (registry/merge/env-JSON, render gating for
+  staff/superuser/non-staff/anonymous, empty registry, monolith vs
+  microservices, malformed-config checks).
+
 ### Added — admin visibility by access category (admin-suite AS-3)
 
 Builds on AS-1 (`stapel_core.access`): the `@access` category of a model now

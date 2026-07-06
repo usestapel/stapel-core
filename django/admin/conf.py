@@ -29,10 +29,19 @@ admin_settings = AppSettings(
         # (read-only is still enforced by StapelModelAdmin). Env-readable
         # (a deploy/dev convenience, unlike the trust-shaping ACCESS keys).
         "SHOW_OPS_MODELS": False,
+        # Merge-registry (admin-suite AS-4 §2.3) over the code-registered nav
+        # links (register_nav_link), keyed by an opaque link id:
+        #   {"monitoring.grafana": {"section": "monitoring", "title": "Grafana",
+        #                            "url": "/monitoring/grafana/", "external": True},
+        #    "translate.dashboard": None}   # disable a built-in link
+        # A partial dict patches a code-registered link; a full dict adds a
+        # new one; None removes. Consumed by stapel_core.django.nav.
+        "NAV_LINKS": {},
     },
-    # MODELS shapes a visibility/trust decision — never from a stray env var.
-    # SHOW_OPS_MODELS is a dev toggle and intentionally *does* read the env.
-    no_env=("MODELS",),
+    # MODELS and NAV_LINKS shape visibility/trust decisions — never from a
+    # stray env var. SHOW_OPS_MODELS is a dev toggle and intentionally *does*
+    # read the env.
+    no_env=("MODELS", "NAV_LINKS"),
 )
 
 

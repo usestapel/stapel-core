@@ -748,6 +748,58 @@ should be URL names (`LOGIN_REDIRECT_URL = "admin:index"`) or lazy
 derivations, so the module works at the domain root, under a service prefix,
 and in a monolith mounted under any sub-path.
 
+### Cross-service navigation — `STAPEL_SERVICES` + `NAV_LINKS` (`django/nav.py`)
+
+The admin/Swagger "Services" menu is driven by two deploy-config registries
+(admin-suite AS-4) — no service list or tool/monitoring link is hardcoded in
+the framework.
+
+- **`STAPEL_SERVICES`** — the sibling services of this deployment, an env-JSON
+  (12-factor, read by both Python and the non-Django agent service), or a
+  Django-setting list of the same shape. Written by the project generators
+  (`stapel-create-project` seeds it, `stapel-new-service` appends a row — the
+  same discipline as `STAPEL_BUS_ROUTES`). A monolith leaves it unset: one
+  implicit service is derived from `URL_PREFIX` / `SERVICE_NAME` and the "All
+  Services" section collapses.
+
+  ```bash
+  STAPEL_SERVICES='[{"name":"Auth","prefix":"auth"},{"name":"Billing","prefix":"billing"}]'
+  ```
+
+- **`STAPEL_ADMIN["NAV_LINKS"]`** — extra tool/monitoring/dashboard links, a
+  two-channel merge-registry. Channel 1: a module registers its own dashboard
+  in `AppConfig.ready()` (re-exported from `stapel_core.django.admin`).
+  Channel 2: the project adds/patches/removes via the setting (partial dict
+  patches a code link, full dict adds one, `None` removes). Sections
+  (`tools`, `monitoring`, `dashboards`) are fixed by the mechanism; contents
+  are policy. The framework ships **no** monitoring links.
+
+  ```python
+  # channel 1 — module code (ready()):
+  from stapel_core.django.admin import register_nav_link
+  register_nav_link("translate.dashboard", section="dashboards",
+                    title="Translator Dashboard", url="/translate/dashboard/",
+                    requires="staff")           # staff | superuser | low/mid/high
+
+  # channel 2 — project settings (merge over code):
+  STAPEL_ADMIN = {"NAV_LINKS": {
+      "monitoring.grafana": {"section": "monitoring", "title": "Grafana",
+                              "url": "/monitoring/grafana/", "external": True},
+      "translate.dashboard": None,              # disable the built-in link
+  }}
+  ```
+
+Every link is filtered by the viewer's admissibility (`requires`; the target
+keeps its own perimeter — nginx `auth_request`, `IsStaffUserForSwagger`), and
+the **Swagger links respect the introspection env-gate** — they render only
+when this deployment mounts the schema (`get_dev_urls` mounts `/swagger/` for
+`DJANGO_ENV in {local, dev}`). Both the admin `base_site.html` and the Swagger
+UI inject render from these registries via the `stapel_services` context
+processor. System checks (tag `stapel_nav`, `django/nav_checks.py`):
+`stapel_core.nav.E001` malformed `STAPEL_SERVICES`, `E002` malformed
+`STAPEL_ADMIN["NAV_LINKS"]` — the render layer fails soft (never 500s), the
+check surfaces the misconfiguration at deploy time.
+
 ## Anti-patterns
 
 - **Do not import other stapel modules from core** (or from each other).

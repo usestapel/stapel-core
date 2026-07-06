@@ -10,19 +10,10 @@ from typing import Optional
 from datetime import timedelta
 
 
-# Stapel Services Configuration
-# This is the single source of truth for all services in the platform
-STAPEL_SERVICES = [
-    {'name': 'Auth', 'prefix': 'auth'},
-    {'name': 'CDN', 'prefix': 'cdn'},
-    {'name': 'Agent', 'prefix': 'agent'},
-    {'name': 'Translate', 'prefix': 'translate'},
-    {'name': 'Profiles', 'prefix': 'profiles'},
-    {'name': 'Notifications', 'prefix': 'notifications'},
-    {'name': 'Workspaces', 'prefix': 'workspaces'},
-    {'name': 'Recordings', 'prefix': 'recordings'},
-    {'name': 'Billing', 'prefix': 'billing'},
-]
+# NOTE: the service navigation registry (formerly ``STAPEL_SERVICES`` here) is
+# no longer hardcoded in the framework — policy in a mechanism was a bug
+# (admin-suite AS-4 §2.2). It is now a deploy-config env-JSON read by
+# ``stapel_core.django.nav.get_services`` (written by the project generators).
 
 
 @dataclass

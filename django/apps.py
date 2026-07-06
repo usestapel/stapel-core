@@ -41,6 +41,10 @@ class CommonDjangoConfig(AppConfig):
         # for a malformed STAPEL_ADMIN["MODELS"] registry, W-level for
         # cross-service labels and secret-category downgrades.
         from stapel_core.django.admin import checks as _admin_checks  # noqa: F401
+        # Navigation-registry checks (stapel_core.django.nav_checks): E-level
+        # for a malformed STAPEL_SERVICES env-JSON or STAPEL_ADMIN["NAV_LINKS"]
+        # overlay — otherwise the nav block silently renders empty.
+        from stapel_core.django import nav_checks as _nav_checks  # noqa: F401
 
         # Admin visibility (admin-suite AS-3): re-register contrib service
         # tables (auth.Group, sessions.Session) under declaration-aware admins
