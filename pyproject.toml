@@ -160,6 +160,7 @@ packages = [
     "stapel_core.eventstore.backends",
     "stapel_core.comm",
     "stapel_core.flows",
+    "stapel_core.i18n",
     "stapel_core.lint",
     "stapel_core.netintel",
     "stapel_core.secrets",

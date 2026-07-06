@@ -23,8 +23,8 @@ from pathlib import Path
 from django.core.management.base import BaseCommand
 
 from stapel_core.flows import autodiscover_flows, flow_registry, resolve_flow_texts
-from stapel_core.flows.conf import flows_settings
 from stapel_core.flows.docs import endpoint_index, export_json, get_flow_doc_renderer
+from stapel_core.i18n import project_languages
 
 #: Human-facing names for the top-level language index; falls back to the code.
 LANGUAGE_NAMES = {"en": "English", "ru": "Русский"}
@@ -37,8 +37,9 @@ class Command(BaseCommand):
         parser.add_argument("--out", default="docs/flows", help="Output directory")
         parser.add_argument(
             "--languages", default="",
-            help="Comma-separated language override (default: STAPEL_FLOWS"
-                 "['DOC_LANGUAGES']).",
+            help="Comma-separated language override (default: the project "
+                 "languages — STAPEL_I18N['LOCALES'], unless STAPEL_FLOWS"
+                 "['DOC_LANGUAGES'] is explicitly set).",
         )
         parser.add_argument(
             "--llm", action="store_true",
@@ -57,7 +58,7 @@ class Command(BaseCommand):
         out.mkdir(parents=True, exist_ok=True)
         languages = [
             lg.strip() for lg in options["languages"].split(",") if lg.strip()
-        ] or list(flows_settings.DOC_LANGUAGES)
+        ] or project_languages()
 
         index = endpoint_index()
         renderer = get_flow_doc_renderer()

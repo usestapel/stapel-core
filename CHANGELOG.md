@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+### Added — `stapel_core.i18n`: bilingual content shipping (i18n-shipping wave 0)
+
+- **`stapel_core.i18n`** — the flow-i18n contour generalized to arbitrary
+  content **domains** (i18n-shipping.md §1). A domain `D` (`"flows"`,
+  `"errors"`, …) ships per-app catalogs `<app>/translations/D.<lang>.json`
+  (flat `{key: text}`), discovered over INSTALLED_APPS and merged
+  **later-wins** — a host app (last) overrides any module text **without a
+  fork**, the same merge-over-builtins semantics as every other registry.
+  `load_app_catalogs(domain, language)`, `CommDocTranslator` and
+  `DocTranslationCache` moved here; `flows.i18n` is now the `"flows"` domain
+  over it and re-exports them (backward compatible).
+
+- **`register_service_errors` override contract pinned** — the global error
+  registry is `dict.update`, so a later (host) registration overriding an
+  earlier en text is the *en tier of the fork-free override seam* (§3), not an
+  accident. Fixed by `tests/test_error_i18n_contract.py` so it is never
+  "hardened" into a duplicate check. `docs/errors.json` stays en-only /
+  language-agnostic; localized error texts live in
+  `translations/errors.<lang>.json`.
+
+- **`STAPEL_I18N`** (`i18n/conf.py`) — a thin cross-domain namespace:
+  `LOCALES` (default `["en","ru"]`), the single "project languages" knob that
+  `STAPEL_FLOWS["DOC_LANGUAGES"]` now delegates to (`project_languages()`,
+  soft — an explicit `DOC_LANGUAGES` still wins); `EXTRA_CATALOG_DIRS` (catalog
+  roots outside the apps); `TRANSLATOR` / `SOURCE_LANGUAGE` (the
+  domain-agnostic machine-translation seam, the `llm.translate` comm Function
+  by name — core never imports the agent package).
+
+- **`translate_catalogs --domain D --lang X`** — write-time catalog generation
+  with a `.state.json` **provenance sidecar** (`{key: {hash: h(source_en),
+  origin}}`). Per key: keep (source hash unchanged) → seed from a curated
+  corpus (`--seed`, `origin: seed:<label>`) → the translator seam (`--llm`,
+  content-hash cached, byte-stable, `origin: llm` = machine/unreviewed) → left
+  missing (fails the gate). `--approve KEY… | --approve-all` flips reviewed
+  keys to `origin: human` without retranslating. Editing the en canon
+  auto-staleness-marks exactly the affected key.
+
+- **`check_translation_catalogs --domain D [--strict]`** — CI gate (module
+  pytest wraps `check_translation_catalogs(...)` like `check_flows`): **E** on
+  a missing key, a stale one (en changed, translation didn't), a `{param}`
+  mismatch vs the canon (a client override MUST preserve the placeholders), or
+  a non-byte-stable file; **W** counts unreviewed (`origin: llm`/unknown)
+  values (`--strict` makes them fatal, for after the first review pass).
+
+- **`generate_error_docs [--lang X]`** — the human-readable
+  `docs/errors.<lang>.md` reference (i18n-shipping.md §4), a byte-stable table
+  joining the error registry with the language catalog (uncovered keys marked
+  `_(en)_`). Gate it with the same regenerate-and-diff pattern as the flow
+  docs.
+
 ### Added — `stapel_core.secrets`: secret-provider seam (arch-stapel-vault Part 1)
 
 - **`stapel_core.secrets`** — secret resolution as a core *mechanism*, not a

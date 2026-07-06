@@ -24,6 +24,12 @@ points below; a generic fix or gap belongs **upstream** (see
   resolved via the `auth.verification.policy` comm Function.
 - `flows` — self-documenting business scenarios (`Flow`, `@flow_step`,
   `flow_registry`) with doc generation and a CI completeness gate.
+- `i18n` — domain-agnostic shipping of localized content: per-app
+  `translations/<domain>.<lang>.json` catalogs (later-wins, fork-free host
+  override), a `.state.json` provenance sidecar, write-time
+  `translate_catalogs` (seed → translator seam, byte-stable) and the
+  `check_translation_catalogs` gate. `STAPEL_I18N["LOCALES"]` is the single
+  project-languages knob.
 - `django` — service conventions: transactional outbox, task store,
   `StapelResponse` / `StapelErrorResponse` / error-key registry, OpenAPI
   helpers and postprocessing hooks, JWT auth middleware, common settings,
@@ -246,6 +252,52 @@ language passed to the translator. A custom translator is any class with
 `translate(entries: dict[key, source_text], source_language,
 target_language) -> dict[key, text]`.
 
+### i18n catalogs — domains, provenance, gate (`i18n/`, `STAPEL_I18N`)
+
+`stapel_core.i18n` generalizes the flow-i18n contour to arbitrary content
+**domains** (i18n-shipping.md). A domain `D` (`"flows"`, `"errors"`, …) ships
+per-app catalogs `<app>/translations/D.<lang>.json` — flat `{key: text}` —
+discovered over INSTALLED_APPS and merged **later-wins** (the host app, last,
+overrides module texts without a fork; the same merge-over-builtins semantics
+as every other registry). `flows.i18n` is the `"flows"` domain over this
+(`load_app_catalogs`, `CommDocTranslator`, `DocTranslationCache` re-export from
+here). `docs/errors.json` stays language-agnostic (en canon); localized error
+texts live in `translations/errors.<lang>.json`, gen-errors reads them per
+locale.
+
+Localized texts are a **static, reviewed-as-code artifact**, generated
+write-time:
+
+- `manage.py translate_catalogs --domain errors --lang ru [--seed FILE] [--llm]
+  [--approve KEY… | --approve-all]` materializes `<out>/errors.ru.json`
+  (byte-stable) + a `.state.json` **provenance sidecar** keyed `<domain>.<lang>`
+  → `{key: {hash: h(source_en), origin}}`. Per key: keep (source hash still
+  matches) → seed from a curated corpus (`origin: seed:<label>`) → the
+  `STAPEL_I18N["TRANSLATOR"]` seam (`--llm`, content-hash cached, `origin: llm`
+  = machine/unreviewed) → left missing (fails the gate). `--approve` flips
+  reviewed keys to `origin: human` without retranslating. Editing the en canon
+  auto-staleness-marks exactly that one key (the hash no longer matches).
+- The **first ru is not machine-translated**: `stapel-i18n-seed` (stapel-tools)
+  exports the already-curated stapel-translate builtin fixtures (155 `error.*`
+  × ru) into a seed the command applies — requirement "clients don't spend
+  tokens" is met by copying, not re-running an LLM.
+- `manage.py check_translation_catalogs --domain errors` is the CI gate
+  (module pytest wraps `check_translation_catalogs(...)`, like `check_flows`):
+  **E** on a missing key, a stale one (en changed, translation didn't), a
+  `{param}` mismatch vs the canon, or a non-byte-stable file; **W** counts
+  unreviewed (`origin: llm`/unknown) values (`--strict` makes them fatal —
+  after the first review pass).
+- `manage.py generate_error_docs [--lang ru]` writes the human-readable
+  `docs/errors.<lang>.md` reference (i18n-shipping.md §4); README links both
+  languages (lint rule `R100` in `stapel_tools.lint`).
+
+`STAPEL_I18N` (`i18n/conf.py`): `LOCALES` (default `["en","ru"]`) — the single
+"project languages" knob; `STAPEL_FLOWS["DOC_LANGUAGES"]` delegates to it
+(`project_languages()`) unless a host sets it explicitly (doc languages may
+differ from product languages). `EXTRA_CATALOG_DIRS` adds catalog roots outside
+the apps. `TRANSLATOR` / `SOURCE_LANGUAGE` are the domain-agnostic
+machine-translation seam (the `llm.translate` comm Function by name, default).
+
 ### Error registry (`django/api/errors.py`)
 
 `register_service_errors({key: template}, remediation={key: hint})` adds
@@ -266,6 +318,16 @@ of `{code, status, params, remediation, en}` (the companion of
 `schema.json`/`flows.json`) that the frontend error bundle is generated from.
 Commit it and gate drift with a regenerate-and-diff test (see stapel-auth's
 `tests/test_error_keys.py`).
+
+**Override semantics — the registry is `dict.update`, last-wins (a contract,
+not an accident).** A host app's `errors` module (autodiscovered *after* the
+framework modules) may re-word any shipped en text by registering the same key
+— `register_service_errors({"error.423.locked": "…"})` — and both the artifact
+and the raise-time render take the host value, no fork. This is the en tier of
+the fork-free override seam (i18n-shipping.md §3); it is pinned by
+`tests/test_error_i18n_contract.py` so it is never "fixed" into a duplicate
+check. A localized override lives in a catalog instead (see i18n below); either
+kind MUST preserve the canon `{placeholders}` — the gate enforces it.
 
 ### OpenAPI hooks (`django/openapi/`)
 
@@ -624,6 +686,10 @@ delivery guarantees; cross-module facts still go through comm Actions.
 | `sweep_tasks` | Fail comm Tasks past their deadline (cron / celery beat) |
 | `generate_flow_docs --out DIR [--lang X] [--llm] [--llm-cache FILE]` | Render flow markdown + `flows.json`; `--lang` resolves i18n keys, `--llm` machine-translates missing keys (content-hash cached) |
 | `generate_error_keys --out FILE` | Emit `errors.json` (the error-key registry: `{code, status, params, remediation, en}`) — the backend codegen artifact the frontend error bundle is generated from |
+| `generate_project_docs --out DIR [--languages …] [--llm]` | Bilingual flow doc trees, one per project language (`STAPEL_I18N["LOCALES"]`) |
+| `translate_catalogs --domain D --lang X [--seed F] [--llm] [--approve … \| --approve-all]` | Generate/refresh `translations/D.X.json` + `.state.json` provenance (seed → translator seam, byte-stable, content-hash cached) |
+| `check_translation_catalogs --domain D [--languages …] [--strict]` | CI gate: catalogs cover the canon, are fresh, preserve `{params}` (E); counts unreviewed (W) |
+| `generate_error_docs [--lang X] [--out docs]` | Human-readable `docs/errors.<lang>.md` reference (i18n-shipping.md §4) |
 | `check_flows [--allow SUBSTRING]` | CI gate: flow documentation completeness |
 | `staff_group`, `reset_sequences` | Staff group fixture management; DB sequence reset |
 

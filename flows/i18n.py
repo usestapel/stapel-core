@@ -1,4 +1,4 @@
-"""Flow i18n — keys, per-app catalogs and the DOC_TRANSLATOR seam.
+"""Flow i18n — keys, per-app catalogs and the translator seam.
 
 flow-system.md §2: flow texts are i18n keys, not literals. Every flow/step
 derives an implicit key (``flow.<id>.title`` / ``flow.<id>.description`` /
@@ -6,8 +6,14 @@ derives an implicit key (``flow.<id>.title`` / ``flow.<id>.description`` /
 the in-code literal remains the canonical source text and the fallback, so
 literal-only flows keep working unchanged.
 
-``resolve_flow_texts(flows, language)`` builds the key → text mapping the
-doc renderers consume. Resolution chain for language X:
+The catalog mechanics (per-app ``translations/<domain>.<lang>.json`` discovery
++ later-wins merge, the ``DOC_TRANSLATOR`` seam, the content-hash cache) are
+the domain-agnostic :mod:`stapel_core.i18n` contour; this module is the
+``"flows"`` domain over it. ``load_app_catalogs``, ``CommDocTranslator`` and
+``DocTranslationCache`` are re-exported here for backward compatibility.
+
+``resolve_flow_texts(flows, language)`` builds the key → text mapping the doc
+renderers consume. Resolution chain for language X:
 
 1. **Committed per-app catalogs** — ``<app>/translations/flows.<X>.json``
    discovered over INSTALLED_APPS (en/ru ship with the module, reviewed as
@@ -23,22 +29,24 @@ doc renderers consume. Resolution chain for language X:
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from pathlib import Path
 from typing import Iterable
+
+# Domain-agnostic catalog mechanics (re-exported for backward compatibility —
+# the flows.conf DOC_TRANSLATOR default resolves ``…flows.i18n.CommDocTranslator``).
+from stapel_core.i18n import (
+    CATALOG_DIRNAME,
+    CommDocTranslator,
+    DocTranslationCache,
+)
+from stapel_core.i18n import load_app_catalogs as _load_app_catalogs
 
 from .registry import Flow
 
 logger = logging.getLogger(__name__)
 
-#: Directory (inside an app package) holding flow catalogs, one file per
-#: language: ``translations/flows.<lang>.json`` mapping key → text.
-CATALOG_DIRNAME = "translations"
-
 TRANSLATE_RESOLVE_FUNCTION = "translate.resolve"
-LLM_TRANSLATE_FUNCTION = "llm.translate"
 
 
 def flow_source_texts(flows: Iterable[Flow]) -> dict[str, str]:
@@ -52,132 +60,15 @@ def flow_source_texts(flows: Iterable[Flow]) -> dict[str, str]:
     return texts
 
 
-def _installed_app_dirs() -> list[Path]:
-    from django.apps import apps
+def load_app_catalogs(
+    language: str, dirs: Iterable[Path | str] | None = None
+) -> dict[str, str]:
+    """Merge ``translations/flows.<language>.json`` catalogs (later-wins).
 
-    return [Path(ac.path) for ac in apps.get_app_configs()]
-
-
-def load_app_catalogs(language: str, dirs: Iterable[Path | str] | None = None) -> dict[str, str]:
-    """Merge ``translations/flows.<language>.json`` catalogs.
-
-    *dirs* defaults to the package directories of all installed apps. Keys
-    are flow-namespaced (``flow.<flow_id>.…``), so cross-app collisions are
-    pathological; on collision the later app wins (INSTALLED_APPS order —
-    the same merge-over-builtins semantics as other stapel registries).
+    Thin wrapper over :func:`stapel_core.i18n.load_app_catalogs` for the
+    ``"flows"`` domain — kept for backward compatibility.
     """
-    merged: dict[str, str] = {}
-    app_dirs = list(dirs) if dirs is not None else _installed_app_dirs()
-    for d in app_dirs:
-        path = Path(d) / CATALOG_DIRNAME / f"flows.{language}.json"
-        if not path.is_file():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            logger.warning("unreadable flow catalog %s — skipped", path, exc_info=True)
-            continue
-        if not isinstance(data, dict):
-            logger.warning("flow catalog %s is not a JSON object — skipped", path)
-            continue
-        merged.update({
-            k: v for k, v in data.items()
-            if isinstance(k, str) and isinstance(v, str) and v
-        })
-    return merged
-
-
-class CommDocTranslator:
-    """Default DOC_TRANSLATOR: ``llm.translate`` called by comm name.
-
-    Core never imports the agent package (L0 stays clean) — if no provider
-    for ``llm.translate`` is registered/routable, translation is silently
-    skipped and the caller falls back down the resolution chain.
-    """
-
-    def translate(
-        self,
-        entries: dict[str, str],
-        source_language: str,
-        target_language: str,
-    ) -> dict[str, str]:
-        from stapel_core.comm import call
-
-        try:
-            result = call(LLM_TRANSLATE_FUNCTION, {
-                "from_lang": source_language or "auto",
-                "to": target_language,
-                "entries": dict(entries),
-            })
-        except Exception:
-            logger.warning(
-                "%s unavailable — flow docs fall back to source literals for %r",
-                LLM_TRANSLATE_FUNCTION, target_language, exc_info=True,
-            )
-            return {}
-        if not isinstance(result, dict) or result.get("status") != "ok":
-            reason = (result or {}).get("reason") if isinstance(result, dict) else result
-            logger.warning("%s failed: %r", LLM_TRANSLATE_FUNCTION, reason)
-            return {}
-        out = result.get("result") or {}
-        return {k: v for k, v in out.items() if isinstance(v, str) and v}
-
-
-def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-class DocTranslationCache:
-    """Content-hash cache for DOC_TRANSLATOR output — a committed artifact.
-
-    File format (sorted keys, 2-space indent, trailing newline — byte-stable
-    like dump_translations): ``{key: {"hash": h(source_text), "text": t}}``.
-    A cached value is reused only while the source literal's hash matches,
-    so editing a flow text invalidates exactly that entry.
-    """
-
-    def __init__(self, path: Path | str) -> None:
-        self.path = Path(path)
-        self._entries: dict[str, dict[str, str]] = {}
-        self._dirty = False
-        if self.path.is_file():
-            try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    self._entries = {
-                        k: v for k, v in data.items()
-                        if isinstance(v, dict)
-                        and isinstance(v.get("hash"), str)
-                        and isinstance(v.get("text"), str)
-                    }
-            except (OSError, ValueError):
-                logger.warning("unreadable doc-translation cache %s — starting empty",
-                               self.path, exc_info=True)
-
-    def get(self, key: str, source_text: str) -> str | None:
-        entry = self._entries.get(key)
-        if entry and entry["hash"] == _content_hash(source_text):
-            return entry["text"]
-        return None
-
-    def put(self, key: str, source_text: str, text: str) -> None:
-        entry = {"hash": _content_hash(source_text), "text": text}
-        if self._entries.get(key) != entry:
-            self._entries[key] = entry
-            self._dirty = True
-
-    def save(self) -> bool:
-        """Write the cache file iff something changed. Returns True on write."""
-        if not self._dirty:
-            return False
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(
-            dict(sorted(self._entries.items())),
-            ensure_ascii=False, indent=2, sort_keys=True,
-        )
-        self.path.write_text(payload + "\n", encoding="utf-8")
-        self._dirty = False
-        return True
+    return _load_app_catalogs("flows", language, dirs=dirs)
 
 
 def resolve_flow_texts(
