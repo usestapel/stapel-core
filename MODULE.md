@@ -661,6 +661,53 @@ matrix, DAC grants above mandate, undeclared models, and a `step_up` section
 `staff_roles`, `StaffRole` in stapel-auth) is AS-2; admin visibility built on
 the same declarations is AS-3.
 
+#### Migrating an existing project to the mandate
+
+**Day 1 is a no-op.** Upgrading core/auth changes nothing until you opt in:
+`MandateBackend` grants nothing while no roles resolve, `@access` decorators
+are passive class attributes (no migrations), the only schema change is the
+additive `staff_roles` JSONField on `AbstractStapelUser`, and step-up
+self-disables where no verification factor exists (`W005`). The legacy flat
+`Staff` group (`ensure_staff_group_permissions`, `staff_group` command) keeps
+working — it is deprecated by documentation, not by code.
+
+Enable in five independent, reversible steps (live reference:
+stapel-example-monolith — settings, `seed_demo_staff`, smoke matrix in
+`svc-app/app/tests/test_admin_suite.py`):
+
+1. **Backends** — swap the single `ModelBackend` for the
+   MandateBackend + AuditedModelBackend pair (drop-in: existing manual grants
+   keep working, escalations above the mandate become audited).
+2. **Roles** — define custom roles in `STAPEL_ACCESS["ROLES"]` (same deploy
+   config in every service; scope keys are **app labels** — `"billing"`, not
+   package names); assign in the auth service only. A service hosting
+   stapel-auth locally should put `stapel_auth.staff_roles.assignment_roles`
+   first in `ROLE_SOURCES` so a revocation lands on the very next request.
+3. **Declarations** — library models ship decorated (AS-5); your own
+   business models usually need nothing (undecorated = `@access.standard`).
+   Decorate the `sensitive`/`ops`/`secret` exceptions; host-override via the
+   `MODELS` registries.
+4. **`StapelModelAdmin`** — change the base class of your ModelAdmins to get
+   ops read-only (even for a superuser), secret masking, and the step-up
+   gate. A bare `ModelAdmin` keeps mandate *visibility* enforcement but does
+   NOT gate step-up — a documented trade-off.
+5. **Step-up** — already on by default (`LEVELS=["high"]`); it activates by
+   itself once stapel-auth (or a host `register_factor`) is present. Tune or
+   disable via `STAPEL_ACCESS["STEP_UP"]`.
+
+AS-2 sync note for local staff accounts: `is_staff`/`is_superuser` keep the
+legacy *upgrade-only* shadow-sync (locally promoted admins never lose the
+flag from a token), while `staff_roles` is **replaced** from the claim on
+every authentication (revocation must land — A3). A migration script must
+therefore set `is_staff` first, then assign roles (`assign_staff_role`
+refuses non-staff targets). Exit path from the legacy `Staff` group: assign
+equivalent roles → `access_report` shows what the group still grants above
+the mandate → empty the group → optionally `STRICT=True` to make the mandate
+a ceiling. The `stapel_access`/`stapel_admin`/`stapel_nav` system checks are
+the misconfiguration diagnostics (W001 backend missing, W002 unaudited DAC,
+E003 STRICT unenforceable, W003/admin.W001 wrong app_label in a `MODELS`
+key, E004/W005 step-up, nav.E001/E002 malformed registries).
+
 ### GDPR providers (`gdpr.py`)
 
 Subclass `GDPRProvider` (define `section`, implement `export` / `delete` /
