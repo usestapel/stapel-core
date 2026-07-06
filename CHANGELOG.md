@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — hardened prod-guard for generated-project settings (SEC-4/SEC-6)
+
+- **`stapel_core.django.prodguard`**: `guard_secret(name, value, min_length=50)`
+  and `guard_db_password(password)` — the prod-only startup checks
+  `stapel-tools` templates now call from `core/settings/prod.py` (monolith /
+  microservices) and the minimal preset's `DJANGO_ENV=prod` branch
+  (docs/security-programme.md gaps B2/B6). The old inline guard only rejected
+  an empty `SECRET_KEY` or one starting with `django-insecure-`; a shipped
+  `.env.example` placeholder (`change_me_to_a_long_random_string`) or the
+  default `POSTGRES_PASSWORD=stapel`/`change_me` sailed straight through into
+  a live deployment. `guard_secret` now also rejects any `change_me*`-prefixed
+  value and anything shorter than 50 characters (raised or lowered per call
+  via `min_length`); `guard_db_password` rejects the library's dev-only
+  Postgres default and the placeholder value, case-insensitively. Both raise
+  `django.core.exceptions.ImproperlyConfigured` (fail-closed, same shape as
+  the existing DEBUG/JWT-secret checks). Pairs with SEC-6 in `stapel-tools`,
+  which now writes freshly generated secrets into `.env` at project creation
+  so these guards only ever fire on the "deployed as downloaded" mistake, not
+  on a normally-configured project.
+
 ## [0.8.0] - 2026-07-06
 
 ### Changed — taskstore Django label renamed (frees `stapel_tasks` for the tasks module)
