@@ -216,6 +216,11 @@ class NavLink:
     #: True — opens an out-of-app target (rendered target="_blank"); the URL
     #: is used verbatim (script-prefix already baked in by whoever set it).
     external: bool = False
+    #: True — this link is *the* current service's own dashboard, the
+    #: explicit AS-4 §2 arbitration flag consumed by
+    #: :func:`current_dashboard_url`. Set by the owning module at
+    #: registration time; never inferred.
+    service_dashboard: bool = False
 
 
 #: Channel 1 — links registered in code by modules' AppConfig.ready().
@@ -247,11 +252,17 @@ def register_nav_link(
     url: str,
     requires: str = "staff",
     external: bool = False,
+    service_dashboard: bool = False,
 ) -> None:
     """Register a module's own nav link (channel 1, called from ready()).
 
     Idempotent per key (re-import / repeated ready() is safe). The project
     overrides or removes it via ``STAPEL_ADMIN["NAV_LINKS"][key]`` (channel 2).
+
+    ``service_dashboard=True`` marks this link as *the* current service's own
+    dashboard for :func:`current_dashboard_url` (AS-4 §2 arbitration) — an
+    explicit, module-declared choice rather than an inferred one. A module
+    that owns exactly one dashboard for its service should set it.
     """
     source = f"register_nav_link({key!r})"
     _validate_section(section, source=source)
@@ -263,6 +274,7 @@ def register_nav_link(
         url=url,
         requires=requires,
         external=bool(external),
+        service_dashboard=bool(service_dashboard),
     )
 
 
@@ -283,7 +295,9 @@ def _coerce_link(key: str, entry: Any, base: Optional[NavLink]) -> NavLink:
         raise NavConfigError(
             f"{source} must be a dict or None, got {type(entry).__name__}"
         )
-    unknown = set(entry) - {"section", "title", "url", "requires", "external"}
+    unknown = set(entry) - {
+        "section", "title", "url", "requires", "external", "service_dashboard",
+    }
     if unknown:
         raise NavConfigError(f"{source}: unknown keys {sorted(unknown)}")
 
@@ -307,6 +321,11 @@ def _coerce_link(key: str, entry: Any, base: Optional[NavLink]) -> NavLink:
         url=entry.get("url", base.url if base else ""),
         requires=requires,
         external=bool(entry.get("external", base.external if base else False)),
+        service_dashboard=bool(
+            entry.get(
+                "service_dashboard", base.service_dashboard if base else False
+            )
+        ),
     )
 
 
@@ -394,15 +413,34 @@ def nav_sections(user) -> Dict[str, List[dict]]:
 def current_dashboard_url(user) -> Optional[str]:
     """This service's own dashboard link, if a local module registered one.
 
-    Derived from the registry (no hardcoded ``{translate: ...}`` map): the
-    first admissible ``dashboards``/``tools`` link that points inside the
-    current service prefix. ``None`` when the service has no dashboard.
+    Selection (AS-4 §2, arbitrated): an explicit ``service_dashboard=True``
+    link (set via :func:`register_nav_link` / the ``NAV_LINKS`` overlay) wins
+    — the first admissible one, in registry order, when more than one module
+    claims the flag (a misconfiguration; see ``stapel_core.nav.W003``).
+    Only when *no* link carries the flag does this fall back to the legacy
+    heuristic for backward compatibility: the first admissible
+    ``dashboards``/``tools`` link whose URL points inside the current service
+    prefix (a monolith with no prefix accepts any local link). ``None`` when
+    the service has no dashboard either way.
     """
     from django.urls import get_script_prefix
 
     root = get_script_prefix()
     current = _current_prefix()
-    for link in get_nav_links():
+    links = get_nav_links()
+
+    # Explicit flag — takes priority over the prefix heuristic.
+    for link in links:
+        if not link.service_dashboard:
+            continue
+        if link.section not in ("dashboards", "tools"):
+            continue
+        if link.external or not _viewer_allowed(user, link.requires):
+            continue
+        return _prefix_url(root, link.url, link.external)
+
+    # Fallback — legacy prefix-matching heuristic (pre-flag behavior).
+    for link in links:
         if link.section not in ("dashboards", "tools"):
             continue
         if link.external or not _viewer_allowed(user, link.requires):

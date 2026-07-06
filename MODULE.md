@@ -779,7 +779,8 @@ the framework.
   from stapel_core.django.admin import register_nav_link
   register_nav_link("translate.dashboard", section="dashboards",
                     title="Translator Dashboard", url="/translate/dashboard/",
-                    requires="staff")           # staff | superuser | low/mid/high
+                    requires="staff",           # staff | superuser | low/mid/high
+                    service_dashboard=True)     # see below
 
   # channel 2 — project settings (merge over code):
   STAPEL_ADMIN = {"NAV_LINKS": {
@@ -799,6 +800,19 @@ processor. System checks (tag `stapel_nav`, `django/nav_checks.py`):
 `stapel_core.nav.E001` malformed `STAPEL_SERVICES`, `E002` malformed
 `STAPEL_ADMIN["NAV_LINKS"]` — the render layer fails soft (never 500s), the
 check surfaces the misconfiguration at deploy time.
+
+**`current_dashboard_url` selection (§2 arbitration).** A `dashboards`/`tools`
+link declares itself *the* current service's dashboard by setting
+`service_dashboard=True` (`register_nav_link(..., service_dashboard=True)` or
+the `NAV_LINKS` overlay). `current_dashboard_url(user)` picks the first
+admissible flagged link, in registry order — explicit and deterministic, no
+guessing from the URL shape. Only when **no** link carries the flag does it
+fall back to the legacy heuristic (kept for backward compatibility with
+pre-flag registrations): the first admissible `dashboards`/`tools` link whose
+URL falls inside the current service's `URL_PREFIX` (a monolith with no
+prefix accepts any local link). At most one link should carry the flag per
+deployment; `stapel_core.nav.W003` warns (does not block) when more than one
+does — the first one in registry order still wins, the rest are ignored.
 
 ## Anti-patterns
 

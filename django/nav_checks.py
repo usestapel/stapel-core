@@ -13,6 +13,7 @@ from django.core import checks
 
 E001_BAD_SERVICES = "stapel_core.nav.E001"
 E002_BAD_NAV_LINKS = "stapel_core.nav.E002"
+W003_DUPLICATE_SERVICE_DASHBOARD = "stapel_core.nav.W003"
 
 
 @checks.register("stapel_nav")
@@ -53,9 +54,41 @@ def check_nav_links(app_configs=None, **kwargs):
     return []
 
 
+@checks.register("stapel_nav")
+def check_service_dashboard_duplicates(app_configs=None, **kwargs):
+    """W003 — at most one ``service_dashboard=True`` link is expected.
+
+    ``current_dashboard_url`` picks the first admissible flagged link in
+    registry order, so a second one is not a 500 — but it is very likely a
+    mistake (two modules, or a code link plus an overlay add, both claiming
+    to be *the* service dashboard). Warn instead of failing soft silently.
+    """
+    from stapel_core.django.nav import NavConfigError, get_nav_links
+
+    try:
+        links = get_nav_links()
+    except NavConfigError:
+        return []  # already reported by E002
+
+    flagged = [link.key for link in links if link.service_dashboard]
+    if len(flagged) <= 1:
+        return []
+    return [checks.Warning(
+        f"Multiple NAV_LINKS entries set service_dashboard=True: {flagged}. "
+        f"current_dashboard_url() will use the first one in registry order "
+        f"({flagged[0]!r}) and ignore the rest.",
+        hint="Only one module/link should own service_dashboard=True per "
+             "deployment; unset it on the others via register_nav_link(...) "
+             "or STAPEL_ADMIN['NAV_LINKS'][key] = {'service_dashboard': False}.",
+        id=W003_DUPLICATE_SERVICE_DASHBOARD,
+    )]
+
+
 __all__ = [
     "E001_BAD_SERVICES",
     "E002_BAD_NAV_LINKS",
+    "W003_DUPLICATE_SERVICE_DASHBOARD",
     "check_services",
     "check_nav_links",
+    "check_service_dashboard_duplicates",
 ]

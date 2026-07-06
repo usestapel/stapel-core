@@ -122,6 +122,15 @@ class TestNavLinksRegistry:
         assert len(links) == 1
         assert links[0].section == "tools"
         assert links[0].requires == "staff"
+        assert links[0].service_dashboard is False  # default off
+
+    def test_code_channel_service_dashboard_flag(self):
+        register_nav_link(
+            "translate.dashboard", section="dashboards",
+            title="Translator Dashboard", url="/translate/dashboard/",
+            service_dashboard=True,
+        )
+        assert get_nav_links()[0].service_dashboard is True
 
     def test_settings_add(self, settings):
         settings.STAPEL_ADMIN = {"NAV_LINKS": {
@@ -231,6 +240,95 @@ class TestCurrentDashboard:
         register_nav_link("t.dash", section="tools", title="Dash",
                           url="/translate/dashboard/")
         assert current_dashboard_url(_User()) is None
+
+    def test_flag_wins_over_prefix_heuristic(self, settings):
+        # The prefix heuristic alone would pick "o.dash" (it lives under the
+        # current prefix); the explicit flag on "t.dash" must win instead.
+        settings.URL_PREFIX = "other/"
+        register_nav_link("t.dash", section="tools", title="Dash",
+                          url="/translate/dashboard/", service_dashboard=True)
+        register_nav_link("o.dash", section="tools", title="Other",
+                          url="/other/dashboard/")
+        assert current_dashboard_url(_User()) == "/translate/dashboard/"
+
+    def test_flag_via_settings_overlay(self, settings):
+        settings.URL_PREFIX = "other/"
+        register_nav_link("t.dash", section="tools", title="Dash",
+                          url="/translate/dashboard/")
+        register_nav_link("o.dash", section="tools", title="Other",
+                          url="/other/dashboard/")
+        settings.STAPEL_ADMIN = {"NAV_LINKS": {
+            "t.dash": {"service_dashboard": True},
+        }}
+        assert current_dashboard_url(_User()) == "/translate/dashboard/"
+
+    def test_fallback_heuristic_when_no_flag_set(self, settings):
+        # No link carries service_dashboard — old prefix-matching behavior.
+        settings.URL_PREFIX = "translate/"
+        register_nav_link("t.dash", section="tools", title="Dash",
+                          url="/translate/dashboard/")
+        assert current_dashboard_url(_User()) == "/translate/dashboard/"
+
+    def test_flag_ignores_prefix_mismatch(self, settings):
+        # A flagged link wins even when it does not sit under the current
+        # prefix at all (the module owns its own dashboard regardless).
+        settings.URL_PREFIX = "auth/"
+        register_nav_link("t.dash", section="tools", title="Dash",
+                          url="/translate/dashboard/", service_dashboard=True)
+        assert current_dashboard_url(_User()) == "/translate/dashboard/"
+
+    def test_flag_respects_admissibility_gate(self, settings):
+        settings.URL_PREFIX = "translate/"
+        register_nav_link("t.dash", section="tools", title="Dash",
+                          url="/translate/dashboard/", service_dashboard=True,
+                          requires="superuser")
+        # Not a superuser — the flagged link is inadmissible, so it must not
+        # be returned (and there is no fallback candidate here either).
+        assert current_dashboard_url(_User(superuser=False)) is None
+
+    def test_flag_ignored_outside_dashboard_sections(self, settings):
+        # service_dashboard on a "monitoring" link is not a dashboard link at
+        # all — the section restriction still applies to the flagged branch.
+        register_nav_link("m.graf", section="monitoring", title="Grafana",
+                          url="https://grafana.example/", external=True,
+                          service_dashboard=True)
+        assert current_dashboard_url(_User()) is None
+
+    def test_two_flags_first_in_order_wins(self, settings):
+        register_nav_link("a.dash", section="tools", title="A",
+                          url="/a/dashboard/", service_dashboard=True)
+        register_nav_link("b.dash", section="tools", title="B",
+                          url="/b/dashboard/", service_dashboard=True)
+        assert current_dashboard_url(_User()) == "/a/dashboard/"
+
+
+class TestServiceDashboardDuplicateCheck:
+    def test_no_flags_clean(self, settings):
+        from stapel_core.django.nav_checks import check_service_dashboard_duplicates
+
+        register_nav_link("t.dash", section="tools", title="Dash",
+                          url="/translate/dashboard/")
+        assert check_service_dashboard_duplicates() == []
+
+    def test_single_flag_clean(self, settings):
+        from stapel_core.django.nav_checks import check_service_dashboard_duplicates
+
+        register_nav_link("t.dash", section="tools", title="Dash",
+                          url="/translate/dashboard/", service_dashboard=True)
+        assert check_service_dashboard_duplicates() == []
+
+    def test_duplicate_flags_warn(self, settings):
+        from stapel_core.django.nav_checks import (
+            W003_DUPLICATE_SERVICE_DASHBOARD,
+            check_service_dashboard_duplicates,
+        )
+
+        register_nav_link("a.dash", section="tools", title="A",
+                          url="/a/dashboard/", service_dashboard=True)
+        register_nav_link("b.dash", section="tools", title="B",
+                          url="/b/dashboard/", service_dashboard=True)
+        warnings = check_service_dashboard_duplicates()
+        assert any(w.id == W003_DUPLICATE_SERVICE_DASHBOARD for w in warnings)
 
 
 # ─── system checks ──────────────────────────────────────────────────────────

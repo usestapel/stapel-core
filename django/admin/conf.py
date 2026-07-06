@@ -36,6 +36,11 @@ admin_settings = AppSettings(
         #    "translate.dashboard": None}   # disable a built-in link
         # A partial dict patches a code-registered link; a full dict adds a
         # new one; None removes. Consumed by stapel_core.django.nav.
+        # "service_dashboard": True marks a link as the explicit AS-4 §2
+        # current-service-dashboard arbitration flag (current_dashboard_url);
+        # a link without it falls back to the legacy prefix-matching
+        # heuristic. At most one flagged link is expected per deployment
+        # (stapel_core.nav.W003 warns on a duplicate).
         "NAV_LINKS": {},
     },
     # MODELS and NAV_LINKS shape visibility/trust decisions — never from a

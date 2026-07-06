@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Fixed — explicit `service_dashboard` flag for `current_dashboard_url` (admin-suite AS-4 follow-up)
+
+The AS-4 review flagged the original `current_dashboard_url` heuristic
+("first admissible `dashboards`/`tools` link under the current `URL_PREFIX`")
+as too implicit for a mechanism contract — it guesses ownership from URL
+shape instead of being told.
+
+- `register_nav_link(..., service_dashboard: bool = False)` — a module now
+  declares explicitly that a link *is* its service's dashboard; the
+  `STAPEL_ADMIN["NAV_LINKS"]` overlay accepts the same key (full add or
+  partial patch).
+- `current_dashboard_url()` selects the first admissible flagged link, in
+  registry order, when one exists. **Backward-compatible fallback**: with no
+  flagged link, it falls back to the original prefix-matching heuristic
+  unchanged — existing registrations (pre-flag) keep working.
+- **`stapel_core.nav.W003`** (tag `stapel_nav`) warns — does not block — when
+  more than one link carries `service_dashboard=True`; the first one in
+  registry order still wins, matching the resolution `current_dashboard_url`
+  already applies.
+- Tests: `tests/test_nav.py` (flag wins over the heuristic and over a
+  matching prefix, flag ignores the current prefix, admissibility gating,
+  settings-overlay flag, fallback preserved with no flag, first-of-two
+  ordering, duplicate-flag warning). MODULE.md navigation section documents
+  the selection order.
+
 ### Added / Changed — cross-service navigation registries (admin-suite AS-4)
 
 Service navigation is no longer hardcoded in the framework — the legacy-legacy
