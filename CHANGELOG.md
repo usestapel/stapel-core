@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+### Added — Gherkin projection of flows: `.feature` + playwright-bdd step-defs (flow-system.md §3)
+
+The flow is the source, the `.feature` is a projection (wish #3): the
+`generate_flow_docs` family gains a Gherkin generator, so one flow now fans
+out to SA-doc, flows.json **and** an executable BDD suite — no second source
+of truth to drift.
+
+- **`stapel_core.flows.gherkin`** — `render_feature` turns a flow into a
+  localized Gherkin `Feature` (one happy-path `Scenario`; positional
+  Given/When/Then over the resolved i18n step notes, consecutive keywords
+  folded to `And`; non-English languages emit the `# language:` header +
+  localized keywords — ru built in, unknown → English). `render_step_defs` /
+  `render_fixtures` emit the matching **playwright-bdd** step library
+  (first-instance runner decision for all pairs): HTTP steps drive the
+  codegen typed client (`@stapel/core` `createStapelClient`, the `stapel`
+  world fixture); human/UI steps are honest `TODO(testid)` stubs (the flow
+  model carries no testid plan yet — system-design §7.20); action/function/
+  task steps are pending side-effect assertions; parametrized/unrouted
+  endpoints get explicit pending stubs. Nothing is invented.
+- **`manage.py generate_flow_features --out features [--languages] [--llm]`**
+  — one self-consistent bundle per project language (`<flow_id>.feature` +
+  `steps/flows.steps.ts` + `steps/fixtures.ts`); step-def regexes are the
+  resolved notes of that language, so each bundle runs in the project
+  language. Byte-stable ⇒ the release-gate drift check (regenerate +
+  `git diff --exit-code`) works exactly like the SA-doc trees. i18n
+  resolution is the standard chain (catalogs → `translate.resolve` →
+  `--llm` DOC_TRANSLATOR with the content-hash cache).
+- **`load_flows_json`** — rebuild `(flows, endpoint index)` from an exported
+  `flows.json` (inverse of `export_json`): the projection can run from the
+  committed machine artifact without booting the producing Django instance;
+  never touches the global registry. `write_language_bundle` is the shared
+  bundle writer; a parity test proves json-loaded and live-registry flows
+  render byte-identical output.
+- **Reference artifacts** — `docs/examples/auth-flow-features/`: the three
+  stapel-auth flows as committed en+ru bundles generated from a committed
+  snapshot (`source/flows.json` + catalogs), gated by
+  `tests/test_flow_feature_reference.py` (regenerate-and-diff;
+  `STAPEL_REGEN_FLOW_FEATURES=1` to refresh).
+- Tests: `tests/test_flow_gherkin.py` (18) + the reference drift gate (2) —
+  keyword mapping/dialects, JS-regex escaping, Django→OpenAPI path
+  conversion, typed-client step bodies, honest-TODO paths, i18n-resolved
+  regexes, bilingual byte-stable bundles, loader round-trip.
+
 ### Added — step-up on HIGH admin operations + access audit forwarding (admin-suite AS-6)
 
 Step-up is now part of the standard preset, not opt-in (Q8a): a HIGH-required

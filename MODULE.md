@@ -221,6 +221,28 @@ the release-gate drift check (library-standard §4); a no-op regen is a no-op
 diff. The module README tags both trees, e.g.
 `[Flows (EN)](docs/flows/en/README.md) · [Флоу (RU)](docs/flows/ru/README.md)`.
 
+### Flow Gherkin projection (`flows/gherkin.py`, flow-system.md §3)
+
+The flow is the source, the `.feature` is a projection. `manage.py
+generate_flow_features --out features [--languages en,ru] [--llm]` writes
+one **self-consistent bundle per project language**: `<flow_id>.feature`
+(localized Gherkin — positional Given/When/Then over the resolved step
+notes, `# language:` header + localized keywords for non-en) plus
+`steps/flows.steps.ts` + `steps/fixtures.ts`, a **playwright-bdd** step
+library. HTTP steps drive the codegen typed client (`@stapel/core`
+`createStapelClient`); human/UI steps are honest `TODO(testid)` stubs
+(no testid plan on the flow model yet — system-design §7.20); comm-effect
+steps are pending side-effect assertions. Byte-stable — the same
+regenerate-and-diff drift gate as the SA-doc trees.
+
+Programmatic surface: `render_feature` / `render_step_defs` /
+`render_fixtures` / `write_language_bundle`, and `load_flows_json` — rebuild
+`(flows, endpoint index)` from a committed `flows.json` to generate without
+booting the producing Django instance (never touches the registry). The
+committed reference (3 stapel-auth flows, en+ru) lives in
+`docs/examples/auth-flow-features/` gated by
+`tests/test_flow_feature_reference.py`.
+
 ### Flow i18n (`flows/i18n.py`, flow-system.md §2)
 
 Flow texts are i18n keys, not literals: each flow/step derives an implicit
