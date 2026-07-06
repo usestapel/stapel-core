@@ -248,13 +248,24 @@ target_language) -> dict[key, text]`.
 
 ### Error registry (`django/api/errors.py`)
 
-`register_service_errors({key: template})` adds service-specific error keys
-to the global registry used by `StapelErrorResponse(status, key, params)`.
-Raise `StapelValidationError(key, params)` from serializers or
+`register_service_errors({key: template}, remediation={key: hint})` adds
+service-specific error keys to the global registry used by
+`StapelErrorResponse(status, key, params)`. Raise
+`StapelValidationError(key, params)` from serializers or
 `StapelServiceError(status, key, params)` from services — both are converted
 by `stapel_exception_handler` (wired as DRF's `EXCEPTION_HANDLER` in the
 common settings). Subclass `ErrorKeysView` and override
 `get_service_errors()` to serve a service's key dictionary.
+
+The optional `remediation` map declares a machine-readable "what to do" hint
+per key from the finite `REMEDIATION_VOCAB` (`retry`, `wait_and_retry`,
+`reauthenticate`, `verify`, `fix_input`, `contact_support`, `bug`); undeclared
+keys fall back to a status+name heuristic. `generate_error_keys --out
+docs/errors.json` emits the backend codegen artifact — a byte-stable JSON array
+of `{code, status, params, remediation, en}` (the companion of
+`schema.json`/`flows.json`) that the frontend error bundle is generated from.
+Commit it and gate drift with a regenerate-and-diff test (see stapel-auth's
+`tests/test_error_keys.py`).
 
 ### OpenAPI hooks (`django/openapi/`)
 
@@ -533,6 +544,7 @@ delivery guarantees; cross-module facts still go through comm Actions.
 | `serve_functions` | NATS Function server: expose this service's registered Functions (queue group = service name) |
 | `sweep_tasks` | Fail comm Tasks past their deadline (cron / celery beat) |
 | `generate_flow_docs --out DIR [--lang X] [--llm] [--llm-cache FILE]` | Render flow markdown + `flows.json`; `--lang` resolves i18n keys, `--llm` machine-translates missing keys (content-hash cached) |
+| `generate_error_keys --out FILE` | Emit `errors.json` (the error-key registry: `{code, status, params, remediation, en}`) — the backend codegen artifact the frontend error bundle is generated from |
 | `check_flows [--allow SUBSTRING]` | CI gate: flow documentation completeness |
 | `staff_group`, `reset_sequences` | Staff group fixture management; DB sequence reset |
 

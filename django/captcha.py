@@ -48,11 +48,22 @@ ERR_403_NETWORK_BLOCKED = 'error.403.network_blocked'
 def _register_errors() -> None:
     from stapel_core.django.api.errors import register_service_errors
 
-    register_service_errors({
-        ERR_400_CAPTCHA_INVALID: 'Captcha verification failed',
-        ERR_400_CAPTCHA_REQUIRED: 'Captcha token is required',
-        ERR_403_NETWORK_BLOCKED: 'Requests from this network are not allowed',
-    })
+    # en text is the canonical backend copy (matches the consumer wording so the
+    # errors.json artifact is order-independent when a service also re-declares
+    # these captcha keys). remediation: re-solving the captcha is a retry; a
+    # network block is not user-fixable (escalate).
+    register_service_errors(
+        {
+            ERR_400_CAPTCHA_INVALID: 'Captcha verification failed. Please try again.',
+            ERR_400_CAPTCHA_REQUIRED: 'Captcha token is required.',
+            ERR_403_NETWORK_BLOCKED: 'Requests from this network are not allowed',
+        },
+        remediation={
+            ERR_400_CAPTCHA_INVALID: 'retry',
+            ERR_400_CAPTCHA_REQUIRED: 'retry',
+            ERR_403_NETWORK_BLOCKED: 'contact_support',
+        },
+    )
 
 
 _register_errors()

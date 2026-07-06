@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+### Added — `errors.json` codegen artifact + declarative remediation (error-remediation)
+
+- **`errors.json` — the backend companion of `schema.json`/`flows.json`.** New
+  management command `generate_error_keys --out docs/errors.json` emits the
+  language-agnostic registry of every `error.<status>.<name>` key the instance
+  can raise: a JSON array of `{code, status, params, remediation, en}`, sorted
+  by code, byte-stable (a no-op regen is a no-op diff — drift-gate ready). The
+  shape matches what the frontend `gen-errors.mjs` currently produces by parsing
+  `errors.py` directly, so a pair can migrate onto the emitted artifact without
+  a format change (frontend follow-up). The command populates the registry
+  deterministically — `autodiscover_modules("errors")` for every INSTALLED_APP
+  plus the cross-cutting core mechanisms (`stapel_core.verification.errors`,
+  `stapel_core.django.captcha`) and any `settings.STAPEL_ERROR_MODULES` — rather
+  than relying on whichever view/serializer happened to be imported.
+
+- **Declarative `remediation` on the error registry
+  (`stapel_core.django.api.errors`).** `register_service_errors(errors,
+  remediation=None)` gains an optional `code -> remediation` map — a
+  machine-readable "what to do" hint from the finite `REMEDIATION_VOCAB`
+  (`retry`, `wait_and_retry`, `reauthenticate`, `verify`, `fix_input`,
+  `contact_support`, `bug`). It is validated at registration (every key must be
+  in the accompanying `errors` map and carry a vocabulary value). Undeclared
+  keys fall back to `default_remediation(code, status, params)`, a status+name
+  heuristic ported byte-for-byte from the frontend, so the artifact carries a
+  remediation for every key by construction. `build_error_registry()` projects
+  the global registry into the `errors.json` structure. The `verification` and
+  `captcha` mechanisms now declare their own remediation (e.g. a lost
+  verification challenge → `verify`, a network block → `contact_support`).
+
+- **Captcha error text aligned to the canonical (fuller) copy.**
+  `stapel_core.django.captcha` now registers `error.400.captcha_invalid` /
+  `error.400.captcha_required` with the same wording consumers use
+  (`"Captcha verification failed. Please try again."` / `"Captcha token is
+  required."`), so a service that re-declares these keys produces an
+  order-independent `errors.json`.
+
 ### Added — hardened prod-guard for generated-project settings (SEC-4/SEC-6)
 
 - **`stapel_core.django.prodguard`**: `guard_secret(name, value, min_length=50)`

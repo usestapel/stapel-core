@@ -10,10 +10,13 @@ from stapel_core.django.api.errors import (
     ERR_404_NOT_FOUND,
     ERR_429_RATE_LIMIT,
     ERR_500_INTERNAL,
+    REMEDIATION_VOCAB,
     StapelErrorResponse,
     StapelResponse,
     StapelServiceError,
     StapelValidationError,
+    build_error_registry,
+    default_remediation,
     error_400_bad_request,
     error_401_unauthorized,
     error_403_forbidden,
@@ -361,3 +364,78 @@ class TestRegisterServiceErrors:
         # Missing param — should not raise, falls back to raw template
         resp = StapelErrorResponse(400, "error.test.broken_template")
         assert "Value is" in resp.data["error"]
+
+
+# ---------------------------------------------------------------------------
+# Remediation registry + errors.json artifact projection
+# ---------------------------------------------------------------------------
+
+
+class TestRemediation:
+    def test_declared_remediation_wins_over_heuristic(self):
+        register_service_errors(
+            {"error.409.rem_declared": "x"},
+            remediation={"error.409.rem_declared": "reauthenticate"},
+        )
+        entry = next(
+            e for e in build_error_registry() if e["code"] == "error.409.rem_declared"
+        )
+        # heuristic for 409 is fix_input; the declaration overrides it
+        assert entry["remediation"] == "reauthenticate"
+
+    def test_undeclared_key_falls_back_to_heuristic(self):
+        register_service_errors({"error.409.rem_heuristic": "x"})
+        entry = next(
+            e for e in build_error_registry() if e["code"] == "error.409.rem_heuristic"
+        )
+        assert entry["remediation"] == "fix_input"
+
+    def test_rejects_remediation_for_unknown_key(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="unknown error key"):
+            register_service_errors(
+                {"error.400.rem_a": "a"},
+                remediation={"error.400.rem_b": "retry"},
+            )
+
+    def test_rejects_invalid_remediation_value(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="invalid remediation"):
+            register_service_errors(
+                {"error.400.rem_bad": "a"},
+                remediation={"error.400.rem_bad": "do_something"},
+            )
+
+    def test_default_remediation_heuristic(self):
+        assert default_remediation("error.401.x", 401, []) == "reauthenticate"
+        assert default_remediation("error.500.x", 500, []) == "contact_support"
+        assert default_remediation("error.423.x", 423, []) == "wait_and_retry"
+        assert default_remediation("error.400.y", 400, ["retry_after"]) == "wait_and_retry"
+        assert default_remediation("error.400.step_up_required", 400, []) == "verify"
+        assert default_remediation("error.404.not_found", 404, []) == "retry"
+        assert default_remediation("error.404.user_x", 404, []) == "fix_input"
+        assert default_remediation("error.400.plain", 400, []) == "fix_input"
+        assert default_remediation("error.400.qr_expired", 400, []) == "retry"
+
+
+class TestBuildErrorRegistry:
+    def test_shape_sorted_and_complete(self):
+        register_service_errors({"error.400.artifact_key": "Bad {field} value"})
+        entries = build_error_registry()
+        codes = [e["code"] for e in entries]
+        assert codes == sorted(codes)
+        entry = next(e for e in entries if e["code"] == "error.400.artifact_key")
+        assert set(entry) == {"code", "status", "params", "remediation", "en"}
+        assert entry["status"] == 400
+        assert entry["params"] == ["field"]
+        assert entry["remediation"] in REMEDIATION_VOCAB
+        assert entry["en"] == "Bad {field} value"
+
+    def test_params_deduped_first_seen_order(self):
+        register_service_errors({"error.400.dup": "{a} then {b} then {a}"})
+        entry = next(
+            e for e in build_error_registry() if e["code"] == "error.400.dup"
+        )
+        assert entry["params"] == ["a", "b"]

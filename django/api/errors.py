@@ -96,10 +96,148 @@ COMMON_ERRORS = {
 
 _GLOBAL_REGISTRY = dict(COMMON_ERRORS)
 
+# =============================================================================
+# Remediation registry (machine-readable "what to do" hints)
+# =============================================================================
+#
+# Each error key carries an optional *remediation* — a machine-readable hint,
+# from a finite vocabulary, that tells a frontend/LLM how a user (or agent) can
+# recover from the error. It is the declarative counterpart of the `en` template
+# and, together with `status` + `params`, is emitted into the ``errors.json``
+# codegen artifact (``generate_error_keys``) the frontend consumes.
+#
+# A module declares remediation alongside its keys via ``register_service_errors``
+# (``remediation=`` map). It is *optional*: any key without an explicit
+# declaration falls back to :func:`default_remediation`, a status+name heuristic,
+# so the artifact carries a remediation for every key by construction.
 
-def register_service_errors(errors: dict):
-    """Register service-specific errors into the global registry."""
+#: The finite remediation vocabulary (frontend-core-architecture §2.5). A host
+#: maps each to UX: retryable → "try again"; ``wait_and_retry`` → a timer from
+#: ``params.retry_after_minutes``; ``verify`` → the step-up seam; ``fix_input``
+#: → highlight the offending field; ``reauthenticate`` → re-login;
+#: ``contact_support`` / ``bug`` → escalate.
+REMEDIATION_VOCAB = frozenset(
+    {
+        "retry",
+        "wait_and_retry",
+        "reauthenticate",
+        "verify",
+        "fix_input",
+        "contact_support",
+        "bug",
+    }
+)
+
+#: code -> remediation (explicit declarations only; heuristic fills the rest).
+_REMEDIATION_REGISTRY: Dict[str, str] = {}
+
+
+def register_service_errors(errors: dict, remediation: Optional[dict] = None):
+    """Register service-specific errors into the global registry.
+
+    ``errors`` is a ``code -> en`` map (same map the runtime ``/error-keys/``
+    view serves). ``remediation`` is an optional ``code -> remediation`` map: a
+    machine-readable recovery hint from :data:`REMEDIATION_VOCAB`. Every key in
+    ``remediation`` must be present in ``errors`` and carry a value from the
+    vocabulary; keys left undeclared fall back to :func:`default_remediation`.
+    """
     _GLOBAL_REGISTRY.update(errors)
+    if remediation:
+        for code, hint in remediation.items():
+            if code not in errors:
+                raise ValueError(
+                    f"remediation declared for unknown error key {code!r} "
+                    f"(not in the accompanying errors map)"
+                )
+            if hint not in REMEDIATION_VOCAB:
+                raise ValueError(
+                    f"invalid remediation {hint!r} for {code!r} — "
+                    f"must be one of {sorted(REMEDIATION_VOCAB)}"
+                )
+        _REMEDIATION_REGISTRY.update(remediation)
+
+
+def _params_of(en: str) -> list:
+    """`{name}` interpolation slots in a template, de-duped, first-seen order."""
+    import re
+
+    seen = []
+    for m in re.finditer(r"\{(\w+)\}", en):
+        if m.group(1) not in seen:
+            seen.append(m.group(1))
+    return seen
+
+
+def default_remediation(code: str, status: int, params: list) -> str:
+    """Heuristic remediation for a key with no explicit declaration.
+
+    Ported from the frontend ``gen-errors.mjs`` provisional heuristic so an
+    undeclared key resolves identically on both sides. Keyed off HTTP status and
+    the key's trailing name; explicit declarations always win over this.
+    """
+    import re
+
+    name = ".".join(code.split(".")[2:])
+    if re.search(r"verification|step_up|enrollment", name):
+        return "verify"
+    if any(p.startswith("retry_after") for p in params) or status in (422, 423, 429):
+        return "wait_and_retry"
+    if "sso_required" in name:
+        return "reauthenticate"
+    if status == 401:
+        return "reauthenticate"
+    if status == 500:
+        return "contact_support"
+    if status == 409:
+        return "fix_input"
+    if status == 404:
+        return "retry" if "not_found" in name else "fix_input"
+    if status == 403:
+        return "retry"
+    if status == 400:
+        return (
+            "retry"
+            if re.search(
+                r"expired|challenge|not_pending|qr_(expired|fulfilled|not_found)"
+                r"|magic_link_invalid|code_required",
+                name,
+            )
+            else "fix_input"
+        )
+    return "retry"
+
+
+def build_error_registry() -> list:
+    """Project the global error registry into the ``errors.json`` structure.
+
+    Returns a list of ``{code, status, params, remediation, en}`` dicts, sorted
+    by ``code`` (byte-stable for a drift gate). ``status`` is parsed from the
+    key (``error.<status>.<name>``), ``params`` from the ``en`` template, and
+    ``remediation`` is the explicit declaration or :func:`default_remediation`.
+    Matches the array shape the frontend ``gen-errors.mjs`` already emits, so the
+    frontend can migrate onto this artifact without a format change.
+    """
+    entries = []
+    for code, en in _GLOBAL_REGISTRY.items():
+        try:
+            status = int(code.split(".")[1])
+        except (IndexError, ValueError):
+            continue  # not an `error.<status>.<name>` key — skip defensively
+        params = _params_of(en)
+        remediation = _REMEDIATION_REGISTRY.get(code) or default_remediation(
+            code, status, params
+        )
+        entries.append(
+            {
+                "code": code,
+                "status": status,
+                "params": params,
+                "remediation": remediation,
+                "en": en,
+            }
+        )
+    entries.sort(key=lambda e: e["code"])
+    return entries
 
 
 # =============================================================================
