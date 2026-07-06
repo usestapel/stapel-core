@@ -1,0 +1,22 @@
+{
+  "flow.auth.password_login.description": "Пользователь входит по логину (email/username) и паролю. Эндпоинт включается настройкой AUTH_PASSWORD_LOGIN. Неудачные попытки ведут к прогрессивной блокировке (423 c retry_after). Если у пользователя включён TOTP и настройка PASSWORD_LOGIN_STEP_UP активна (по умолчанию да), вместо токенов возвращается TOTP_REQUIRED c challenge_token — сессия выдаётся только после проверки кода аутентификатора.",
+  "flow.auth.password_login.step.0.note": "Пользователь вводит логин и пароль на форме входа",
+  "flow.auth.password_login.step.1.note": "Проверить пароль; 423 при блокировке; при включённом TOTP и PASSWORD_LOGIN_STEP_UP — ответ TOTP_REQUIRED c challenge_token",
+  "flow.auth.password_login.step.2.note": "Опциональный шаг (только при TOTP_REQUIRED): обменять challenge_token и код аутентификатора на JWT-сессию",
+  "flow.auth.password_login.title": "Вход по паролю (+ опциональный TOTP)",
+  "flow.auth.passwordless_login.description": "Анонимный пользователь получает одноразовый код на почту и обменивает его на JWT-сессию (cookies + пара токенов в теле ответа). Повторный запрос кода ограничен рейт-лимитом (30 секунд между отправками, 429/422 при превышении); после серии неверных кодов адрес временно блокируется. Если адрес не был зарегистрирован, при первом успешном входе создаётся новый пользователь (status=REGISTERED вместо LOGGED_IN).",
+  "flow.auth.passwordless_login.step.0.note": "Пользователь вводит email на форме входа",
+  "flow.auth.passwordless_login.step.1.note": "Запросить одноразовый код на email; 429 при рейт-лимите, 422 при блокировке",
+  "flow.auth.passwordless_login.step.2.note": "Обменять код на JWT-сессию; неверный код уменьшает счётчик попыток",
+  "flow.auth.passwordless_login.step.3.note": "Эмитится при первом входе — профиль и воркспейс создаются подписчиками",
+  "flow.auth.passwordless_login.title": "Вход без пароля (email OTP)",
+  "flow.auth.step_up_verification.description": "РЕФЕРЕНСНЫЙ флоу контракта step-up-верификации (stapel_core.verification, см. flows-and-verification.md §2) — клиенты любого сервиса реализуют его один раз и переиспользуют для всех эндпоинтов, защищённых @requires_verification. Цикл: защищённый эндпоинт отвечает 403 со структурированным конвертом verification (challenge_id, scope, factors, expires_at) → клиент читает challenge, выбирает доступный фактор (факторы взаимозаменяемы: otp_email, otp_phone, totp, passkey закрывают один challenge), инициирует его и завершает проверку → повторяет исходный запрос. Grant хранится сервер-сайд (cache, ключ user+scope, TTL=max_age); stateless-клиенты могут вместо этого прислать заголовок X-Verification-Token из ответа завершения. После MAX_ATTEMPTS неверных попыток challenge сгорает (423) — нужно снова вызвать исходный эндпоинт за новым challenge.",
+  "flow.auth.step_up_verification.step.0.note": "Клиент вызывает защищённый эндпоинт и получает 403 с конвертом verification: challenge_id, scope, factors, expires_at",
+  "flow.auth.step_up_verification.step.1.note": "Прочитать challenge: scope и факторы, отфильтрованные до реально доступных пользователю; 404 для чужого/истёкшего challenge",
+  "flow.auth.step_up_verification.step.2.note": "Инициировать выбранный фактор: отправить код (otp_email/otp_phone) или получить WebAuthn-опции (passkey); totp инициации не требует",
+  "flow.auth.step_up_verification.step.3.note": "Завершить challenge доказательством фактора; успех = {verified, verification_token} + grant сервер-сайд; 400 при неверном коде, 423 когда challenge сгорел от перебора",
+  "flow.auth.step_up_verification.step.4.note": "Повторить исходный запрос — grant уже на сервере; stateless-клиент передаёт X-Verification-Token из ответа завершения",
+  "flow.auth.step_up_verification.step.5.note": "Опционально: посмотреть свои step-up-настройки — по строке {scope, enabled} на каждый scope, который пользователь трогал (enabled=false выключает default_on-scope, enabled=true включает opt_in-scope; strict-эндпоинты настройки игнорируют)",
+  "flow.auth.step_up_verification.step.6.note": "Опционально: изменить настройку {scope, enabled}. ИНВАРИАНТ: выключение (enabled=false) само защищено @requires_verification(scope=verification.settings, level=default_on) — без свежего grant'а придёт 403 с конвертом verification; включение step-up-подтверждения не требует. Обе записи сбрасывают кэш политики в core",
+  "flow.auth.step_up_verification.title": "Step-up-верификация на защищённом эндпоинте (референсный флоу)"
+}

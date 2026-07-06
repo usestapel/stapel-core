@@ -1,0 +1,190 @@
+[
+  {
+    "id": "auth.password_login",
+    "title": "Password login (+ optional TOTP)",
+    "title_key": "flow.auth.password_login.title",
+    "description": "The user signs in with a login (email/username) and password. The endpoint is enabled by the AUTH_PASSWORD_LOGIN setting. Failed attempts lead to progressive lockout (423 with retry_after). If the user has TOTP enabled and the PASSWORD_LOGIN_STEP_UP setting is active (default: yes), TOTP_REQUIRED with a challenge_token is returned instead of tokens — the session is issued only after the authenticator code is verified.",
+    "description_key": "flow.auth.password_login.description",
+    "actors": [
+      "Anonymous user"
+    ],
+    "steps": [
+      {
+        "kind": "human",
+        "order": 0,
+        "note": "The user enters their login and password on the login form",
+        "note_key": "flow.auth.password_login.step.0.note",
+        "ref": ""
+      },
+      {
+        "kind": "http",
+        "order": 1,
+        "note": "Verify the password; 423 when locked out; with TOTP enabled and PASSWORD_LOGIN_STEP_UP — a TOTP_REQUIRED response with a challenge_token",
+        "note_key": "flow.auth.password_login.step.1.note",
+        "ref": "stapel_auth.password.views.PasswordViewSet.login",
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/password/login/"
+          }
+        ]
+      },
+      {
+        "kind": "http",
+        "order": 2,
+        "note": "Optional step (only on TOTP_REQUIRED): exchange the challenge_token and the authenticator code for a JWT session",
+        "note_key": "flow.auth.password_login.step.2.note",
+        "ref": "stapel_auth.mfa.views.TOTPViewSet.challenge_verify",
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/totp/challenge/verify/"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "auth.passwordless_login",
+    "title": "Passwordless login (email OTP)",
+    "title_key": "flow.auth.passwordless_login.title",
+    "description": "An anonymous user receives a one-time code by email and exchanges it for a JWT session (cookies + a token pair in the response body). Requesting the code again is rate-limited (30 seconds between sends; 429/422 when exceeded); after a series of wrong codes the address is temporarily locked. If the address was not registered, the first successful login creates a new user (status=REGISTERED instead of LOGGED_IN).",
+    "description_key": "flow.auth.passwordless_login.description",
+    "actors": [
+      "Anonymous user"
+    ],
+    "steps": [
+      {
+        "kind": "human",
+        "order": 0,
+        "note": "The user enters their email on the login form",
+        "note_key": "flow.auth.passwordless_login.step.0.note",
+        "ref": ""
+      },
+      {
+        "kind": "http",
+        "order": 1,
+        "note": "Request a one-time code by email; 429 on rate limit, 422 when the address is locked",
+        "note_key": "flow.auth.passwordless_login.step.1.note",
+        "ref": "stapel_auth.otp.views.AuthViewSet.email_request",
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/email/request/"
+          }
+        ]
+      },
+      {
+        "kind": "http",
+        "order": 2,
+        "note": "Exchange the code for a JWT session; a wrong code decrements the attempt counter",
+        "note_key": "flow.auth.passwordless_login.step.2.note",
+        "ref": "stapel_auth.otp.views.AuthViewSet.email_verify",
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/email/verify/"
+          }
+        ]
+      },
+      {
+        "kind": "action",
+        "order": 3,
+        "note": "Emitted on first login — the profile and workspace are created by subscribers",
+        "note_key": "flow.auth.passwordless_login.step.3.note",
+        "ref": "user.registered"
+      }
+    ]
+  },
+  {
+    "id": "auth.step_up_verification",
+    "title": "Step-up verification on a protected endpoint (reference flow)",
+    "title_key": "flow.auth.step_up_verification.title",
+    "description": "THE reference flow of the step-up verification contract (stapel_core.verification, see flows-and-verification.md §2) — clients of any service implement it once and reuse it for every endpoint protected by @requires_verification. The cycle: the protected endpoint responds 403 with a structured verification envelope (challenge_id, scope, factors, expires_at) → the client reads the challenge, picks an available factor (factors are interchangeable: otp_email, otp_phone, totp, passkey all close one challenge), initiates it and completes the check → repeats the original request. The grant is stored server-side (cache, user+scope key, TTL=max_age); stateless clients may instead send the X-Verification-Token header from the completion response. After MAX_ATTEMPTS wrong attempts the challenge burns out (423) — call the original endpoint again for a new challenge.",
+    "description_key": "flow.auth.step_up_verification.description",
+    "actors": [
+      "Authenticated user"
+    ],
+    "steps": [
+      {
+        "kind": "human",
+        "order": 0,
+        "note": "The client calls the protected endpoint and receives 403 with a verification envelope: challenge_id, scope, factors, expires_at",
+        "note_key": "flow.auth.step_up_verification.step.0.note",
+        "ref": ""
+      },
+      {
+        "kind": "http",
+        "order": 1,
+        "note": "Read the challenge: the scope and the factors filtered down to those actually available to the user; 404 for a foreign/expired challenge",
+        "note_key": "flow.auth.step_up_verification.step.1.note",
+        "ref": "stapel_auth.verification.views.VerificationViewSet.info",
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/verification/<str:challenge_id>/"
+          }
+        ]
+      },
+      {
+        "kind": "http",
+        "order": 2,
+        "note": "Initiate the chosen factor: send a code (otp_email/otp_phone) or get WebAuthn options (passkey); totp needs no initiation",
+        "note_key": "flow.auth.step_up_verification.step.2.note",
+        "ref": "stapel_auth.verification.views.VerificationViewSet.initiate",
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/verification/<str:challenge_id>/initiate/"
+          }
+        ]
+      },
+      {
+        "kind": "http",
+        "order": 3,
+        "note": "Complete the challenge with the factor proof; success = {verified, verification_token} + a server-side grant; 400 on a wrong code, 423 when the challenge burned out from brute force",
+        "note_key": "flow.auth.step_up_verification.step.3.note",
+        "ref": "stapel_auth.verification.views.VerificationViewSet.complete",
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/verification/<str:challenge_id>/complete/"
+          }
+        ]
+      },
+      {
+        "kind": "human",
+        "order": 4,
+        "note": "Repeat the original request — the grant is already on the server; a stateless client sends the X-Verification-Token from the completion response",
+        "note_key": "flow.auth.step_up_verification.step.4.note",
+        "ref": ""
+      },
+      {
+        "kind": "http",
+        "order": 5,
+        "note": "Optional: view your step-up preferences — one {scope, enabled} row per scope the user has touched (enabled=false disables a default_on scope, enabled=true enables an opt_in scope; strict endpoints ignore the preferences)",
+        "note_key": "flow.auth.step_up_verification.step.5.note",
+        "ref": "stapel_auth.verification.views.VerificationPreferenceViewSet.list_preferences",
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/verification/preferences/"
+          }
+        ]
+      },
+      {
+        "kind": "http",
+        "order": 6,
+        "note": "Optional: change a {scope, enabled} preference. INVARIANT: disabling (enabled=false) is itself protected by @requires_verification(scope=verification.settings, level=default_on) — without a fresh grant a 403 with a verification envelope is returned; enabling requires no step-up confirmation. Both writes reset the policy cache in core",
+        "note_key": "flow.auth.step_up_verification.step.6.note",
+        "ref": "stapel_auth.verification.views.VerificationPreferenceViewSet.set_preference",
+        "endpoints": [
+          {
+            "method": "PUT",
+            "path": "/verification/preferences/"
+          }
+        ]
+      }
+    ]
+  }
+]
