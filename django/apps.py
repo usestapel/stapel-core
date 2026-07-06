@@ -37,6 +37,22 @@ class CommonDjangoConfig(AppConfig):
         # LOGIN_URL/redirect settings pointing at an unresolvable path —
         # otherwise every login_required ends in a user-facing 404.
         from stapel_core.django import checks as _mounts_checks  # noqa: F401
+        # Admin-visibility checks (stapel_core.django.admin.checks): E-level
+        # for a malformed STAPEL_ADMIN["MODELS"] registry, W-level for
+        # cross-service labels and secret-category downgrades.
+        from stapel_core.django.admin import checks as _admin_checks  # noqa: F401
+
+        # Admin visibility (admin-suite AS-3): re-register contrib service
+        # tables (auth.Group, sessions.Session) under declaration-aware admins
+        # and apply STAPEL_ADMIN["MODELS"] overrides (None = unregister,
+        # admin_class = swap). No-op without django.contrib.admin; list this
+        # app after it (standard layout) so autodiscover has already run.
+        from django.apps import apps as django_apps
+
+        if django_apps.is_installed('django.contrib.admin'):
+            from stapel_core.django.admin.registration import setup_admin_visibility
+
+            setup_admin_visibility()
 
         # DRF caches api_settings on first access. If any module (e.g. drf-spectacular)
         # triggers that access before Django settings are fully loaded, the cache will

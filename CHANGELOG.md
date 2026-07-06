@@ -2,6 +2,57 @@
 
 ## [Unreleased]
 
+### Added — admin visibility by access category (admin-suite AS-3)
+
+Builds on AS-1 (`stapel_core.access`): the `@access` category of a model now
+drives what the Django admin shows. Enforcement is the **backend, not app-list
+filtering** — `MandateBackend.has_perm` answers every admin permission check,
+so a direct `/admin/app/model/` URL is closed exactly like the index entry
+(§1.3). How each category lands:
+
+| category | backend (AS-1, unchanged) | admin layer (new) |
+|---|---|---|
+| `business` | view/add/change/delete per declared levels | nothing — plain ModelAdmin behavior |
+| `ops` | `view=HIGH` → invisible below clearance HIGH; mutations FORBIDDEN | read-only **even for superusers** (A5 bypasses the mandate, so the journal contract is re-imposed here); `SHOW_OPS_MODELS` reveals to any staff, still read-only |
+| `secret` | every operation SUPERUSER-only | secret fields masked: excluded from forms, rendered as a placeholder — plaintext never reaches the response, even for the superuser |
+
+- **`StapelModelAdmin`** (`stapel_core.django.admin`) — declaration-aware base
+  ModelAdmin: ops read-only, secret-field masking (name-pattern autodetection
+  on `secret` models, or an explicit `secret_fields` tuple that masks on any
+  category), masked fields stripped from forms/`list_display`/`search_fields`
+  (icontains probing is an oracle). A bare `admin.ModelAdmin` keeps working —
+  the backend still enforces visibility, only the cosmetics are lost.
+- **`STAPEL_ADMIN` conf namespace** — merge-registry `MODELS` (dict patches,
+  `None` unregisters the admin entirely — direct URL 404; `admin_class` swaps
+  the registered admin) and `SHOW_OPS_MODELS` (env-readable dev toggle). The
+  access-shaped keys of a `MODELS` entry feed `effective_access` — **one
+  resolution** with `STAPEL_ACCESS["MODELS"]` (§3.7), so
+  `{"category": "business"}` on an ops journal is real visibility through the
+  backend, not cosmetics. A `category` key re-bases the declaration on that
+  category's preset (that is what "show to every staff" means), remaining
+  level keys patch on top.
+- **Ops admins for the core tables, out of the box** (§1.3 — outbox debugging
+  no longer needs dbshell): `OutboxEvent`, `TaskRecord`, `EventRecord`,
+  `EventRollup`, `PendingAction` are declared `@access.ops` and registered
+  read-only; `ScopeToken` is `@access.secret` with `token_hash` masked.
+  Attribute-only declarations — **no migrations**.
+- **Q9 — django.contrib service tables are ops by convention:**
+  `CONTRIB_OPS_LABELS` (auth.Group, auth.Permission, sessions.Session,
+  contenttypes.ContentType, admin.LogEntry) default to the ops category while
+  undecorated. `auth.Group` is re-registered under a declaration-aware admin
+  (groups are the DAC surface — read-only in the admin now; the classic
+  editable Group is one override away:
+  `STAPEL_ADMIN = {"MODELS": {"auth.Group": {"category": "business"}}}`),
+  `sessions.Session` gets a masked read-only admin. Both hidden by default,
+  revealed read-only by `SHOW_OPS_MODELS`.
+- **Registration hooks** run from `CommonDjangoConfig.ready()` (list
+  `stapel_core.django` after `django.contrib.admin`); exotic layouts can call
+  `stapel_core.django.admin.registration.setup_admin_visibility()` directly.
+- **System checks** (tag `stapel_admin`): E-level for a malformed
+  `STAPEL_ADMIN["MODELS"]` registry or unimportable `admin_class`, W-level for
+  cross-service labels and for a settings overlay downgrading a declared
+  `secret` model (§1.4 — honored, never silent).
+
 ### Changed / Security — staff shadow-sync is now REPLACE, not upgrade-only (admin-suite AS-2)
 
 Consumer half of the staff-role transport (producer lives in stapel-auth

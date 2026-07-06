@@ -7,7 +7,12 @@ are retried by the relay until they succeed.
 """
 from django.db import models
 
+# The light declaration module, not the package root: models load during app
+# population, before the auth machinery the package __init__ pulls in is safe.
+from stapel_core.access.declaration import access
 
+
+@access.ops  # delivery journal: hidden below HIGH, read-only in admin (AS-3)
 class OutboxEvent(models.Model):
     topic = models.CharField(max_length=255, db_index=True)
     event_json = models.TextField(help_text="Serialized stapel_core.bus.Event")

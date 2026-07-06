@@ -12,7 +12,10 @@ instead of scanning raw events (raw retention ≠ rollup retention).
 """
 from django.db import models
 
+from stapel_core.access.declaration import access  # light module — see outbox
 
+
+@access.ops  # append-only stream: hidden below HIGH, read-only in admin (AS-3)
 class EventRecord(models.Model):
     id = models.BigAutoField(primary_key=True)
     stream = models.CharField(max_length=255, db_index=True)
@@ -34,6 +37,7 @@ class EventRecord(models.Model):
         return f"{self.stream}@{self.ts:%Y-%m-%dT%H:%M:%S}"
 
 
+@access.ops  # pre-aggregated buckets: same journal contract as EventRecord
 class EventRollup(models.Model):
     id = models.BigAutoField(primary_key=True)
     # The rollup table name (``into=``) this bucket belongs to — one physical

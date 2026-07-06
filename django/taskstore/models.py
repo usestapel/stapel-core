@@ -3,7 +3,10 @@ import uuid
 
 from django.db import models
 
+from stapel_core.access.declaration import access  # light module — see outbox
 
+
+@access.ops  # task journal: hidden below HIGH, read-only in admin (AS-3)
 class TaskRecord(models.Model):
     PENDING = "pending"
     RUNNING = "running"

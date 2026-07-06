@@ -14,7 +14,10 @@ import uuid
 
 from django.db import models
 
+from stapel_core.access.declaration import access  # light module — see outbox
 
+
+@access.secret  # token carrier: superuser-only, hash masked in admin (AS-3)
 class ScopeToken(models.Model):
     id = models.BigAutoField(primary_key=True)
     token_hash = models.CharField(max_length=64, unique=True)
@@ -30,6 +33,7 @@ class ScopeToken(models.Model):
         return f"scope-token#{self.id} {self.project}"
 
 
+@access.ops  # confirmation queue: resolved via comm functions, read-only in admin
 class PendingAction(models.Model):
     STATUS_PENDING = "pending"
     STATUS_EXECUTED = "executed"
