@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+### Added — `stapel_core.secrets`: secret-provider seam (arch-stapel-vault Part 1)
+
+- **`stapel_core.secrets`** — secret resolution as a core *mechanism*, not a
+  backend. `get_secret(name, default=…)` resolves a secret through a
+  dotted-path provider seam `STAPEL_SECRETS["PROVIDER"]` (like `AUDIT_SINK` /
+  `ROLE_SOURCES`). Provider duck type: `get(name) -> str | None`. The default
+  is `EnvSecretProvider` (`os.environ`) — local dev, the `minimal` preset and
+  every unconfigured project behave exactly as before, with **zero new
+  dependencies**. Pointing `PROVIDER` at `stapel-vault`'s
+  `VaultSecretProvider` (separate OSS module) is what moves production secret
+  storage off the environment into OpenBao / HashiCorp Vault. Decision
+  2026-07-06: env for prod secrets is unacceptable — this is the seam that
+  closes it.
+
+- **Per-process cache with TTL** — a resolved value is memoized for
+  `STAPEL_SECRETS["CACHE_TTL"]` seconds (default 300) so the hot path never
+  re-hits a remote store per request. The TTL doubles as the rotation re-read
+  window; `invalidate_secret(name=None)` forces an eager re-read after a
+  rotation (stapel-vault's rotation hook). Positive-only cache — a miss is
+  never cached, so a just-added secret is visible immediately. `CACHE_TTL=0`
+  disables caching.
+
+- **Fail-closed** — a provider returning `None` with no caller `default`
+  raises `SecretUnavailable` (a missing production secret is a loud boot
+  failure, never a silent `None`). The env provider is the deliberate
+  exception (`fail_closed = False`): missing env var + no default → `None`,
+  preserving the `os.environ.get` semantics existing settings modules rely on.
+
+- **Bootstrap-tolerant** — production settings modules resolve `SECRET_KEY`
+  before `django.setup()`, so provider selection cannot depend on
+  `django.conf.settings`. When settings are unreadable, the provider is taken
+  from the explicit `STAPEL_SECRETS_PROVIDER` env var (the generic `PROVIDER`
+  key stays `no_env`). `stapel_core.django.settings` now resolves `SECRET_KEY`
+  and `JWT_SECRET_KEY` through `get_secret(...)` with their existing defaults —
+  transparent under the env provider, Vault-backed when configured, no config
+  change required.
+
+- **prodguard compatibility** — the SEC-4 guards operate on the *resolved*
+  value: `guard_secret("SECRET_KEY", get_secret("SECRET_KEY"))` catches a
+  placeholder/short/empty secret identically whether it came from env or
+  Vault; the guard needs no provider knowledge (documented in
+  `django/prodguard.py`).
+
+- **System checks** (tag `stapel_secrets`) — W-level (the env default always
+  works): W001 provider not importable, W002 resolved value is not a
+  provider. Deliberately does not probe connectivity.
+
 ### Added — `stapel_core.access`: staff mandate — computed admin rights (admin-suite AS-1)
 
 - **`stapel_core.access`** — mandatory access control for staff/admin

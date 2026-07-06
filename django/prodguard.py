@@ -26,6 +26,21 @@ Usage (prod settings tier)::
 Both functions raise ``django.core.exceptions.ImproperlyConfigured``, which
 Django surfaces as a hard startup failure (fail-closed, matching the
 project's other prod-only checks).
+
+Relationship to the secret-provider seam (``stapel_core.secrets``): these
+guards operate on the **resolved** value, wherever it came from. Whether
+``SECRET_KEY`` was read from the environment (default provider) or from Vault
+(``stapel_vault.VaultSecretProvider``), the canonical prod call is the same::
+
+    from stapel_core.secrets import get_secret
+
+    guard_secret("SECRET_KEY", get_secret("SECRET_KEY"))
+
+So a Vault that hands back a shipped placeholder, a too-short value, or
+nothing is caught exactly like a bad env var — the guard needs no knowledge
+of the provider. (A fail-closed provider raises ``SecretUnavailable`` for a
+missing secret before the guard even runs; the guard still covers the
+"present but placeholder/short" case for every provider.)
 """
 from __future__ import annotations
 

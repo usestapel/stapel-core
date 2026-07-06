@@ -331,6 +331,45 @@ matrix that raised it) a single `"+1"` can reach `block` and 403 the request.
 network class is always an explicit host decision, so audit `"+1"` overrides
 against the strict rows of the matrix.
 
+### Secret provider — `STAPEL_SECRETS` (`secrets/`)
+
+`get_secret(name, default=…) -> str | None` resolves a secret through a
+dotted-path provider seam. The pattern: **settings read secrets through
+`get_secret`, not `os.getenv`**, so a project moves its production secrets off
+the environment into Vault by pointing one setting at a different provider —
+no change to the settings that consume the secret.
+
+```python
+from stapel_core.secrets import get_secret
+
+SECRET_KEY = get_secret("SECRET_KEY", "…dev fallback…")   # env by default
+DATABASES["default"]["PASSWORD"] = get_secret("POSTGRES_PASSWORD")  # fail-closed in prod
+```
+
+| Key | Default | Semantics | What it customizes |
+|---|---|---|---|
+| `PROVIDER` | `stapel_core.secrets.EnvSecretProvider` | replace (dotted path/class/instance) | The secret source (duck type: `get(name) -> str | None`, optional `fail_closed`). Point at `stapel_vault.VaultSecretProvider` for OpenBao/Vault |
+| `CACHE_TTL` | `300` | replace | Per-process value cache TTL (s); also the rotation re-read window. `0` disables caching |
+
+- **Env default, zero deps.** `EnvSecretProvider` reads `os.environ`; local
+  dev, the `minimal` preset and any unconfigured project are unchanged.
+- **Fail-closed.** A provider returning `None` with no caller `default` raises
+  `SecretUnavailable` — a missing prod secret is a loud boot failure. The env
+  provider is `fail_closed = False` (missing var + no default → `None`,
+  matching `os.environ.get`).
+- **Bootstrap.** Prod settings resolve `SECRET_KEY` before `django.setup()`;
+  the provider is then taken from the explicit `STAPEL_SECRETS_PROVIDER` env
+  var (the generic `PROVIDER` key stays `no_env`). `django/settings.py`
+  resolves `SECRET_KEY`/`JWT_SECRET_KEY` through this seam.
+- **Cache/rotation.** Values are memoized for `CACHE_TTL`; `invalidate_secret()`
+  forces an eager re-read (stapel-vault's rotation hook). Misses are never
+  cached.
+- **prodguard.** Guards run over the resolved value —
+  `guard_secret("SECRET_KEY", get_secret("SECRET_KEY"))` — so a
+  placeholder/short/empty secret is caught regardless of provider.
+- System checks (W-level, `stapel_secrets`): W001 unimportable provider, W002
+  not a provider. The env default never trips them.
+
 ### NetIntel providers — `STAPEL_NETINTEL` (`netintel/`)
 
 `classify_ip(ip) -> IpProfile{kind: residential|datacenter|vpn|tor|unknown,

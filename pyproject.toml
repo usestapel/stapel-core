@@ -162,6 +162,7 @@ packages = [
     "stapel_core.flows",
     "stapel_core.lint",
     "stapel_core.netintel",
+    "stapel_core.secrets",
     "stapel_core.verification",
     "stapel_core.kafka",
     "stapel_core.notifications",

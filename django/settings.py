@@ -387,7 +387,15 @@ USE_TZ = True
 AUTH_USER_MODEL = 'users.User'
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-auth-service-change-this-in-production')
+# Resolved through the secret-provider seam (stapel_core.secrets). With the
+# default env provider this is identical to os.getenv('SECRET_KEY', default) —
+# local dev and the minimal preset are unchanged. In production, setting
+# STAPEL_SECRETS_PROVIDER=stapel_vault.VaultSecretProvider (plus the vault's
+# own VAULT_* env) moves this read into Vault with no change here. The provider
+# is selected from the bootstrap env var because this line runs before
+# django.setup() (see stapel_core.secrets).
+from stapel_core.secrets import get_secret  # noqa: E402
+SECRET_KEY = get_secret('SECRET_KEY', 'django-insecure-auth-service-change-this-in-production')
 
 # =============================================================================
 # HOST CONFIGURATION
@@ -429,7 +437,9 @@ _jwt_public_key_b64 = os.getenv('JWT_PUBLIC_KEY', '')
 # Auto-detect algorithm: RS256 if any RSA key is present, otherwise HS256
 _has_rsa_keys = bool(_jwt_private_key_b64 or _jwt_public_key_b64)
 JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'RS256' if _has_rsa_keys else 'HS256')
-JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', SECRET_KEY)
+# Same secret-provider seam as SECRET_KEY (default env provider = os.getenv);
+# defaults to SECRET_KEY when neither the provider nor the env supplies one.
+JWT_SECRET_KEY = get_secret('JWT_SECRET_KEY', SECRET_KEY)
 
 # RSA keys for RS256 (base64 encoded PEM format)
 JWT_PRIVATE_KEY = base64.b64decode(_jwt_private_key_b64).decode('utf-8') if _jwt_private_key_b64 else ''
