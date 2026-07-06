@@ -21,7 +21,7 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install ".[all]" || pip install .
+        run: pip install -e ".[all]" || pip install -e .
 
       - name: Lint
         run: |
@@ -38,14 +38,6 @@ jobs:
         # .[dev] brings pytest/pytest-cov + celery (the optional executor the
         # tests exercise); phonenumbers is a declared runtime dependency now.
         run: pip install ".[dev]" pytest-django
-
-      - name: Hide local package source from pytest
-        # The flat layout (package-dir={"stapel_core":"."}) makes __init__.py live at
-        # the repo root. pytest tries to import it as a package initializer during
-        # test setup (importtestmodule(self.path / "__init__.py")), which fails because
-        # the file is imported without a package context. Renaming it after pip install
-        # (package is now in site-packages) prevents pytest from finding it.
-        run: mv __init__.py __init__.py.bak
 
       - name: Tests with coverage
         run: |
