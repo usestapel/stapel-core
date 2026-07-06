@@ -165,6 +165,15 @@ def serialize_user_to_jwt_data(user) -> Dict[str, Any]:
     if hasattr(user, "phone") and user.phone:
         data["phone"] = user.phone
 
+    # Staff roles claim (admin-suite AS-2): staff/superuser tokens only.
+    # Present-but-empty is authoritative ("zero roles"); absence means the
+    # user model has no field (pre-AS-2) — consumers must not touch local
+    # state for such tokens.
+    if data["is_staff"] or data["is_superuser"]:
+        roles = getattr(user, "staff_roles", None)
+        if roles is not None:
+            data["staff_roles"] = sorted(str(r) for r in roles)
+
     return data
 
 
@@ -210,6 +219,29 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     Returns:
         Django User instance or None if creation failed
     """
+    user = _get_or_create_user_from_jwt(user_data)
+
+    # Bridge to stapel_core.access (AS-1): stamp the validated claim onto the
+    # request user instance so MandateBackend's claim_roles source reads the
+    # FRESH token, not a stale stored field. Transient attribute,
+    # request-scoped (CLAIM_ATTR = "_stapel_staff_roles_claim").
+    if user is not None and "staff_roles" in user_data:
+        from stapel_core.access.sources import CLAIM_ATTR
+
+        setattr(
+            user, CLAIM_ATTR, [str(r) for r in (user_data.get("staff_roles") or [])]
+        )
+    return user
+
+
+def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
+    """Core get-or-create logic for :func:`get_or_create_user_from_jwt`.
+
+    The public wrapper stamps the transient ``staff_roles`` claim
+    (CLAIM_ATTR) onto whatever user this returns.
+    """
+    from django.conf import settings
+
     User = _get_user_model()
     pk = user_data.get("user_id")
     if not pk:
@@ -220,22 +252,36 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         # Try to get existing user by PK
         user = User.objects.get(pk=pk)
 
-        # Update user permissions if changed
-        # NOTE: Only upgrade permissions, never downgrade. This prevents accidental
-        # permission loss when JWT comes from a service with stale/incomplete user data.
+        # Staff status sync-down (admin-suite AS-2, в.3).
         updated = False
-        jwt_is_staff = user_data.get("is_staff", False)
-        jwt_is_superuser = user_data.get("is_superuser", False)
+        create_from_jwt = getattr(settings, "JWT_CREATE_USERS_FROM_TOKEN", True)
 
-        # Only upgrade to staff, never downgrade
-        if jwt_is_staff and not user.is_staff:
-            user.is_staff = True
-            updated = True
-
-        # Only upgrade to superuser, never downgrade
-        if jwt_is_superuser and not user.is_superuser:
-            user.is_superuser = True
-            updated = True
+        if create_from_jwt:
+            # Consumer (shadow-copy) mode — REPLACE from the claim (в.3):
+            # auth is the source of truth for staff status. The old
+            # "upgrade-only" rule is gone: it made revocation impossible (A3)
+            # AND let a replayed stale token re-elevate a demoted admin.
+            jwt_is_staff = bool(user_data.get("is_staff", False))
+            jwt_is_superuser = bool(user_data.get("is_superuser", False))
+            if user.is_staff != jwt_is_staff:
+                user.is_staff = jwt_is_staff
+                updated = True
+            if user.is_superuser != jwt_is_superuser:
+                user.is_superuser = jwt_is_superuser
+                updated = True
+            # Roles: REPLACE only when the claim is present. Absence =
+            # pre-AS-2 token = no information: never grant and never revoke
+            # from silence (no downgrade AND no upgrade by an old token).
+            if "staff_roles" in user_data and hasattr(user, "staff_roles"):
+                claim_roles = [str(r) for r in (user_data.get("staff_roles") or [])]
+                if list(user.staff_roles or []) != claim_roles:
+                    user.staff_roles = claim_roles
+                    updated = True
+        # else: authoritative-user-store mode (auth service / monolith with
+        # stapel-auth): the local DB is canonical, a token must never write
+        # staff attributes back into it. (This also fixes the pre-AS-2 hole
+        # where a stale staff token replayed at the auth service re-elevated
+        # a demoted admin via upgrade-only.)
 
         if user.is_active != user_data.get("is_active", True):
             user.is_active = user_data.get("is_active", True)
@@ -271,8 +317,6 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         # Check if we should create users from JWT
         # Auth service should NOT create users - if user_id not found, JWT is stale
         # Other services should create users to sync from auth service
-        from django.conf import settings
-
         create_from_jwt = getattr(settings, "JWT_CREATE_USERS_FROM_TOKEN", True)
 
         if not create_from_jwt:
@@ -344,6 +388,10 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
                             is_active=user_data.get("is_active", True),
                         )
                     _apply_jwt_fields(user, user_data, phone)
+                    if "staff_roles" in user_data and hasattr(user, "staff_roles"):
+                        user.staff_roles = [
+                            str(r) for r in (user_data.get("staff_roles") or [])
+                        ]
                     user.set_unusable_password()
                     user.save()
                     logger.info(f"Re-created user with new PK: {pk}")
@@ -368,6 +416,10 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
                 raise
 
             _apply_jwt_fields(user, user_data, phone)
+            if "staff_roles" in user_data and hasattr(user, "staff_roles"):
+                user.staff_roles = [
+                    str(r) for r in (user_data.get("staff_roles") or [])
+                ]
             # Set unusable password since auth is handled by auth service
             user.set_unusable_password()
             user.save()

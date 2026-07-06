@@ -273,14 +273,16 @@ class TestGetOrCreateUserFromJwt:
         user = get_or_create_user_from_jwt(upgraded)
         assert user.is_staff
 
-    def test_does_not_downgrade_is_staff(self):
+    def test_replaces_is_staff_downgrade(self):
+        # AS-2 (в.3): consumer sync-down REPLACES from the token — auth is the
+        # source of truth, so a cleared flag DOWNGRADES a local staff.
         data = self._data(is_staff=True)
         user = get_or_create_user_from_jwt(data)
         assert user.is_staff
 
         downgrade = self._data(user_id=str(user.pk), is_staff=False, email=data["email"], username=data["username"])
         user = get_or_create_user_from_jwt(downgrade)
-        assert user.is_staff  # must not downgrade
+        assert not user.is_staff  # REPLACE: downgrade now lands
 
     def test_upgrades_is_superuser(self):
         data = self._data(is_superuser=False)
@@ -291,14 +293,16 @@ class TestGetOrCreateUserFromJwt:
         user = get_or_create_user_from_jwt(upgraded)
         assert user.is_superuser
 
-    def test_does_not_downgrade_is_superuser(self):
+    def test_replaces_is_superuser_downgrade(self):
+        # AS-2 (в.3): superuser flag is REPLACED from the token, same as
+        # is_staff — a cleared flag downgrades a local superuser.
         data = self._data(is_superuser=True)
         user = get_or_create_user_from_jwt(data)
         assert user.is_superuser
 
         downgrade = self._data(user_id=str(user.pk), is_superuser=False, email=data["email"], username=data["username"])
         user = get_or_create_user_from_jwt(downgrade)
-        assert user.is_superuser
+        assert not user.is_superuser  # REPLACE: downgrade now lands
 
     def test_updates_is_active(self):
         data = self._data(is_active=True)

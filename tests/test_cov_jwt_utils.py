@@ -117,6 +117,48 @@ class TestLoadUserByUid:
 
 
 # ---------------------------------------------------------------------------
+# serialize_user_to_jwt_data — staff_roles claim (admin-suite AS-2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestSerializeStaffRolesClaim:
+    def test_staff_user_with_field_emits_sorted_claim(self):
+        User = get_user_model()
+        user = User.objects.create_user(username="sr1", is_staff=True)
+        user.staff_roles = ["editor", "admin"]
+        user.save()
+        data = jwt_utils.serialize_user_to_jwt_data(user)
+        assert data["staff_roles"] == ["admin", "editor"]
+
+    def test_non_staff_user_has_no_claim(self):
+        User = get_user_model()
+        user = User.objects.create_user(username="sr2")
+        user.staff_roles = ["admin"]
+        user.save()
+        data = jwt_utils.serialize_user_to_jwt_data(user)
+        assert "staff_roles" not in data
+
+    def test_superuser_with_empty_field_emits_empty_claim(self):
+        User = get_user_model()
+        user = User.objects.create_user(username="sr3", is_superuser=True)
+        data = jwt_utils.serialize_user_to_jwt_data(user)
+        assert data["staff_roles"] == []
+
+    def test_model_without_field_omits_claim(self):
+        # Custom user without the mixin field: no key at all (pre-AS-2).
+        class _FakeUser:
+            pk = "x"
+            email = "f@example.com"
+            username = "fake"
+            is_staff = True
+            is_superuser = False
+            is_active = True
+
+        data = jwt_utils.serialize_user_to_jwt_data(_FakeUser())
+        assert "staff_roles" not in data
+
+
+# ---------------------------------------------------------------------------
 # _ensure_user_in_staff_group
 # ---------------------------------------------------------------------------
 
@@ -180,7 +222,10 @@ class TestGetOrCreateUserFromJWT:
         assert result.auth_type == "phone"
         assert result.phone == "+15551234567"
 
-    def test_existing_user_permissions_never_downgraded(self):
+    def test_existing_user_permissions_replaced_downgraded(self):
+        # Consumer mode (JWT_CREATE_USERS_FROM_TOKEN default True): auth is the
+        # source of truth (в.3) — is_staff/is_superuser are REPLACED, so a
+        # token with the flags cleared DOWNGRADES a local staff/superuser.
         User = get_user_model()
         user = User.objects.create_user(
             username="ex2", email="e2@example.com", is_staff=True, is_superuser=True
@@ -194,10 +239,127 @@ class TestGetOrCreateUserFromJWT:
         )
         result = jwt_utils.get_or_create_user_from_jwt(data)
         result.refresh_from_db()
-        assert result.is_staff is True
-        assert result.is_superuser is True
+        assert result.is_staff is False
+        assert result.is_superuser is False
         # is_active IS synced (both directions)
         assert result.is_active is False
+
+    def test_existing_user_roles_replaced_from_claim(self):
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="rr1", email="rr1@example.com", is_staff=True
+        )
+        user.staff_roles = ["admin"]
+        user.save()
+        data = self._data(
+            user_id=str(user.pk),
+            email="rr1@example.com",
+            is_staff=True,
+            staff_roles=["editor"],
+        )
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        result.refresh_from_db()
+        assert result.staff_roles == ["editor"]
+
+    def test_existing_user_roles_authoritative_empty_revokes(self):
+        # Present-but-empty claim is authoritative "zero roles" — revocation
+        # must land locally.
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="rr2", email="rr2@example.com", is_staff=True
+        )
+        user.staff_roles = ["admin", "editor"]
+        user.save()
+        data = self._data(
+            user_id=str(user.pk),
+            email="rr2@example.com",
+            is_staff=True,
+            staff_roles=[],
+        )
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        result.refresh_from_db()
+        assert result.staff_roles == []
+
+    def test_existing_user_roles_untouched_when_claim_absent(self):
+        # A pre-AS-2 token carries no staff_roles key: roles must not change
+        # (no downgrade AND no upgrade from silence); booleans still REPLACE.
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="rr3", email="rr3@example.com", is_staff=True
+        )
+        user.staff_roles = ["admin"]
+        user.save()
+        data = self._data(
+            user_id=str(user.pk), email="rr3@example.com", is_staff=True
+        )
+        assert "staff_roles" not in data
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        result.refresh_from_db()
+        assert result.staff_roles == ["admin"]
+        assert result.is_staff is True
+
+    @override_settings(JWT_CREATE_USERS_FROM_TOKEN=False)
+    def test_existing_user_staff_attrs_not_written_in_auth_mode(self):
+        # Auth-service/monolith mode: the local DB is canonical. A token must
+        # never write staff booleans OR roles back into it (closes the
+        # re-elevation-by-stale-token hole).
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="am1", email="am1@example.com", is_staff=True, is_superuser=True
+        )
+        user.staff_roles = ["admin"]
+        user.save()
+        data = self._data(
+            user_id=str(user.pk),
+            email="am1@example.com",
+            is_staff=False,
+            is_superuser=False,
+            staff_roles=["editor"],
+        )
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        result.refresh_from_db()
+        assert result.is_staff is True
+        assert result.is_superuser is True
+        assert result.staff_roles == ["admin"]
+
+    def test_claim_attr_stamped_on_user_when_claim_present(self):
+        from stapel_core.access.sources import CLAIM_ATTR
+
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="ca1", email="ca1@example.com", is_staff=True
+        )
+        data = self._data(
+            user_id=str(user.pk),
+            email="ca1@example.com",
+            is_staff=True,
+            staff_roles=["editor", "admin"],
+        )
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        assert getattr(result, CLAIM_ATTR) == ["editor", "admin"]
+
+    def test_claim_attr_absent_when_claim_absent(self):
+        from stapel_core.access.sources import CLAIM_ATTR
+
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="ca2", email="ca2@example.com", is_staff=True
+        )
+        data = self._data(user_id=str(user.pk), email="ca2@example.com", is_staff=True)
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        assert not hasattr(result, CLAIM_ATTR)
+
+    def test_created_user_gets_roles_from_claim(self):
+        data = self._data(
+            username="cshadow",
+            email="cshadow@example.com",
+            is_staff=True,
+            staff_roles=["editor"],
+        )
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        assert result is not None
+        result.refresh_from_db()
+        assert result.staff_roles == ["editor"]
 
     def test_existing_staff_user_added_to_staff_group(self):
         User = get_user_model()

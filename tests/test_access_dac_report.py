@@ -74,6 +74,9 @@ def make_staff(*, roles=None, superuser=False):
     )
     if roles is not None:
         user.staff_roles = list(roles)
+        # AS-2: the staff_roles field is now the authoritative role source, so
+        # persist it — build_report() reloads users from the DB.
+        user.save(update_fields=["staff_roles"])
     return user
 
 
@@ -237,9 +240,9 @@ def test_report_matrix_and_roles(declare):
 
 def test_report_lists_dac_escalations(declare):
     declare(access.standard, TaskRecord)
-    user = make_staff()
-    group, _ = Group.objects.get_or_create(name="role:viewer")
-    user.groups.add(group)  # roles via the group source (offline chain)
+    # AS-2: role via the authoritative staff_roles field (default User now has
+    # it, so the field source wins over the role:* group fallback).
+    user = make_staff(roles=["viewer"])
     user.user_permissions.add(perm("delete_taskrecord"))
     report = build_report()
     rows = [r for r in report["dac_escalations"] if r["user_id"] == str(user.pk)]
@@ -261,9 +264,8 @@ def test_report_flags_grants_of_unmandated_staff():
 
 def test_report_skips_grants_within_mandate(declare):
     declare(access.standard, TaskRecord)
-    user = make_staff()
-    group, _ = Group.objects.get_or_create(name="role:admin")
-    user.groups.add(group)
+    # AS-2: role via the authoritative staff_roles field (see above).
+    user = make_staff(roles=["admin"])
     user.user_permissions.add(perm("delete_taskrecord"))  # admin may delete anyway
     report = build_report()
     assert [r for r in report["dac_escalations"] if r["user_id"] == str(user.pk)] == []

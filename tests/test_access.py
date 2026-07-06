@@ -299,6 +299,10 @@ def test_field_source_authoritative_even_when_empty(db):
 
 def test_groups_fallback_without_field(db):
     user = make_user(save=True)
+    # AS-2 adds staff_roles to the default User, so simulate a user model that
+    # genuinely lacks the field (None => user_field_roles abstains) to exercise
+    # the group_roles fallback rung of the ladder.
+    user.staff_roles = None
     group, _ = Group.objects.get_or_create(name="role:editor")
     other, _ = Group.objects.get_or_create(name="Staff")
     user.groups.add(group, other)

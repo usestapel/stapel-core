@@ -21,6 +21,7 @@ from django.conf import settings
 from .utils import (
     get_or_create_user_from_jwt,
     extract_jwt_from_request,
+    load_user_by_uid,
     set_jwt_cookies,
 )
 from .provider import jwt_provider
@@ -152,7 +153,12 @@ class JWTAuthMiddleware(MiddlewareMixin):
 
         # Step 6: Access token invalid/expired, try refresh
         if refresh_token and self._refresh_allowed():
-            new_access_token = jwt_provider.refresh_access_token(refresh_token)
+            # Re-mint from the DB (load_user_by_uid), not from the refresh
+            # token's own (up-to-7-day stale) claims — otherwise a revoked
+            # staff role/flag would resurrect on refresh under REPLACE (AS-2).
+            new_access_token = jwt_provider.refresh_access_token(
+                refresh_token, load_user_by_uid
+            )
             if new_access_token:
                 # Validate new token to get user data
                 user_data = jwt_provider.validate_token(new_access_token)
@@ -184,7 +190,11 @@ class JWTAuthMiddleware(MiddlewareMixin):
 
     def _do_refresh(self, request, refresh_token: str):
         """Proactively refresh access token."""
-        new_access_token = jwt_provider.refresh_access_token(refresh_token)
+        # Fresh DB loader (see step 6): closes the resurrection window where a
+        # proactive refresh re-mints from stale refresh-token claims (AS-2).
+        new_access_token = jwt_provider.refresh_access_token(
+            refresh_token, load_user_by_uid
+        )
         if new_access_token:
             request._jwt_refreshed = True
             request._new_access_token = new_access_token

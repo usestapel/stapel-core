@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Changed / Security — staff shadow-sync is now REPLACE, not upgrade-only (admin-suite AS-2)
+
+Consumer half of the staff-role transport (producer lives in stapel-auth
+[Unreleased], AS-2 — wording aligned). Auth is the single source of truth for
+staff status; the sync-down in `get_or_create_user_from_jwt` switches from
+**upgrade-only** to **REPLACE from the claim** (в.3).
+
+- **`staff_roles` field on `AbstractStapelUser`** (`JSONField(default=list)`,
+  migration `users/0006`): the shadow copy of the `staff_roles` JWT claim.
+  Auth is the single writer (A2); consumers only mirror it.
+- **`serialize_user_to_jwt_data` emits the `staff_roles` claim** on
+  staff/superuser tokens only, sorted for a stable ordering. Present-but-empty
+  is authoritative "zero roles"; absence means the model has no field (pre-AS-2)
+  and consumers must not touch local state.
+- **`get_or_create_user_from_jwt` sync-down REPLACE (в.3, breaking on the
+  consumer side):** `is_staff` / `is_superuser` are now REPLACED from the token
+  (a cleared flag DOWNGRADES a local staff/superuser — revocation finally
+  lands, A3). `staff_roles` is REPLACED **only when the claim is present**;
+  absence = no information (never grant, never revoke from silence). The old
+  "upgrade-only" rule is gone. Migration path for services relying on *locally
+  assigned* staff flags on shadow users: recreate those staffs in the auth
+  service before upgrading; after the upgrade a fresh-token login overwrites
+  local `is_staff`/`is_superuser` with the auth-side values. Old tokens without
+  the claim change nothing, so mixed fleets degrade safely during rollout.
+- **Security — re-elevation hole closed.** On the auth service / monolith
+  (`JWT_CREATE_USERS_FROM_TOKEN=False`) a token now writes **no** staff
+  attributes into the canonical store at all. The pre-AS-2 upgrade-only rule
+  wrote into that store, so a replayed stale staff token could re-elevate a
+  demoted admin; that is gone.
+- **Bridge to AS-1 (`stapel_core.access`):** the validated claim is stamped
+  onto the request user as the transient `CLAIM_ATTR`, so `MandateBackend`'s
+  `claim_roles` source reads the fresh token, not a stored field.
+- **Resurrection window closed at refresh:** the JWT middleware's proactive and
+  fallback refresh now re-mint via `load_user_by_uid` (fresh DB) instead of the
+  refresh token's own up-to-7-day-stale claims, so a revoked role/flag cannot
+  resurrect on refresh under REPLACE.
+
 ### Added — `stapel_core.i18n`: bilingual content shipping (i18n-shipping wave 0)
 
 - **`stapel_core.i18n`** — the flow-i18n contour generalized to arbitrary

@@ -34,6 +34,11 @@ class AbstractStapelUser(AbstractUser):
     is_anonymous = models.BooleanField(default=False)
     anonymous_created_at = models.DateTimeField(null=True, blank=True)
 
+    # Staff roles (admin-suite AS-2): materialized role names for the JWT
+    # claim. Auth service is the single writer (A2); shadow copies in
+    # consumer services are REPLACED from the staff_roles claim (в.3).
+    staff_roles = models.JSONField(default=list, blank=True)
+
     # User status fields
     onboarding_completed = models.BooleanField(default=False)
     profile_completed = models.BooleanField(default=False)
