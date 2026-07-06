@@ -2,6 +2,68 @@
 
 ## [Unreleased]
 
+### Added — `stapel_core.access`: staff mandate — computed admin rights (admin-suite AS-1)
+
+- **`stapel_core.access`** — mandatory access control for staff/admin
+  (docs/admin-suite.md §3): staff permissions are a *computed function* of
+  (model declaration × role clearance), not accumulated `auth_permission`
+  rows. Declarations: `@access(view=…, add=…, change=…, delete=…,
+  category=…)` with presets `@access.standard` (business; view=LOW,
+  add/change=MID, delete=HIGH — also the implicit default of every
+  undecorated model), `@access.sensitive`, `@access.ops` (read-only journal,
+  view=HIGH, mutations forbidden), `@access.secret` (superuser-only). The
+  declaration is a plain class attribute — no `Meta.permissions`, no
+  migrations; a decorator change takes effect on deploy (A1, no drift by
+  construction). Admin category (business/ops/secret) lives in the same
+  declaration, ready for the AS-3 visibility layer.
+
+- **`MandateBackend`** (auth backend): `has_perm("app.change_model")` is
+  evaluated at call time — parse codename → effective declaration
+  (decorator merged with the `STAPEL_ACCESS["MODELS"]` overlay) → max
+  clearance of the user's roles (with per-app scopes) → level comparison.
+  Superuser is outside the mandate (A5); non-staff and inactive users are
+  never granted; custom (non-CRUD) codenames are left to DAC. Roles resolve
+  through the **`ROLE_SOURCES` seam** — an ordered chain `(user) ->
+  list[str] | None`, default: JWT-claim attribute (AS-2 transport stamps
+  `_stapel_staff_roles_claim`) → local `staff_roles` field → Django groups
+  named `role:<name>`; the first non-`None` answer is authoritative, even
+  when empty (a revocation synced down must not be resurrected by stale
+  groups). With no roles resolvable the mandate disengages — existing
+  projects keep today's behavior until the first role is assigned (opt-in).
+
+- **Role registry `STAPEL_ACCESS["ROLES"]`** — merge-registry over builtins
+  `viewer`(LOW) / `editor`(MID) / `admin`(HIGH): patch per key, define new
+  roles (`clearance` required), `None` disables. App scopes shipped in v1
+  (Q7): `{"accountant": {"clearance": "low", "apps": {"stapel_billing":
+  "high"}}}` — the scope entry replaces the base clearance inside that
+  app_label. Definitions are deploy config, assignments belong to the auth
+  service (A2); a runtime-definitions mode is *reserved* behind
+  `RUNTIME_ROLE_DEFINITIONS` with a written mini-design (`access/roles.py`
+  docstring), not implemented.
+
+- **DAC overlay with audit (A4)** — `AuditedModelBackend`, a drop-in
+  `ModelBackend`: manual point-grants keep working; a grant used *above*
+  the user's mandate is logged (`stapel_core.access` logger) and emits the
+  `dac_escalation` signal — allowed by default, never silent.
+  `STAPEL_ACCESS["STRICT"] = True` makes the mandate a ceiling (escalation
+  denied for staff; superuser and custom codenames unaffected).
+
+- **`access_report` management command** (`--json`) — the audit surface:
+  role × model × operation matrix, every DAC grant above the mandate (incl.
+  grants of role-less staff), models without an `@access` declaration.
+
+- **System checks** (tag `stapel_access`): E001/E002 malformed
+  ROLES/MODELS policy, E003 STRICT requested but unenforceable (plain
+  `ModelBackend` in the chain), W-level hints for a configured-but-not-
+  installed backend, unaudited DAC, unknown model labels (legal in shared
+  microservice deploy configs), and the reserved runtime-roles flag.
+
+- Out of AS-1 scope, staying on the roadmap: JWT `staff_roles` claim +
+  sync-down + `StaffRole` assignments in stapel-auth (AS-2), admin
+  visibility / `StapelModelAdmin` / secret-field masking (AS-3), step-up on
+  HIGH operations (AS-6). `ensure_staff_group_permissions` (`groups.py`)
+  remains the documented non-mandate legacy path.
+
 ### Added — `errors.json` codegen artifact + declarative remediation (error-remediation)
 
 - **`errors.json` — the backend companion of `schema.json`/`flows.json`.** New

@@ -125,6 +125,7 @@ exclude_lines = [
 package-dir = {"stapel_core" = "."}
 packages = [
     "stapel_core",
+    "stapel_core.access",
     "stapel_core.bus",
     "stapel_core.bus.backends",
     "stapel_core.captcha",

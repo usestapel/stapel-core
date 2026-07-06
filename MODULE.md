@@ -499,6 +499,46 @@ issued = gateway.issue_token("proj-1", container="c-1", network="10.0.7.4")
 All trust-deciding keys are `no_env` — a stray same-named env var can never
 swap the policy engine, the audit sink, or the network verifier.
 
+### Staff mandate — `STAPEL_ACCESS` (`access/`)
+
+Mandatory access control for staff/admin (docs/admin-suite.md §3, AS-1):
+staff rights are a *computed function* of (model declaration × role
+clearance), never rows accumulated in `auth_permission`. Clearances
+`LOW < MID < HIGH`; superuser is outside the mandate (Django semantics),
+non-staff never receives mandate grants.
+
+```python
+from stapel_core.access import access, Level
+
+@access.standard      # business; view=LOW, add/change=MID, delete=HIGH — the
+class Listing(...): … # implicit default of every undecorated model
+@access.sensitive     # view=MID, mutations HIGH (PII, money)
+@access.ops           # ops journal: view=HIGH, add/change/delete forbidden
+@access.secret        # superuser-only, all operations
+@access(view="mid", delete="high", category="business")   # full form
+
+AUTHENTICATION_BACKENDS = [
+    "stapel_core.access.backend.MandateBackend",        # MAC: declaration × clearance
+    "stapel_core.access.backend.AuditedModelBackend",   # DAC overlay: manual grants,
+]                                                       # escalation audited / STRICT-capped
+```
+
+| Key | Default | Semantics | What it customizes |
+|---|---|---|---|
+| `ROLES` | `{}` | **merge** over builtins `viewer`(LOW)/`editor`(MID)/`admin`(HIGH) | Role definitions: `{"accountant": {"clearance": "low", "apps": {"stapel_billing": "high"}}}`; `None` disables a builtin; `apps` = per-app clearance scope |
+| `MODELS` | `{}` | **merge** over `@access` decorators | Host override per `"app_label.Model"`: patch dict (`{"delete": "mid"}`) or `None` (back to implicit standard) |
+| `ROLE_SOURCES` | claim → user-field → `role:*` groups | replace (list of dotted paths/callables) | Where a user's roles come from: `(user) -> list[str] \| None`; first non-`None` is authoritative (empty list terminates — sync-down replace) |
+| `STRICT` | `False` | replace | `False`: DAC grant above mandate allowed but logged + `dac_escalation` signal + `access_report` line (A4). `True`: mandate is a ceiling, escalation denied |
+| `RUNTIME_ROLE_DEFINITIONS` | `False` | reserved | Runtime-editable role definitions (mini-design in `access/roles.py`, not implemented; W-check if set) |
+
+All keys are `no_env`. Feature is opt-in by the first role: with no roles
+resolvable the backends behave like today's Django (checks
+`stapel_core.access.E00x/W00x` flag misconfiguration). Audit surface:
+`manage.py access_report [--json]` — role × model × operation matrix, DAC
+grants above mandate, undeclared models. Role *assignment* transport (JWT
+claim `staff_roles`, `StaffRole` in stapel-auth) is AS-2; admin visibility
+built on the same declarations is AS-3.
+
 ### GDPR providers (`gdpr.py`)
 
 Subclass `GDPRProvider` (define `section`, implement `export` / `delete` /

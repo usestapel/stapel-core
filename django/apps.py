@@ -27,6 +27,9 @@ class CommonDjangoConfig(AppConfig):
 
         # System checks (registered on import; W-level, never block deploys).
         from stapel_core.netintel import checks as _netintel_checks  # noqa: F401
+        # Staff-mandate checks (stapel_core.access): E-level for malformed
+        # ROLES/MODELS policy and an unenforceable STRICT mode, W-level hints.
+        from stapel_core.access import checks as _access_checks  # noqa: F401
 
         # DRF caches api_settings on first access. If any module (e.g. drf-spectacular)
         # triggers that access before Django settings are fully loaded, the cache will
