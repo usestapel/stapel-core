@@ -35,6 +35,12 @@ from .docs import (
     render_flow_markdown,
     render_index_markdown,
 )
+from .gherkin import (
+    gherkin_keywords,
+    render_feature,
+    render_fixtures,
+    render_step_defs,
+)
 from .i18n import (
     flow_source_texts,
     load_app_catalogs,
@@ -57,8 +63,12 @@ __all__ = [
     "flow_step",
     "flow_source_texts",
     "get_flow_doc_renderer",
+    "gherkin_keywords",
     "load_app_catalogs",
+    "render_feature",
+    "render_fixtures",
     "render_flow_markdown",
     "render_index_markdown",
+    "render_step_defs",
     "resolve_flow_texts",
 ]
