@@ -631,14 +631,35 @@ AUTHENTICATION_BACKENDS = [
 | `ROLE_SOURCES` | claim → user-field → `role:*` groups | replace (list of dotted paths/callables) | Where a user's roles come from: `(user) -> list[str] \| None`; first non-`None` is authoritative (empty list terminates — sync-down replace) |
 | `STRICT` | `False` | replace | `False`: DAC grant above mandate allowed but logged + `dac_escalation` signal + `access_report` line (A4). `True`: mandate is a ceiling, escalation denied |
 | `RUNTIME_ROLE_DEFINITIONS` | `False` | reserved | Runtime-editable role definitions (mini-design in `access/roles.py`, not implemented; W-check if set) |
+| `STEP_UP` | `{}` → `{"ENFORCE": True, "LEVELS": ["high"], "SCOPE": "sensitive", "MAX_AGE": 900}` | merge over defaults | Step-up on HIGH admin operations (AS-6, Q8a — on by default). A gated op needs a fresh `stapel_core.verification` grant for `SCOPE` on top of the mandate; enforced in `StapelModelAdmin`. `ENFORCE=False` disables |
+| `AUDIT_SINK` | `access.audit.eventstore_sink` | replace (dotted) | Where access events (`access.dac_escalation` / `access.step_up_denied`) land: `callable(stream, payload, *, project, container)`, gateway-shaped. Default appends to the eventstore |
+| `AUDIT_STREAM` | `"audit"` | replace | Eventstore stream for access audit lines (env-readable) |
+| `NOTIFY` | `None` | replace (dotted) | Optional alerting shim `callable(event, payload)` after the sink (e.g. push to notifications/SIEM); best-effort |
 
-All keys are `no_env`. Feature is opt-in by the first role: with no roles
-resolvable the backends behave like today's Django (checks
-`stapel_core.access.E00x/W00x` flag misconfiguration). Audit surface:
-`manage.py access_report [--json]` — role × model × operation matrix, DAC
-grants above mandate, undeclared models. Role *assignment* transport (JWT
-claim `staff_roles`, `StaffRole` in stapel-auth) is AS-2; admin visibility
-built on the same declarations is AS-3.
+All keys `no_env` except `AUDIT_STREAM`. Feature is opt-in by the first role:
+with no roles resolvable the backends behave like today's Django (checks
+`stapel_core.access.E00x/W00x` flag misconfiguration).
+
+**Step-up on HIGH (AS-6, §3.8).** `delete` in the standard preset (and any
+operation declared HIGH) requires a fresh verification grant — the mandate
+says a role *may* act, step-up says it was re-proven recently. The grant store
+is `stapel_core.verification`'s, i.e. the *same* one stapel-auth's step-up flow
+(and the legacy `/totp/step-up/` bridge, scope `sensitive`/max_age `900`) write
+to — completing step-up anywhere satisfies the admin gate (no auth hook). Only
+`StapelModelAdmin` enforces it (permission-layer deny closes every mutation
+path; the add/change/delete views return an educational 403 — core has no web
+verification flow). **Degradation**: self-disables when no verification factor
+is registered (a grant would be unobtainable) — `W005` flags it; enforcement
+resumes once stapel-auth (or `register_factor`) is present. The
+`dac_escalation` / `step_up_denied` signals are forwarded to the eventstore
+(`AUDIT_SINK`) + `NOTIFY` shim, **best-effort** (a sink failure never breaks
+`has_perm`).
+
+Audit surface: `manage.py access_report [--json]` — role × model × operation
+matrix, DAC grants above mandate, undeclared models, and a `step_up` section
+(gated models, grant-uptake aggregate). Role *assignment* transport (JWT claim
+`staff_roles`, `StaffRole` in stapel-auth) is AS-2; admin visibility built on
+the same declarations is AS-3.
 
 ### GDPR providers (`gdpr.py`)
 

@@ -28,8 +28,14 @@ class CommonDjangoConfig(AppConfig):
         # System checks (registered on import; W-level, never block deploys).
         from stapel_core.netintel import checks as _netintel_checks  # noqa: F401
         # Staff-mandate checks (stapel_core.access): E-level for malformed
-        # ROLES/MODELS policy and an unenforceable STRICT mode, W-level hints.
+        # ROLES/MODELS/STEP_UP policy and an unenforceable STRICT mode,
+        # W-level hints (incl. step-up degradation).
         from stapel_core.access import checks as _access_checks  # noqa: F401
+        # Access audit forwarding (AS-6): subscribe dac_escalation /
+        # step_up_denied → eventstore audit stream (+ optional NOTIFY shim).
+        # Idempotent (dispatch_uid), best-effort (never breaks has_perm).
+        from stapel_core.access.audit import connect_access_audit
+        connect_access_audit()
         # Secret-provider seam checks (stapel_core.secrets): W-level — the env
         # default always works; a broken custom provider surfaces here.
         from stapel_core.secrets import checks as _secrets_checks  # noqa: F401

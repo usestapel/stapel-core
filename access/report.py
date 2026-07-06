@@ -70,6 +70,49 @@ def _staff_dac_grants(roles) -> list[dict[str, Any]]:
     return escalations
 
 
+def _step_up_section() -> dict[str, Any]:
+    """Step-up posture (AS-6, §3.8): which operations are gated + grant uptake.
+
+    Aggregates only — model labels, gated actions, and *counts* of staff with
+    a fresh grant; never the grant tokens themselves (no secret leak).
+    """
+    from django.apps import apps
+    from django.contrib.auth import get_user_model
+
+    from .stepup import (
+        action_requires_step_up,
+        has_fresh_step_up,
+        step_up_active,
+        step_up_capable,
+        step_up_config,
+        step_up_enforced,
+    )
+
+    cfg = step_up_config()
+    gated = []
+    for model in apps.get_models():
+        actions = [a for a in ACTIONS if action_requires_step_up(model, a)]
+        if actions:
+            gated.append({"label": model._meta.label, "actions": actions})
+    gated.sort(key=lambda entry: entry["label"])
+
+    User = get_user_model()
+    staff = list(
+        User.objects.filter(is_staff=True, is_active=True)
+    )
+    with_grant = sum(1 for user in staff if has_fresh_step_up(user))
+    return {
+        "enforce": step_up_enforced(),
+        "capable": step_up_capable(),
+        "active": step_up_active(),
+        "scope": cfg["SCOPE"],
+        "max_age": cfg["MAX_AGE"],
+        "levels": sorted(cfg["LEVELS"]),
+        "gated_models": gated,
+        "fresh_grants": {"staff_total": len(staff), "with_fresh_grant": with_grant},
+    }
+
+
 def build_report() -> dict[str, Any]:
     from django.apps import apps
 
@@ -92,6 +135,7 @@ def build_report() -> dict[str, Any]:
         "models": models,
         "dac_escalations": _staff_dac_grants(roles),
         "undeclared": [entry["label"] for entry in models if not entry["declared"]],
+        "step_up": _step_up_section(),
     }
 
 
@@ -138,6 +182,30 @@ def render_text(report: dict[str, Any]) -> str:
     for label in report["undeclared"]:
         add(f"  {label}")
     add("")
+
+    step = report.get("step_up")
+    if step is not None:
+        if step["active"]:
+            state = "ACTIVE"
+        elif step["enforce"]:
+            state = "enforced but DEGRADED (no verification factor registered)"
+        else:
+            state = "off (ENFORCE=False)"
+        add("== Step-up on HIGH operations (AS-6) ==")
+        add(
+            f"  {state}; scope={step['scope']}, max_age={step['max_age']}s, "
+            f"levels={'/'.join(step['levels'])}"
+        )
+        grants = step["fresh_grants"]
+        add(
+            f"  fresh grants: {grants['with_fresh_grant']}/{grants['staff_total']} "
+            "active staff hold one"
+        )
+        if not step["gated_models"]:
+            add("  gated models: none")
+        for entry in step["gated_models"]:
+            add(f"  gated: {entry['label']} [{', '.join(entry['actions'])}]")
+        add("")
     return "\n".join(lines)
 
 

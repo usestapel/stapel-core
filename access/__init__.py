@@ -39,13 +39,15 @@ Public API::
 
 Settings namespace: ``STAPEL_ACCESS`` (see :mod:`stapel_core.access.conf`).
 """
+from .audit import connect_access_audit
 from .backend import AuditedModelBackend, MandateBackend
 from .declaration import AccessDeclaration, access, declared_access, effective_access
 from .exceptions import AccessConfigError
 from .levels import CATEGORIES, Level
 from .roles import RoleDefinition, clearance_for, effective_roles
-from .signals import dac_escalation
+from .signals import dac_escalation, step_up_denied
 from .sources import CLAIM_ATTR, claim_roles, group_roles, user_field_roles, user_roles
+from .stepup import step_up_active, step_up_blocks, step_up_config
 
 __all__ = [
     "AccessConfigError",
@@ -59,11 +61,16 @@ __all__ = [
     "access",
     "claim_roles",
     "clearance_for",
+    "connect_access_audit",
     "dac_escalation",
     "declared_access",
     "effective_access",
     "effective_roles",
     "group_roles",
+    "step_up_active",
+    "step_up_blocks",
+    "step_up_config",
+    "step_up_denied",
     "user_field_roles",
     "user_roles",
 ]

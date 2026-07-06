@@ -20,16 +20,33 @@ express:
   models, e.g. a session key on an ops journal).
 - **business** — plain ModelAdmin behavior; the mandate does all the work.
 
+- **step-up on HIGH (AS-6)** — a mutating operation whose *required* level is
+  in ``STAPEL_ACCESS["STEP_UP"]["LEVELS"]`` (``delete`` in the standard
+  preset; any operation declared HIGH) needs a fresh verification grant on
+  top of the mandate. ``has_{add,change,delete}_permission`` deny without one
+  (closing the direct URL and the bulk action alike); the add/change/delete
+  *views* return an educational 403 telling the user how to obtain the grant.
+  Step-up lives at the admin layer (not in the backend), so only
+  ``StapelModelAdmin`` subclasses enforce it (see
+  :mod:`stapel_core.access.stepup`).
+
 A bare ``admin.ModelAdmin`` keeps working (the backend still enforces
-visibility) — subclassing this only adds the category cosmetics.
+category *visibility*) — subclassing this adds the category cosmetics and the
+step-up gate.
 """
 from __future__ import annotations
 
 from django.contrib import admin
 from django.core.exceptions import FieldDoesNotExist
+from django.http import HttpResponseForbidden
 from django.utils.html import format_html
 
 from stapel_core.access import effective_access
+from stapel_core.access.stepup import (
+    record_step_up_denied,
+    step_up_blocks,
+    step_up_denied_message,
+)
 
 from .conf import show_ops_models
 
@@ -96,17 +113,64 @@ class StapelModelAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         if self._category() == "ops":
             return False  # read-only journal — even for a superuser (§1.1)
-        return super().has_add_permission(request)
+        if not super().has_add_permission(request):
+            return False
+        return not self._step_up_blocks(request, "add")
 
     def has_change_permission(self, request, obj=None):
         if self._category() == "ops":
             return False
-        return super().has_change_permission(request, obj)
+        if not super().has_change_permission(request, obj):
+            return False
+        return not self._step_up_blocks(request, "change")
 
     def has_delete_permission(self, request, obj=None):
         if self._category() == "ops":
             return False
-        return super().has_delete_permission(request, obj)
+        if not super().has_delete_permission(request, obj):
+            return False
+        return not self._step_up_blocks(request, "delete")
+
+    # -- step-up on HIGH operations (AS-6) ----------------------------------
+
+    def _step_up_blocks(self, request, action: str) -> bool:
+        """Whether step-up gates *action* for this request (no fresh grant).
+
+        The permission-layer backstop: consulted by ``has_*_permission`` so
+        *every* mutation path — direct URL, bulk delete action, inline save —
+        is closed uniformly, not just the views overridden below.
+        """
+        return step_up_blocks(getattr(request, "user", None), self.model, action)
+
+    def _step_up_response(self, request, action: str):
+        """An educational 403 when step-up blocks *action*, else None.
+
+        Runs *before* the stock view (which would otherwise raise a bare
+        PermissionDenied via the backstop above), so the user sees how to
+        obtain the grant. Fires the ``step_up_denied`` signal once per view
+        call for the audit trail — core has no web verification flow, so this
+        honest 403 is the contract (admin-suite §3.8).
+        """
+        user = getattr(request, "user", None)
+        if not self._step_up_blocks(request, action):
+            return None
+        record_step_up_denied(user, self.model, action)
+        return HttpResponseForbidden(step_up_denied_message(self.model, action))
+
+    def add_view(self, request, form_url="", extra_context=None):
+        return self._step_up_response(request, "add") or super().add_view(
+            request, form_url, extra_context
+        )
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        return self._step_up_response(request, "change") or super().change_view(
+            request, object_id, form_url, extra_context
+        )
+
+    def delete_view(self, request, object_id, extra_context=None):
+        return self._step_up_response(request, "delete") or super().delete_view(
+            request, object_id, extra_context
+        )
 
     # -- read-only / masked rendering ---------------------------------------
 

@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+### Added — step-up on HIGH admin operations + access audit forwarding (admin-suite AS-6)
+
+Step-up is now part of the standard preset, not opt-in (Q8a): a HIGH-required
+admin mutation — `delete` in `@access.standard`, or any operation a model
+declares HIGH — needs a *fresh* verification grant on top of the mandate. The
+mandate (AS-1) decides whether a role *may* act; step-up decides whether it was
+re-proven recently.
+
+- **`stapel_core.access.stepup`** — the policy: `STAPEL_ACCESS["STEP_UP"] =
+  {"ENFORCE": True, "LEVELS": ["high"], "SCOPE": "sensitive", "MAX_AGE": 900}`
+  (all `no_env`). `ENFORCE` is `True` by default. **Convergence, no auth
+  hook**: the grant checked is a `stapel_core.verification` grant — the same
+  store stapel-auth's step-up flow and the legacy `/totp/step-up/` bridge write
+  to (scope `sensitive`/max_age `900` match on purpose); completing step-up
+  anywhere satisfies the admin gate.
+- **Enforcement in `StapelModelAdmin`** — `has_{add,change,delete}_permission`
+  deny a gated operation without a fresh grant (closing the direct URL, the
+  bulk delete action, and inline saves uniformly); the add/change/delete
+  *views* return an **educational 403** (core has no web verification flow, so
+  this honest 403 telling the user how to obtain the grant is the contract,
+  §3.8). MID/LOW operations are never gated; a bare `admin.ModelAdmin` still
+  enforces category visibility through the backend but not step-up.
+- **Degradation (§3.7)** — step-up self-disables when no verification factor is
+  registered (no stapel-auth, no host factor): a grant would be unobtainable,
+  so enforcing would brick every HIGH operation. Behavior falls back to the
+  AS-1/AS-3 mandate alone; `W005` (`stapel_access`) flags the degraded state.
+  Q8a's `ENFORCE=True` only takes effect once the mechanism is present.
+- **Audit forwarding (`stapel_core.access.audit`)** — a receiver wired from
+  `CommonDjangoConfig.ready()` forwards the two access signals as events:
+  `dac_escalation` → `access.dac_escalation`, the new
+  `step_up_denied` → `access.step_up_denied`, both to
+  `STAPEL_ACCESS["AUDIT_SINK"]` (default the core eventstore, stream
+  `AUDIT_STREAM`, gateway-shaped `callable(stream, payload, *, project,
+  container)`) and then the optional `NOTIFY` alerting shim. **Best-effort**
+  unlike the gateway (whose audit *is* the authorization record): the durable
+  record already exists (backend/admin logs) and `dac_escalation` fires inside
+  `has_perm`, so a sink failure is logged and swallowed, never raised — a
+  telemetry outage must not lock admins out.
+- **`access_report`** gains a `step_up` section: enforce/capable/active state,
+  scope/max_age/levels, the gated-model × action list, and an *aggregate* of
+  how many active staff hold a fresh grant (counts only — no grant material).
+- **System checks** — `E004` (malformed `STEP_UP`), `W005` (enforced but
+  degraded). No migrations (policy + signals + admin behavior only).
+- Tests: `tests/test_access_stepup.py` (31) — policy parse/normalize/reject,
+  degradation on/off, HIGH-delete denied without grant / allowed with a fresh
+  one, MID/LOW untouched, `ENFORCE=False`, superuser under step-up (A5),
+  educational-403 view, `step_up_denied` signal, audit forwarding to sink +
+  NOTIFY, sink-failure swallowed, idempotent wiring, report section, checks.
+
 ### Fixed — explicit `service_dashboard` flag for `current_dashboard_url` (admin-suite AS-4 follow-up)
 
 The AS-4 review flagged the original `current_dashboard_url` heuristic

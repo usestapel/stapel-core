@@ -12,10 +12,12 @@ from django.core import checks
 E001_BAD_ROLES = "stapel_core.access.E001"
 E002_BAD_MODELS = "stapel_core.access.E002"
 E003_STRICT_UNENFORCEABLE = "stapel_core.access.E003"
+E004_BAD_STEP_UP = "stapel_core.access.E004"
 W001_BACKEND_NOT_INSTALLED = "stapel_core.access.W001"
 W002_UNAUDITED_DAC = "stapel_core.access.W002"
 W003_UNKNOWN_MODEL_LABEL = "stapel_core.access.W003"
 W004_RUNTIME_ROLES_RESERVED = "stapel_core.access.W004"
+W005_STEP_UP_DEGRADED = "stapel_core.access.W005"
 
 MANDATE_BACKEND = "stapel_core.access.backend.MandateBackend"
 AUDITED_BACKEND = "stapel_core.access.backend.AuditedModelBackend"
@@ -128,14 +130,47 @@ def check_access_backends(app_configs=None, **kwargs):
     return findings
 
 
+@checks.register("stapel_access")
+def check_step_up(app_configs=None, **kwargs):
+    """E004 — STEP_UP must parse; W005 — enforced but degraded (no factor)."""
+    from .exceptions import AccessConfigError
+    from .stepup import step_up_capable, step_up_config, step_up_enforced
+
+    findings = []
+    try:
+        step_up_config()
+    except AccessConfigError as exc:
+        findings.append(checks.Error(
+            str(exc),
+            hint="STEP_UP keys: ENFORCE (bool), LEVELS (['high']), "
+                 "SCOPE (str), MAX_AGE (positive int).",
+            id=E004_BAD_STEP_UP,
+        ))
+        return findings  # a malformed config can't answer the W-check below
+
+    if step_up_enforced() and not step_up_capable():
+        findings.append(checks.Warning(
+            "STAPEL_ACCESS['STEP_UP'] is enforced but no verification factor is "
+            "registered — step-up self-disables (a grant would be unobtainable), "
+            "so HIGH operations fall back to the mandate alone.",
+            hint="Install stapel-auth or register a factor (register_factor) to "
+                 "activate step-up; set STEP_UP={'ENFORCE': False} to silence this.",
+            id=W005_STEP_UP_DEGRADED,
+        ))
+    return findings
+
+
 __all__ = [
     "E001_BAD_ROLES",
     "E002_BAD_MODELS",
     "E003_STRICT_UNENFORCEABLE",
+    "E004_BAD_STEP_UP",
     "W001_BACKEND_NOT_INSTALLED",
     "W002_UNAUDITED_DAC",
     "W003_UNKNOWN_MODEL_LABEL",
     "W004_RUNTIME_ROLES_RESERVED",
+    "W005_STEP_UP_DEGRADED",
     "check_access_backends",
     "check_access_config",
+    "check_step_up",
 ]
