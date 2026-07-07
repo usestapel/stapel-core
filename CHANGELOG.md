@@ -121,7 +121,7 @@ shape instead of being told.
 
 ### Added / Changed — cross-service navigation registries (admin-suite AS-4)
 
-Service navigation is no longer hardcoded in the framework — the legacy-legacy
+Service navigation is no longer hardcoded in the framework — the legacy
 `STAPEL_SERVICES` list in `core/config.py` and the Tools/Monitoring/dashboard
 links baked into `admin/base_site.html` + the Swagger inject were policy in a
 mechanism (§2.1). Both move to deploy-config:

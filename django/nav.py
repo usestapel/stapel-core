@@ -1,7 +1,7 @@
 """Cross-service navigation registries — admin-suite AS-4 (§2).
 
 Two deploy-config registries feed the admin + Swagger service navigation,
-replacing the legacy-legacy hardcode (the ``STAPEL_SERVICES`` list baked into
+replacing the legacy hardcode (the ``STAPEL_SERVICES`` list baked into
 ``core/config.py``, the Tools/Monitoring sections and per-module dashboards
 baked into ``base_site.html`` / the Swagger inject):
 
