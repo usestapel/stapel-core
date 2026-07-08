@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/usestapel/stapel-core/actions/workflows/ci.yml/badge.svg)](https://github.com/usestapel/stapel-core/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/usestapel/stapel-core/graph/badge.svg)](https://codecov.io/gh/usestapel/stapel-core)
+[![PyPI](https://img.shields.io/pypi/v/stapel-core.svg)](https://pypi.org/project/stapel-core/)
 
 Shared Python library for Stapel services. Provides JWT authentication, captcha
 verification, event bus, notifications, and Django utilities used across all
