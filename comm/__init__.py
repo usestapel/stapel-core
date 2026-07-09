@@ -52,8 +52,20 @@ from .exceptions import (
     FunctionCallError,
     FunctionNotRegistered,
     FunctionRouteNotConfigured,
+    ProjectionConfigError,
+    ProjectionError,
 )
 from .functions import call, function, register_function
+from .projections import (
+    DriftReport,
+    Projection,
+    ProjectionStatus,
+    RebuildResult,
+    drift_check,
+    projection_registry,
+    projection_status,
+    rebuild,
+)
 from .registry import action_registry, function_registry
 
 __all__ = [
@@ -71,6 +83,14 @@ __all__ = [
     "call",
     "function",
     "register_function",
+    "Projection",
+    "projection_registry",
+    "rebuild",
+    "drift_check",
+    "projection_status",
+    "RebuildResult",
+    "DriftReport",
+    "ProjectionStatus",
     "action_registry",
     "function_registry",
     "comm_setting",
@@ -79,4 +99,6 @@ __all__ = [
     "FunctionCallError",
     "FunctionNotRegistered",
     "FunctionRouteNotConfigured",
+    "ProjectionError",
+    "ProjectionConfigError",
 ]

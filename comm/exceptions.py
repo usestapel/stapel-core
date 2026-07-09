@@ -34,6 +34,17 @@ class SchemaValidationError(CommError):
     """Payload does not match the registered schema."""
 
 
+class ProjectionError(CommError):
+    """A projection failed to apply an event or rebuild (runtime)."""
+
+
+class ProjectionConfigError(CommError):
+    """A Projection declaration is invalid (missing attribute, two
+    projections targeting one table, a model not derived from
+    ProjectionModel, rebuild without a source_of_truth). Raised loudly at
+    app-ready validation — a misdeclared read-model never silently drifts."""
+
+
 class EmitOutsideAtomicError(CommError):
     """emit() was called outside transaction.atomic() while the outbox is on.
 

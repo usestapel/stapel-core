@@ -11,7 +11,9 @@ points below; a generic fix or gap belongs **upstream** (see
 - `comm` — inter-module communication primitives: **Action** (`emit` /
   `@on_action`, transactional fire-and-forget via the outbox), **Function**
   (`call` / `@function`, synchronous RPC by name), **Task** (`start` /
-  `status` / `@task_handler`, long-running work with persistent state).
+  `status` / `@task_handler`, long-running work with persistent state) and
+  **Projection** (`Projection` subclass, event-carried read-models over
+  Action with generated idempotency and first-class rebuild).
   Modules never import each other — both sides know only a string name and a
   payload schema; transports are deployment configuration, not code.
 - `bus` — transport-agnostic message bus (`publish`, `get_bus`, `Event`,
@@ -142,6 +144,65 @@ Mechanical guards behind it (they also protect plain `emit()`):
 Review checklist for data-holding modules: every emit is atomic with its
 mutation, and a `test_failing_emit_rolls_back`-class test exists (see
 `tests/test_emit_atomicity.py` here for the reference shapes).
+
+### Projections — event-carried read-models (`comm/projections.py`, `django/projections/`)
+
+A cross-domain read (a catalog listing showing its like count owned by an
+engagement module) is served by a **local read-model table** that a consumer
+fills from the owner's Action events — no synchronous call on the read path.
+The pattern was re-invented per table (idempotency hand-rolled as a unique
+constraint, backfill as a one-off script, counters drifting when a bulk
+`update()` skipped a `post_save` signal). `Projection` formalises it. Declare
+which topic(s) feed which table and how each event upserts a row; subclass the
+read-model from `ProjectionModel` (it carries the source key + sequence +
+event-id bookkeeping):
+
+```python
+from django.db import models
+from stapel_core.comm import Projection
+from stapel_core.django.projections.models import ProjectionModel
+
+class ListingLikes(ProjectionModel):          # the read-model table
+    likes_count = models.PositiveIntegerField(default=0)
+    class Meta:
+        app_label = "catalog"
+
+class ListingLikesProjection(Projection):     # the declaration
+    name = "catalog.listing_likes"
+    consumes = "engagement.likes_changed"     # Action topic(s)
+    model = "catalog.ListingLikes"
+    source_key = "listing_id"                 # payload field = row identity
+    source_of_truth = "engagement.likes_export"  # Function for rebuild
+    sequence_field = "revision"               # ordering token (else event ts)
+    def apply(self, event):
+        return {"likes_count": event.payload["likes_count"]}
+```
+
+The framework gives, once: **idempotency + ordering** — an event applies only
+if its position (`sequence_field`, else event timestamp) is strictly newer
+than the row's, so a redelivered duplicate is a no-op and a reordered/stale
+event never overwrites fresher state (idempotency by event id + unique source
+key, §10); a **consumer runner** wired through the ordinary action registry
+(same in-process `on_commit` delivery in a monolith, same bus consumer across
+services — the projection code does not change on split); **first-class
+rebuild** — `manage.py rebuild_projection <name>` (or `comm.rebuild(name)`)
+re-derives the whole table from the owner's `source_of_truth` Function,
+batched, all-or-nothing, with progress, and `--check` (`comm.drift_check`)
+compares row counts without writing; **`comm.projection_status(name)`** for
+row count / last sequence / lag.
+
+Loud config validation at app ready (`validate_registry`, raises
+`ProjectionConfigError`): **one table = one source** (no two projections
+target the same model), the model must derive from `ProjectionModel`, and
+required attributes must be present. Rules the primitive encodes (review/lint
+matters): projections are read-only for business code; one projection owns one
+source domain and its table (projected fields never mixed with locally
+computed aggregates); the data *owner* computes each aggregate and publishes
+it as a fact via `emit()` in its transaction — one-directional fact streams,
+never `post_save` recompute loops. The owner's `source_of_truth` Function
+pages with `{"cursor", "limit"}` → `{"rows": [{source_key, "seq", **fields}],
+"cursor", "total"}`. Install the `stapel_core.django.projections` app to get
+the model base and the management command.
 
 ### Bus backends — `STAPEL_BUS_BACKEND` (`bus/router.py`)
 
@@ -774,6 +835,7 @@ delivery guarantees; cross-module facts still go through comm Actions.
 | `consume_actions [--topics ...] [--group ...]` | Bus→registry bridge: consume remote Actions into local `@on_action` handlers |
 | `serve_functions` | NATS Function server: expose this service's registered Functions (queue group = service name) |
 | `sweep_tasks` | Fail comm Tasks past their deadline (cron / celery beat) |
+| `rebuild_projection <name> [--check] [--batch-size N]` | Re-derive a comm Projection read-model from its owner's `source_of_truth` Function (batched, all-or-nothing, progress); `--check` compares row counts without writing |
 | `generate_flow_docs --out DIR [--lang X] [--llm] [--llm-cache FILE]` | Render flow markdown + `flows.json`; `--lang` resolves i18n keys, `--llm` machine-translates missing keys (content-hash cached) |
 | `generate_error_keys --out FILE` | Emit `errors.json` (the error-key registry: `{code, status, params, remediation, en}`) — the backend codegen artifact the frontend error bundle is generated from |
 | `generate_project_docs --out DIR [--languages …] [--llm]` | Bilingual flow doc trees, one per project language (`STAPEL_I18N["LOCALES"]`) |

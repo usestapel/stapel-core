@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### Added — Projection: event-carried read-models over Action (module-communication §10, Q2)
+
+A fourth comm primitive alongside Action/Function/Task. A cross-domain read
+(a catalog listing showing a like count owned by an engagement module) is
+served by a **local read-model table** filled from the owner's Action events
+— no synchronous call on the read path. The pattern was previously
+re-invented per table (idempotency hand-rolled as a unique constraint,
+backfill as a one-off script, counters drifting when a bulk `update()`
+skipped a `post_save` signal); `Projection` formalises it.
+
+- **`stapel_core.comm.Projection`** — declare `name`, `consumes` (Action
+  topic[s]), `model` (a `ProjectionModel` table), `source_key` (payload field
+  = row identity), `source_of_truth` (owner Function for rebuild) and an
+  optional `sequence_field` ordering token; override `apply(event)` to map an
+  event to the upserted fields. Declaring a subclass registers it.
+- **`stapel_core.django.projections`** app — the abstract
+  **`ProjectionModel`** base (carries `projection_key` unique + `projection_seq`
+  + `projection_event_id` + `projection_updated_at`; a concrete read-model
+  adds only its projected columns) and the `rebuild_projection` command. No
+  migrations of its own (the base is abstract).
+- **Generated idempotency + ordering.** The consumer runner upserts a row
+  only when the event's position (`sequence_field`, else event timestamp) is
+  strictly newer than the row's, so a redelivered duplicate is a no-op and a
+  reordered/stale event never overwrites fresher state — idempotency by event
+  id + unique source key, no per-table bespoke constraint.
+- **Wired through the ordinary action registry** — same in-process
+  `on_commit` delivery in a monolith, same bus consumer across services; the
+  projection code does not change when modules split.
+- **First-class rebuild.** `manage.py rebuild_projection <name>` (or
+  `comm.rebuild(name)`) re-derives the whole table from the owner's
+  `source_of_truth` Function — batched, all-or-nothing, with progress —
+  replacing hand-written backfill scripts; `--check` (`comm.drift_check`)
+  compares local vs source row counts without writing; `comm.projection_status`
+  reports row count / last sequence / lag.
+- **Loud config validation** at app ready (`ProjectionConfigError`): one table
+  = one source (no two projections target the same model), the model must
+  derive from `ProjectionModel`, required attributes present — a misdeclared
+  read-model fails at startup, not on the first stale read.
+
 ### Added — Channels JWT auth middleware: WebSocket auth over the same `jwt_provider` (gap G14)
 
 Realtime services no longer hand-roll a WebSocket auth middleware. The HTTP JWT
