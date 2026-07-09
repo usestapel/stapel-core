@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Added — Channels JWT auth middleware: WebSocket auth over the same `jwt_provider` (gap G14)
+
+Realtime services no longer hand-roll a WebSocket auth middleware. The HTTP JWT
+stack (`middleware.JWTAuthMiddleware` / `authentication.JWTCookieAuthentication`)
+now has an ASGI/Channels counterpart that reuses the **same**
+`jwt_provider` — same signing config, same token- and user-level blacklists,
+same `get_or_create_user_from_jwt` user sync — so a token that authenticates an
+HTTP request authenticates a WebSocket identically.
+
+- **`stapel_core.django.jwt.channels`** — `JWTAuthMiddleware` (plain ASGI
+  middleware) plus a `JWTAuthMiddlewareStack(inner)` factory for call-site
+  symmetry with Channels' `AuthMiddlewareStack`. On success it populates
+  `scope["user"]` (the Django user, carrying the transient staff-roles claim)
+  and `scope["stapel_claims"]` (the validated token payload) — the WebSocket
+  mirror of `request.user`. DB/cache work runs through
+  `channels.db.database_sync_to_async`.
+- **Two token conventions, documented precedence** (first match wins):
+  `Authorization: Bearer <token>` header → `Sec-WebSocket-Protocol` subprotocol
+  (both `"bearer.<token>"` and `["bearer", "<token>"]` shapes; schemes
+  `authorization`/`bearer`/`access_token`/`jwt`/`token`) → `?token=<jwt>` query
+  param. Header first (not logged), query last (lands in access logs).
+- **Reject before accept, silently.** A missing/malformed/expired/blacklisted
+  token — or any error during validation — closes the handshake with
+  application close code **4401** (`CLOSE_CODE_UNAUTHORIZED`, the WebSocket
+  analogue of HTTP 401) before `websocket.accept`; the consumer is never
+  invoked. Failures log at DEBUG only, so a flood of bad tokens can't spam the
+  error log.
+- **Optional dependency (`stapel-core[channels]`).** The submodule is never
+  imported on a normal HTTP-only Django start (nothing in `stapel_core` /
+  `stapel_core.django` imports it); importing it without `channels` installed
+  raises a clear `ImportError` pointing at the extra.
+- Tests: `tests/test_jwt_channels.py` (27) — token extraction from all three
+  channels + precedence, the valid/expired/missing/blacklisted-token and
+  banned-user paths, 4401-before-accept, silent (no-error-log) rejection on
+  exception, non-websocket pass-through, and the optional-dependency contract
+  (not-imported-on-start subprocess check + helpful ImportError when absent).
+
 ### Added — Gherkin projection of flows: `.feature` + playwright-bdd step-defs (flow-system.md §3)
 
 The flow is the source, the `.feature` is a projection (wish #3): the

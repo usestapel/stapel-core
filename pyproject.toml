@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.8.0"
+version = "0.9.0"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -56,6 +56,11 @@ netintel-maxmind = [
 gateway = [
     "jsonschema>=4.18",
 ]
+# Channels JWT auth (stapel_core.django.jwt.channels) — WebSocket/ASGI
+# authentication over the same jwt_provider used by the HTTP stack.
+channels = [
+    "channels>=4.0",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
@@ -64,7 +69,7 @@ dev = [
     "celery>=5.3",
 ]
 all = [
-    "stapel-core[kafka,nats,sentry,netintel-maxmind,gateway]",
+    "stapel-core[kafka,nats,sentry,netintel-maxmind,gateway,channels]",
 ]
 
 [project.urls]
