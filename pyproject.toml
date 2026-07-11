@@ -164,6 +164,7 @@ packages = [
     "stapel_core.eventstore",
     "stapel_core.eventstore.backends",
     "stapel_core.comm",
+    "stapel_core.config",
     "stapel_core.flows",
     "stapel_core.i18n",
     "stapel_core.lint",
@@ -175,4 +176,4 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*", "py.typed", "notifications/schemas/**/*.json"]
+"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*", "py.typed", "notifications/schemas/**/*.json", "CONFIG.MD"]
