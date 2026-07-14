@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-14
+
+### Fixed — `users_user.avatar` URLField truncation on OAuth signup (500)
+
+- `stapel_core.django.users.User.avatar` widened `URLField` 200→500
+  (migration `0007_widen_user_avatar`, expand-only). Django's
+  `URLField` defaults `max_length` to 200; real OAuth provider avatar URLs
+  (Google/GitHub) routinely exceed that, so the implicit default degraded
+  from "wrong length" to `StringDataRightTruncation` on `INSERT` — a 500 on
+  signup, not a validation error, since Postgres enforces the column width.
+  Belt-and-suspenders companion fix in `stapel-auth` (0.5.5) drops an
+  over-long provider avatar rather than crashing.
+
+## [0.10.0] - 2026-07-11
+
 ### Added — Projection: event-carried read-models over Action (module-communication §10, Q2)
 
 A fourth comm primitive alongside Action/Function/Task. A cross-domain read
