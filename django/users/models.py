@@ -48,7 +48,11 @@ class AbstractStapelUser(AbstractUser):
     oauth_id = models.CharField(max_length=255, null=True, blank=True)
 
     # Profile fields
-    avatar = models.URLField(null=True, blank=True)
+    # URLField defaults to max_length=200 — too short for OAuth provider avatar
+    # URLs (Google/GitHub picture URLs routinely exceed 200 chars with sizing
+    # params), which caused StringDataRightTruncation on OAuth signup. Widened;
+    # the OAuth ingestion point also drops an over-long avatar rather than crash.
+    avatar = models.URLField(max_length=500, null=True, blank=True)
     bio = models.TextField(max_length=500, blank=True)
 
     # Metadata
