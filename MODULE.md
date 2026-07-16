@@ -36,6 +36,15 @@ points below; a generic fix or gap belongs **upstream** (see
   `StapelResponse` / `StapelErrorResponse` / error-key registry, OpenAPI
   helpers and postprocessing hooks, JWT auth middleware, common settings,
   management commands.
+- `media` — one media interface over swappable storage backends
+  (images-and-cdn.md §1): `media.describe(ref)` returns the render-metadata
+  snapshot (`{mime, bytes, width, height, aspect, duration_ms, preview_b64,
+  square, variants[]}`) from either the PIL/ImageField path (default,
+  zero infrastructure — `generate_variants` writes `<stem>__<tier><branch>.webp`
+  siblings) or the stapel-cdn service (`STAPEL_MEDIA_BACKEND="cdn"` →
+  `cdn.describe` comm Function). Ladder core (min-side thumbnails 16/32/64/120,
+  w/h preview branches 160–1080 incl. 560, square dedup, no upscaling) is
+  reusable plan math in `media.variants`.
 - `signals` — in-process Django signals for business milestones
   (`user_registered`, `user_logged_in`, `payment_completed`,
   `subscription_changed`, `media_processed`, `profile_updated`,

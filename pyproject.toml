@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.10.2"
+version = "0.10.3"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -60,6 +60,11 @@ gateway = [
 # authentication over the same jwt_provider used by the HTTP stack.
 channels = [
     "channels>=4.0",
+]
+# PIL media backend (stapel_core.media, BACKEND="pil") — variant generation
+# and render-metadata over a plain Django ImageField, no CDN service needed.
+media = [
+    "Pillow>=9.0",
 ]
 dev = [
     "pytest>=7.4",
@@ -169,6 +174,7 @@ packages = [
     "stapel_core.eventstore.backends",
     "stapel_core.comm",
     "stapel_core.config",
+    "stapel_core.media",
     "stapel_core.flows",
     "stapel_core.i18n",
     "stapel_core.lint",

@@ -16,6 +16,7 @@ Example usage:
 """
 import re
 from typing import Any
+from django.conf import settings
 from django.db import models
 from django.core.exceptions import ValidationError
 from django import forms
@@ -168,16 +169,33 @@ class CdnImageField(models.CharField):
 
     def contribute_to_class(self, cls, name):
         super().contribute_to_class(cls, name)
-        # Add helper method to get the CDN URL
-        def get_cdn_url(instance, variant='720'):
+        # Add helper method to get the CDN URL. Unified with stapel-cdn's
+        # canonical template `{base}{type}/{hash}/{tier}{branch}.webp`
+        # (images-and-cdn.md §0.1 — this used to be a second, drifted
+        # template). Tier semantics (0.6.0): thumbnail tiers (<= 120) are
+        # single min-side files; preview tiers are branched — `branch`
+        # defaults to "w", pass "h" for the height branch. The old
+        # signature get_<name>_url(variant='720') keeps working and now
+        # resolves to the w-branch file that actually exists.
+        def get_cdn_url(instance, variant='720', branch=None):
             value = getattr(instance, name)
             if not value:
                 return None
             ref_type, ref_id = value.split('/', 1)
-            # Build CDN URL based on type
-            return f"/cdn/media/{ref_type}/{ref_id}/{variant}.webp"
+            base = getattr(settings, 'STAPEL_CDN_MEDIA_URL', '/cdn/media/')
+            try:
+                tier = int(variant)
+            except (TypeError, ValueError):
+                # non-numeric variant ("original") — no branch suffix
+                return f"{base}{ref_type}/{ref_id}/{variant}.webp"
+            suffix = '' if tier <= 120 else (branch or 'w')
+            return f"{base}{ref_type}/{ref_id}/{tier}{suffix}.webp"
 
-        setattr(cls, f'get_{name}_url', lambda self, v='720': get_cdn_url(self, v))
+        setattr(
+            cls,
+            f'get_{name}_url',
+            lambda self, v='720', branch=None: get_cdn_url(self, v, branch),
+        )
 
 
 class CdnImageListField(models.JSONField):

@@ -159,11 +159,27 @@ def test_cdn_image_field_formfield():
 
 def test_cdn_image_field_url_helper():
     obj = CdnCovThing(icon="catalog/my-icon", photo=f"product/{HASH64}")
-    assert obj.get_icon_url() == "/cdn/media/catalog/my-icon/720.webp"
-    assert obj.get_icon_url("1080") == "/cdn/media/catalog/my-icon/1080.webp"
-    assert obj.get_photo_url() == f"/cdn/media/product/{HASH64}/720.webp"
+    # Preview tiers (> 120) resolve to their w-branch file — the template
+    # is unified with stapel-cdn 0.6.0 semantics (images-and-cdn.md §3.2).
+    assert obj.get_icon_url() == "/cdn/media/catalog/my-icon/720w.webp"
+    assert obj.get_icon_url("1080") == "/cdn/media/catalog/my-icon/1080w.webp"
+    assert obj.get_icon_url("1080", branch="h") == "/cdn/media/catalog/my-icon/1080h.webp"
+    assert obj.get_photo_url() == f"/cdn/media/product/{HASH64}/720w.webp"
+    # Thumbnail tiers (<= 120) are single min-side files, no branch suffix.
+    assert obj.get_icon_url(64) == "/cdn/media/catalog/my-icon/64.webp"
+    # Non-numeric variants pass through without a branch.
+    assert obj.get_icon_url("original") == "/cdn/media/catalog/my-icon/original.webp"
     empty = CdnCovThing()
     assert empty.get_icon_url() is None
+
+
+def test_cdn_image_field_url_helper_base_override(settings):
+    settings.STAPEL_CDN_MEDIA_URL = "https://cdn.example.com/media/"
+    obj = CdnCovThing(icon="catalog/my-icon")
+    assert (
+        obj.get_icon_url()
+        == "https://cdn.example.com/media/catalog/my-icon/720w.webp"
+    )
 
 
 # ---------------------------------------------------------------------------

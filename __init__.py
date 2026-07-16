@@ -73,6 +73,8 @@ _LAZY_EXPORTS = {
     "AppSettings": (".conf", "AppSettings"),
     # signals — in-process business milestones (module export)
     "signals": (".signals", None),
+    # media — render-metadata over swappable backends (module export)
+    "media": (".media", None),
     # eventstore — append-only stream seam (module export)
     "eventstore": (".eventstore", None),
     # gateway — privilege gateway mechanism (module export)

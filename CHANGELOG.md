@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-07-16
+
+### Added — `stapel_core.media`: one media interface, two storage paths (images-and-cdn.md §1, §61)
+
+Presenters/serializers call `stapel_core.media.describe(ref)` and get the
+immutable render-metadata snapshot (§5: `{mime, bytes, width, height,
+aspect, duration_ms, preview_b64, square, variants[]}`) regardless of where
+the pixels live. Switching backends is configuration, never a code branch
+in the caller.
+
+- **`RenderMetadataProvider` Protocol** + two providers: `pil` (default —
+  plain Django `ImageField`/storage, zero infrastructure) and `cdn`
+  (delegates to the stapel-cdn service's `cdn.describe` comm Function; the
+  recommended production opt-in). Dotted-path escape hatch for custom
+  providers.
+- **`STAPEL_MEDIA` namespace / `STAPEL_MEDIA_BACKEND`** (flat setting and
+  env var honored): `BACKEND` (`"pil"` default), `THUMBNAIL_SIZES`
+  (`16/32/64/120`), `PREVIEW_SIZES` (`160/240/480/560/720/1080`),
+  `WEBP_QUALITY`, `WATERMARK` (dotted-path PIL engine, off by default),
+  `SQUARE_EPSILON`.
+- **Reusable ladder core** (`stapel_core.media.variants`) — the tier
+  semantics extracted from `stapel_cdn.services` as a library, not a
+  copy-paste: pure plan math (`plan_variants`, `scaled_size`, `is_square`,
+  `variant_name`) — min-side thumbnails (§3.4), w/h preview branches
+  (§3.2), square dedup (§3.3), no upscaling — plus `generate_variants`,
+  the PIL engine writing `<stem>__<tier><branch>.webp` siblings through the
+  field's own storage. Persisting the returned `VariantMeta` list and
+  scheduling (post_save / Celery) are the host's hooks, not this library's
+  pipeline. stapel-cdn keeps its pyvips engine over the same semantics.
+- **`RenderMetadata` / `VariantMeta` TypedDicts** (`media.types`) — the
+  §5 form, hand-mirrored in TypeScript by `@stapel/image`.
+- New optional extra: `stapel-core[media]` → `Pillow>=9.0` (only the PIL
+  backend needs it; the facade and cdn provider import nothing heavy).
+
+### Changed
+- `CdnImageField.get_<name>_url(variant='720', branch=None)` — the URL
+  template is unified with stapel-cdn 0.6.0 (images-and-cdn.md §0.1
+  finding: this was a second, drifted template). Preview tiers (> 120)
+  resolve to their branch file (`{tier}w.webp` default, pass
+  `branch="h"` for the height branch); thumbnail tiers stay `{tier}.webp`;
+  the base prefix is overridable via `STAPEL_CDN_MEDIA_URL` (default
+  `/cdn/media/`). Old call sites keep working and now point at files that
+  actually exist under the new cdn semantics.
+
+
 ## [0.10.2] - 2026-07-16
 
 ### Added — Projection local mode: colocation semantics (projections-and-composition §1)
