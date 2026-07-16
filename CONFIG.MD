@@ -17,6 +17,24 @@ The keys below are read *inside* stapel-core (its `django/settings.py`,
 `secrets`, `bus`, `kafka`, monitoring), so they are owned by core and exempt
 from CFG003 in a consuming project — the project need not read them itself.
 
+**Required is enforced at boot, not on first use** (0.11.1+): a `Required:
+yes` row with no value and no default used to only raise
+(`ConfigUnavailable`) the first time some code path called `get_config(key)`
+— possibly never, for a key nothing reads through the config seam yet. The
+`stapel_config` system check (`stapel_core.config.checks`) now walks every
+required key at `manage.py check` / boot-smoke time and fails loud
+(`E001: config 'X' обязателен — нужен для: ...`) before the service is
+allowed to start.
+
+**Metadata can come from code, not just this hand-written table**:
+`get_config(key, purpose=..., required=...)` (or the standalone
+`declare_config(key, source=, purpose=, required=, default=)`, called once at
+import time) records the same purpose/required/default a regenerator would
+otherwise have to trust this file to have kept in sync with the code — the
+declaration never overrides a real row here (this table wins on overlap),
+it only fills in keys this file does not know about yet. See
+`declared_config_entries()`.
+
 ## stapel-core
 
 ### Secrets (source: vault)
@@ -51,7 +69,7 @@ from CFG003 in a consuming project — the project need not read them itself.
 | POSTGRES_HOST | env | Database host. | no | db |
 | POSTGRES_PORT | env | Database port. | no | 5432 |
 | CONN_MAX_AGE | env | Django persistent-connection age (seconds); 0 = per-request. | no | 0 |
-| STAPEL_BUS_BACKEND | env | Message-bus backend dotted path. | no | stapel_core.bus.backends.kafka.KafkaBus |
+| STAPEL_BUS_BACKEND | env | Message-bus backend dotted path; kafka/nats are explicit opt-in (0.11.0+). | no | stapel_core.bus.backends.memory.MemoryBus |
 | KAFKA_BOOTSTRAP_SERVERS | env | Kafka bootstrap servers. | no | kafka:9092 |
 | KAFKA_SECURITY_PROTOCOL | env | Kafka security protocol. | no | PLAINTEXT |
 | KAFKA_SASL_MECHANISM | env | Kafka SASL mechanism. | no | |

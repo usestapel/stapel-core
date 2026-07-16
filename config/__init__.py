@@ -107,6 +107,17 @@ class ConfigManifestError(ConfigError):
     """A CONFIG.MD row is malformed (bad source, missing key, …)."""
 
 
+class ConfigNotDeclared(ConfigError):
+    """A ``required=True`` call site has no manifest row and no default.
+
+    Distinct from :class:`ConfigKeyUnknown` (that one fires for *any* undeclared
+    key, required or not, when no default is given either): this fires only
+    when the caller explicitly marked the key required at the call site — a
+    bootstrap escape hatch for a key that has not made it into CONFIG.MD yet,
+    still fail-closed rather than silently unknown.
+    """
+
+
 @dataclass(frozen=True)
 class ConfigEntry:
     """One declared config key."""
@@ -290,6 +301,63 @@ def reset_manifest_cache() -> None:
         _manifest_cache.clear()
 
 
+# --- call-site declarations (a code-first source for the regenerator) ------
+#
+# CONFIG.MD is hand-maintained today: purpose/required/default live only in
+# the markdown table, so they silently drift from the code that actually
+# reads the key (a default changed in code, forgotten in the table — exactly
+# what happened to STAPEL_BUS_BACKEND's row when its in-code default moved
+# from kafka to memory, 0.11.0). ``declare_config`` (or the ``purpose=``/
+# ``required=`` kwargs on :func:`get_config`, which call it as a backstop —
+# the same "declare explicitly, or record lazily on first use" shape as
+# ``stapel_core.django.swappable.declare_swap``) gives a future CONFIG.MD
+# regenerator a code-sourced registry to cross-check or rebuild the table
+# from, instead of trusting hand-written cells.
+
+_declared: dict[str, ConfigEntry] = {}
+_declared_lock = threading.Lock()
+
+
+def declare_config(
+    key: str,
+    *,
+    source: str = SOURCE_ENV,
+    purpose: str = "",
+    required: bool = False,
+    default: str | None = None,
+) -> None:
+    """Register *key*'s metadata from code (first declaration wins).
+
+    Call once at import time, next to the settings.py line that reads the
+    key — independent of whether :func:`get_config` is ever called for it.
+    Never overwrites an existing declaration (re-import safe) and never
+    touches the CONFIG.MD-parsed manifest (that stays the authoritative
+    source when both exist; see :func:`declared_config_entries`).
+    """
+    if source not in _SOURCES:
+        raise ConfigManifestError(
+            f"declare_config({key!r}): unknown source {source!r}, expected "
+            f"one of {', '.join(_SOURCES)}"
+        )
+    with _declared_lock:
+        _declared.setdefault(
+            key,
+            ConfigEntry(key=key, source=source, purpose=purpose, required=required, default=default),
+        )
+
+
+def declared_config_entries() -> dict[str, ConfigEntry]:
+    """Snapshot of call-site declarations — the regenerator's raw material."""
+    with _declared_lock:
+        return dict(_declared)
+
+
+def clear_declared_config() -> None:
+    """Drop all call-site declarations (test isolation)."""
+    with _declared_lock:
+        _declared.clear()
+
+
 # --- the entry point --------------------------------------------------------
 
 
@@ -297,6 +365,8 @@ def get_config(
     key: str,
     default: object = _UNSET,
     *,
+    purpose: str = "",
+    required: bool | None = None,
     manifest: dict[str, ConfigEntry] | None = None,
 ) -> str | None:
     """Resolve config *key* through the CONFIG.MD manifest.
@@ -308,14 +378,38 @@ def get_config(
     raises :class:`ConfigUnavailable`.
 
     A key absent from the manifest raises :class:`ConfigKeyUnknown` unless the
-    caller supplied a *default* (the bootstrap escape hatch).
+    caller supplied a *default* — with one exception: passing
+    ``required=True`` explicitly (a call site ahead of its CONFIG.MD row, or a
+    project-local key an aggregator would not otherwise see) still fails
+    closed on a missing value (:class:`ConfigNotDeclared`) instead of raising
+    "unknown key" — required is required, declared in the table or not.
+
+    ``purpose``/``required`` passed here (whether or not the key is already
+    in the manifest) are also recorded via :func:`declare_config` — a
+    backstop declaration for a future CONFIG.MD regenerator, the same
+    "declare explicitly, or record lazily on first use" shape as
+    ``declare_swap``. They never change resolution when a manifest row
+    already exists (the table stays authoritative); passing them is free
+    metadata, not a second source of truth to reconcile by hand.
     """
+    if purpose or required is not None:
+        declare_config(key, purpose=purpose, required=bool(required), default=None)
+
     table = load_manifest() if manifest is None else manifest
     entry = table.get(key)
 
     if entry is None:
         if default is not _UNSET:
             return default  # type: ignore[return-value]
+        if required:
+            value = os.environ.get(key)
+            if value is not None:
+                return value
+            raise ConfigNotDeclared(
+                f"required config {key!r} is unset, has no default, and has "
+                f"no CONFIG.MD row yet — set the environment variable, or "
+                f"pass a default, or add the row."
+            )
         raise ConfigKeyUnknown(key)
 
     if default is not _UNSET:
@@ -354,10 +448,14 @@ __all__ = [
     "ConfigError",
     "ConfigKeyUnknown",
     "ConfigManifestError",
+    "ConfigNotDeclared",
     "ConfigUnavailable",
     "discover_manifest_path",
     "get_config",
     "load_manifest",
     "parse_config_md",
     "reset_manifest_cache",
+    "declare_config",
+    "declared_config_entries",
+    "clear_declared_config",
 ]

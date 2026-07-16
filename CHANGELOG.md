@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-07-17
+
+### Added — config-manifest required/optional semantics enforced at boot, code-sourced metadata
+
+Follow-up to the 0.11.0 postmortem: `get_config`'s `Required: yes` was only
+ever enforced (`ConfigUnavailable`) the first time some code path actually
+called `get_config(key)` — possibly deep in a request handler, possibly
+never for a key nothing reads through the config seam yet. Separately,
+CONFIG.MD's `Purpose`/`Required`/`Default` cells are hand-maintained and can
+silently drift from the code's actual default — exactly what had just
+happened to `STAPEL_BUS_BACKEND`'s row (still said `...kafka.KafkaBus` after
+0.11.0 moved the real default to `...memory.MemoryBus`; fixed in this
+release too).
+
+- **New system check** `stapel_core.config.checks` (tag `stapel_config`,
+  E001): walks every key marked `required` — CONFIG.MD rows **and**
+  call-site declarations (below) — and fails `manage.py check` /
+  boot-smoke with `config 'X' обязателен — нужен для: <purpose> — см.
+  CONFIG.MD` when it has no value and no default. A required key with a
+  default never fails (the default is deliberately how "required, but the
+  default is safe" is expressed) — only a required key with *nothing* to
+  fall back on blocks boot. Registered from `CommonDjangoConfig.ready()`.
+- **`declare_config(key, *, source=, purpose=, required=, default=)`** /
+  **`declared_config_entries()`** / **`clear_declared_config()`**
+  (`stapel_core.config`): call-site metadata registration (first-declaration-
+  wins, mirrors `stapel_core.django.swappable.declare_swap`) — a code-sourced
+  registry a future CONFIG.MD regenerator can read instead of trusting the
+  hand-written table to already be in sync. Never overrides a real CONFIG.MD
+  row for the same key (the table stays authoritative); only fills in keys
+  the table does not know about yet.
+- **`get_config(key, ..., purpose="", required=None)`**: passing these
+  kwargs records the same metadata via `declare_config` as a backstop (the
+  same "declare explicitly, or record lazily on first use" shape as
+  `declare_swap`) — free for any existing call site, no behavior change when
+  omitted. One behavior addition: `required=True` explicitly at a call site
+  whose key has no CONFIG.MD row yet still fails closed (`ConfigNotDeclared`)
+  on a missing value instead of the generic `ConfigKeyUnknown` — required is
+  required, declared in the table or not.
+- Fixed CONFIG.MD's stale `STAPEL_BUS_BACKEND` default cell (kafka →
+  memory), and documented both mechanisms in CONFIG.MD's own preamble.
+- Tests: `tests/test_config.py` (`declare_config` registration/first-wins/bad
+  source, `get_config`'s new kwargs incl. the unknown-key-but-required
+  fail-closed path and backward compatibility when omitted).
+  `tests/test_config_checks.py` (required-missing fails, required-present
+  passes, optional-missing never flagged, partial-missing reports only the
+  missing key, a call-site-only declaration is still gated, CONFIG.MD wins
+  over a conflicting call-site declaration for the same key, sanity check
+  against core's own real shipped CONFIG.MD).
+
 ## [0.11.0] - 2026-07-17
 
 ### Changed — BREAKING: bus default backend kafka → memory (in-process)

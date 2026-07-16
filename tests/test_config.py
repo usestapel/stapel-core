@@ -14,7 +14,11 @@ import stapel_core.config as config
 from stapel_core.config import (
     ConfigKeyUnknown,
     ConfigManifestError,
+    ConfigNotDeclared,
     ConfigUnavailable,
+    clear_declared_config,
+    declare_config,
+    declared_config_entries,
     get_config,
     load_manifest,
     parse_config_md,
@@ -47,8 +51,10 @@ def manifest():
 @pytest.fixture(autouse=True)
 def _reset():
     reset_manifest_cache()
+    clear_declared_config()
     yield
     reset_manifest_cache()
+    clear_declared_config()
 
 
 # --- parsing ---------------------------------------------------------------
@@ -195,3 +201,64 @@ class _EmptyProvider:
 
     def get(self, name):
         return None
+
+
+# --- declare_config / call-site metadata (regenerator source, §config) -----
+
+
+def test_declare_config_registers_entry():
+    declare_config("MY_KEY", purpose="Does a thing", required=True, default="x")
+    entries = declared_config_entries()
+    assert entries["MY_KEY"].purpose == "Does a thing"
+    assert entries["MY_KEY"].required is True
+    assert entries["MY_KEY"].default == "x"
+
+
+def test_declare_config_first_call_wins():
+    declare_config("MY_KEY", purpose="first")
+    declare_config("MY_KEY", purpose="second")
+    assert declared_config_entries()["MY_KEY"].purpose == "first"
+
+
+def test_declare_config_bad_source_raises():
+    with pytest.raises(ConfigManifestError):
+        declare_config("MY_KEY", source="s3")
+
+
+def test_clear_declared_config_empties_registry():
+    declare_config("MY_KEY", purpose="x")
+    clear_declared_config()
+    assert declared_config_entries() == {}
+
+
+def test_get_config_purpose_kwarg_declares_backstop(monkeypatch, manifest):
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    get_config("LOG_LEVEL", purpose="Root log level", manifest=manifest)
+    # A manifest row already exists for LOG_LEVEL — declare_config still
+    # records the call-site metadata (for cross-checking), but resolution
+    # used the manifest's own default/required, unaffected by the kwarg.
+    assert declared_config_entries()["LOG_LEVEL"].purpose == "Root log level"
+
+
+def test_get_config_unknown_key_with_required_kwarg_fails_closed(monkeypatch):
+    monkeypatch.delenv("BRAND_NEW_KEY", raising=False)
+    with pytest.raises(ConfigNotDeclared):
+        get_config("BRAND_NEW_KEY", required=True, manifest={})
+
+
+def test_get_config_unknown_key_with_required_kwarg_reads_env(monkeypatch):
+    monkeypatch.setenv("BRAND_NEW_KEY", "value-from-env")
+    assert get_config("BRAND_NEW_KEY", required=True, manifest={}) == "value-from-env"
+
+
+def test_get_config_unknown_key_without_required_kwarg_unchanged(manifest):
+    # Backward compatibility: omitting required/purpose behaves exactly as
+    # before — ConfigKeyUnknown, not the new ConfigNotDeclared path.
+    with pytest.raises(ConfigKeyUnknown):
+        get_config("BRAND_NEW_KEY", manifest=manifest)
+
+
+def test_get_config_declares_even_when_key_unknown(monkeypatch):
+    monkeypatch.setenv("BRAND_NEW_KEY", "v")
+    get_config("BRAND_NEW_KEY", purpose="A new thing", required=True, manifest={})
+    assert declared_config_entries()["BRAND_NEW_KEY"].purpose == "A new thing"

@@ -57,6 +57,12 @@ class CommonDjangoConfig(AppConfig):
         # ModuleNotFoundError forever" misconfiguration at boot-smoke time
         # instead of the first (silently swallowed) publish in production.
         from stapel_core.bus import checks as _bus_checks  # noqa: F401
+        # Config-manifest checks (stapel_core.config.checks): E-level when a
+        # CONFIG.MD-declared (or call-site-declared) required key has no
+        # value and no default — "required" was previously only enforced the
+        # first time some code path called get_config(key); this is the
+        # boot-smoke gate instead.
+        from stapel_core.config import checks as _config_checks  # noqa: F401
 
         # Admin visibility (admin-suite AS-3): re-register contrib service
         # tables (auth.Group, sessions.Session) under declaration-aware admins
