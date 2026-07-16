@@ -74,3 +74,37 @@ def reset_bus() -> None:
     global _bus
     with _lock:
         _bus = None
+
+
+def _on_settings_changed(*, setting, **kwargs) -> None:
+    """Auto-invalidate the cached backend when ``STAPEL_BUS_BACKEND`` changes.
+
+    ``get_bus()`` reads the backend lazily (only on the first real call, not
+    at import time) — but once resolved it is a module-level singleton for
+    the rest of the process. If something calls ``get_bus()`` once before a
+    later ``override_settings(STAPEL_BUS_BACKEND=...)`` (or the
+    pytest-django ``settings`` fixture, which this whole test suite uses),
+    the *first* resolved backend stuck around regardless — exactly the shape
+    of bug the owner caught live (a process that resolved kafka once stays
+    on kafka until a restart, however the setting changes afterward).
+    Connected to Django's ``setting_changed`` signal (the same mechanism DRF
+    uses to invalidate its own cached ``api_settings``), so any runtime
+    reconfiguration path — tests first and foremost, but also a management
+    shell or a future dynamic-settings admin toggle — invalidates the
+    singleton automatically instead of silently keeping the stale backend.
+
+    Production's env-based config needs no such hook: ``os.environ`` is read
+    once at boot and does not change without a process restart, so there is
+    nothing to invalidate there — the very first ``get_bus()`` call already
+    sees the final value.
+    """
+    if setting == "STAPEL_BUS_BACKEND":
+        reset_bus()
+
+
+try:
+    from django.test.signals import setting_changed
+
+    setting_changed.connect(_on_settings_changed)
+except Exception:  # pragma: no cover — django.test is always importable in practice
+    pass

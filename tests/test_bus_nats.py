@@ -44,6 +44,65 @@ def test_get_bus_instantiates_env_backend(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Singleton lifecycle: override_settings must not leave a stale backend
+# cached from before the override (the owner caught this live — a process
+# that resolved a backend once stayed on it regardless of how the setting
+# changed afterward, "stuck" until a restart).
+# ---------------------------------------------------------------------------
+
+
+def test_override_settings_invalidates_cached_backend(monkeypatch):
+    from stapel_core.bus.backends.kafka import KafkaBus
+    from stapel_core.bus.backends.memory import MemoryBus
+
+    monkeypatch.delenv("STAPEL_BUS_BACKEND", raising=False)
+    reset_bus()
+    try:
+        # Resolve (and cache) the default backend *before* any override.
+        assert isinstance(get_bus(), MemoryBus)
+
+        with override_settings(STAPEL_BUS_BACKEND="kafka"):
+            # No manual reset_bus() call here — the setting_changed signal
+            # must have already invalidated the stale MemoryBus singleton.
+            # (KafkaBus's producer connects lazily on first publish(), so
+            # simply instantiating it here needs no broker/env config.)
+            assert isinstance(get_bus(), KafkaBus)
+
+        # Leaving the override block changes the setting back — same story.
+        assert isinstance(get_bus(), MemoryBus)
+    finally:
+        reset_bus()
+
+
+def test_settings_fixture_invalidates_cached_backend(monkeypatch, settings):
+    """pytest-django's ``settings`` fixture (used throughout this suite) is
+    the same override_settings machinery under the hood — same guarantee."""
+    from stapel_core.bus.backends.kafka import KafkaBus
+    from stapel_core.bus.backends.memory import MemoryBus
+
+    monkeypatch.delenv("STAPEL_BUS_BACKEND", raising=False)
+    reset_bus()
+    try:
+        assert isinstance(get_bus(), MemoryBus)
+        settings.STAPEL_BUS_BACKEND = "kafka"
+        assert isinstance(get_bus(), KafkaBus)
+    finally:
+        reset_bus()
+
+
+def test_unrelated_setting_change_does_not_reset_bus(settings):
+    """The signal receiver only reacts to STAPEL_BUS_BACKEND — an unrelated
+    setting flip must not needlessly tear down a live backend/subscribers."""
+    reset_bus()
+    try:
+        bus = get_bus()
+        settings.DEBUG = not settings.DEBUG
+        assert get_bus() is bus  # same instance, untouched
+    finally:
+        reset_bus()
+
+
+# ---------------------------------------------------------------------------
 # Subject mapping
 # ---------------------------------------------------------------------------
 
