@@ -2,6 +2,70 @@
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-07-17
+
+Three more owner findings from the same live run, all additive/non-breaking.
+
+### Fixed — validation error params now carry the field's limit (max_length, etc)
+
+DRF's `ErrorDetail` carries only `.code` (e.g. `'max_length'`) — the actual
+limit lives on the field that raised it
+(`serializer.fields[field_name].max_length`), so a catalog consumer
+(frontend i18n) could never render "no more than N characters" for a
+`max_length`/`min_length`/`max_value`/`min_value`/`max_digits`/
+`decimal_places` field error — `params` was always just `{field}`.
+
+- `StapelDataclassSerializer.is_valid()` now attaches `self` to the raised
+  `ValidationError` (`exc.stapel_serializer`); `stapel_exception_handler`
+  reads the error code's known limit attribute off that field
+  (`_field_limit_params`) and merges it into `params`. A plain
+  `rest_framework.serializers.Serializer` that never attaches itself
+  degrades to the field-name-only `params` exactly as before.
+- Tests: `tests/test_errors.py` (max_length/min_value/max_value errors carry
+  their limit when a serializer is attached; a bare `DRFValidationError`
+  with no attached serializer stays field-name-only; `is_valid()` without
+  `raise_exception` and on valid data behave exactly like stock DRF).
+
+### Added — `error_language` on the error envelope
+
+Live finding: the backend sent a Russian `error` message and the frontend
+had no way to know whether that text was safe to show verbatim or needed
+translating — `COMMON_ERRORS` templates are always English, but the DRF/
+Django-`ValidationError` fallback (`str(detail)`) renders in whatever locale
+`LocaleMiddleware`/`Accept-Language` activated, since DRF's own field
+messages are `gettext_lazy`.
+
+- `StapelError` gets an additive `error_language` field (the active Django
+  locale via `get_language()`, through a `default_factory` so every existing
+  construction site — `StapelErrorResponse()`, both `stapel_exception_handler`
+  branches — picks it up with no code change there). Canon is unchanged: the
+  client still translates by `localizable_error`+`params`; `error` stays a
+  fallback/debug string, now with a known language attached.
+- Tests: `tests/test_errors.py` (`error_language` present and matching
+  `get_language()` by default, follows `translation.override(...)` across
+  `StapelErrorResponse` and all three `stapel_exception_handler` tiers).
+
+### Fixed — bus singleton no longer sticks to a stale backend after a settings change
+
+`get_bus()` resolves the backend lazily on first call, but then holds it as
+a module-level singleton for the rest of the process. If something called
+`get_bus()` once before a later `override_settings(STAPEL_BUS_BACKEND=...)`
+(or the pytest-django `settings` fixture, used throughout this suite), the
+first resolved backend stuck around regardless of how the setting changed
+afterward — the owner caught this live.
+
+- `bus.router` now connects to Django's `setting_changed` signal (the same
+  mechanism DRF uses to invalidate its own cached `api_settings`) and calls
+  `reset_bus()` whenever `STAPEL_BUS_BACKEND` changes — any runtime
+  reconfiguration path (tests first and foremost) invalidates the singleton
+  automatically instead of silently keeping the stale backend. Production's
+  env-based config needs no such hook (`os.environ` is read once at boot and
+  doesn't change without a restart) — the very first `get_bus()` call
+  already sees the final value there.
+- Tests: `tests/test_bus_nats.py` (`override_settings` and the `settings`
+  fixture both invalidate a previously-cached backend; an unrelated setting
+  change leaves a live backend instance untouched).
+
 ## [0.11.1] - 2026-07-17
 
 ### Added — config-manifest required/optional semantics enforced at boot, code-sourced metadata
