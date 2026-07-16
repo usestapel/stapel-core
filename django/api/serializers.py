@@ -134,6 +134,26 @@ class StapelDataclassSerializer(DataclassSerializer):
 
         return fields
 
+    def is_valid(self, *, raise_exception=False):
+        """Same contract as DRF's ``Serializer.is_valid`` — attaches ``self``
+        to the raised exception first.
+
+        A validation error's ``ErrorDetail`` carries only ``.code`` (e.g.
+        ``'max_length'``); the actual limit lives on the field that raised it
+        (``self.fields[field_name].max_length``). ``stapel_exception_handler``
+        reads ``exc.stapel_serializer`` to enrich the error envelope's
+        ``params`` with that limit — a catalog consumer (frontend i18n) needs
+        the number, not just which field and which kind of error.
+        """
+        valid = super().is_valid(raise_exception=False)
+        if not valid and raise_exception:
+            from rest_framework.exceptions import ValidationError
+
+            exc = ValidationError(self.errors)
+            exc.stapel_serializer = self
+            raise exc
+        return valid
+
 
 # ---------------------------------------------------------------------------
 # Docstring parser

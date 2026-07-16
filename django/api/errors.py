@@ -462,12 +462,55 @@ def _registered_key(value) -> Optional[str]:
     return None
 
 
-def _extract_first_field_error(detail):
+#: DRF/Django error code -> the field attribute that carries its limit.
+#: A catalog consumer (frontend i18n) needs the actual number to render
+#: "no more than {max_length} characters" — DRF's ErrorDetail carries only
+#: ``.code`` (e.g. 'max_length'), never the limit itself; that lives on the
+#: field that raised it (``serializer.fields[field_name].max_length``).
+_FIELD_LIMIT_ATTRS = {
+    "max_length": "max_length",
+    "min_length": "min_length",
+    "max_value": "max_value",
+    "min_value": "min_value",
+    "max_digits": "max_digits",
+    "max_decimal_places": "decimal_places",
+    "max_whole_digits": "max_whole_digits",
+}
+
+
+def _field_limit_params(serializer, field_name: str, code: Optional[str]) -> Dict[str, Any]:
+    """``{attr: value}`` for the limit *code* names, read off the field itself.
+
+    Empty when there is no serializer to introspect (a plain
+    ``rest_framework.serializers.Serializer`` that never attached itself —
+    see :class:`StapelDataclassSerializer.is_valid`), the code names no known
+    limit, or the field does not carry that attribute (e.g. no ``max_length``
+    was declared, so DRF could not have raised this code for it anyway).
+    """
+    if serializer is None or not code:
+        return {}
+    attr = _FIELD_LIMIT_ATTRS.get(code)
+    if not attr:
+        return {}
+    try:
+        target_field = serializer.fields[field_name]
+    except (KeyError, AttributeError, TypeError):
+        return {}
+    value = getattr(target_field, attr, None)
+    if value is None:
+        return {}
+    return {attr: value}
+
+
+def _extract_first_field_error(detail, serializer=None):
     """
     Extract the first field error from DRF ValidationError detail.
 
     Returns (error_key, params, fallback_message).
     - For field errors: error_key='error.400.field.required', params={'field': 'code'}
+      plus any limit the error code names (params={'field': 'code', 'max_length': 5}
+      for a max_length error) — read off *serializer*'s field when given (see
+      :func:`_field_limit_params`).
     - For non-field: error_key='error.400.validation_error', params={}
     - If the detail string itself is a registered error key (e.g. an
       StapelValidationError raised inside validate_<field>), it is preserved.
@@ -514,6 +557,7 @@ def _extract_first_field_error(detail):
             code = getattr(first_err, "code", None) or "invalid"
             error_key = _drf_code_to_error_key(code)
             params = {"field": field_name}
+            params.update(_field_limit_params(serializer, field_name, code))
             return error_key, params, str(first_err)
 
         # Only non_field_errors
@@ -564,7 +608,12 @@ def stapel_exception_handler(exc, context):
 
     # Tier 2 & 3: DRF ValidationError — field errors or legacy raises
     if isinstance(exc, DRFValidationError):
-        error_key, params, fallback = _extract_first_field_error(exc.detail)
+        # StapelDataclassSerializer.is_valid() attaches itself so limit
+        # attributes (max_length, …) can be read off the field that raised —
+        # a plain rest_framework.serializers.Serializer that never attached
+        # one degrades to the field-name-only params exactly as before.
+        serializer = getattr(exc, "stapel_serializer", None)
+        error_key, params, fallback = _extract_first_field_error(exc.detail, serializer=serializer)
         params["detail"] = exc.detail
         data = StapelError(localizable_error=error_key, error=fallback, params=params)
         return Response(StapelErrorSerializer(data).data, status=400)

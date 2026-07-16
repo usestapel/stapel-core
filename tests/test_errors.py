@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+import pytest
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ErrorDetail
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -307,6 +308,85 @@ class TestIronExceptionHandler:
         resp = stapel_exception_handler(exc, _ctx())
         assert resp.data["localizable_error"] == "error.400.field.max_length"
         assert resp.data["params"]["field"] == "name"
+        # No serializer attached (a bare DRFValidationError, as any plain
+        # rest_framework.serializers.Serializer would raise) -> no limit in
+        # params, exactly the pre-existing behavior.
+        assert "max_length" not in resp.data["params"]
+
+    def test_drf_field_error_with_attached_serializer_carries_limit(self):
+        """StapelDataclassSerializer.is_valid() attaches itself to the raised
+        exception so the handler can read the field's declared limit — a
+        frontend i18n consumer needs the number (`max_length: 5`), not just
+        which field and which kind of error."""
+
+        @dataclass
+        class _LimitedDoc:
+            name: str
+            age: int
+
+        class _LimitedSerializer(StapelDataclassSerializer):
+            class Meta:
+                dataclass = _LimitedDoc
+                extra_kwargs = {
+                    "name": {"max_length": 5},
+                    "age": {"max_value": 10, "min_value": 0},
+                }
+
+        serializer = _LimitedSerializer(data={"name": "toolongname", "age": 3})
+        with pytest.raises(DRFValidationError) as excinfo:
+            serializer.is_valid(raise_exception=True)
+
+        resp = stapel_exception_handler(excinfo.value, _ctx())
+        assert resp.data["localizable_error"] == "error.400.field.max_length"
+        assert resp.data["params"]["field"] == "name"
+        assert resp.data["params"]["max_length"] == 5
+
+    def test_drf_min_max_value_field_errors_carry_limits(self):
+        @dataclass
+        class _RangedDoc:
+            age: int
+
+        class _RangedSerializer(StapelDataclassSerializer):
+            class Meta:
+                dataclass = _RangedDoc
+                extra_kwargs = {"age": {"max_value": 10, "min_value": 0}}
+
+        too_high = _RangedSerializer(data={"age": 999})
+        with pytest.raises(DRFValidationError) as excinfo:
+            too_high.is_valid(raise_exception=True)
+        resp = stapel_exception_handler(excinfo.value, _ctx())
+        assert resp.data["params"]["max_value"] == 10
+
+        too_low = _RangedSerializer(data={"age": -5})
+        with pytest.raises(DRFValidationError) as excinfo:
+            too_low.is_valid(raise_exception=True)
+        resp = stapel_exception_handler(excinfo.value, _ctx())
+        assert resp.data["params"]["min_value"] == 0
+
+    def test_is_valid_without_raise_exception_behaves_as_before(self):
+        @dataclass
+        class _PlainDoc:
+            name: str
+
+        class _PlainSerializer(StapelDataclassSerializer):
+            class Meta:
+                dataclass = _PlainDoc
+
+        serializer = _PlainSerializer(data={})
+        assert serializer.is_valid() is False
+        assert serializer.errors  # populated exactly like stock DRF
+
+    def test_is_valid_true_on_valid_data(self):
+        @dataclass
+        class _PlainDoc:
+            name: str
+
+        class _PlainSerializer(StapelDataclassSerializer):
+            class Meta:
+                dataclass = _PlainDoc
+
+        serializer = _PlainSerializer(data={"name": "ok"})
+        assert serializer.is_valid(raise_exception=True) is True
 
     def test_drf_non_field_errors(self):
         exc = DRFValidationError([ErrorDetail("Some non-field error", code="invalid")])
