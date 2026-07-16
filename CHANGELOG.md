@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-07-16
+
+### Added — Projection local mode: colocation semantics (projections-and-composition §1)
+
+One `Projection` declaration now works in two modes; the mode is a property
+of the TOPOLOGY at process start, never of business code:
+
+- **`Projection.live_query`** (new field) — the owner's keyed batch Function
+  for the local-mode read path. Contract: `{"keys": [<str>, ...]}` →
+  `{key: {..fields..}}`.
+- **`Projection.force_mode`** (new field) — optional `"local"`/`"remote"`
+  override of the auto-detect (e.g. a test exercising the remote path in a
+  monolithic dev environment).
+- **`resolve_mode(proj)`** — `"local"` when the owning app is installed in
+  this process, `"remote"` otherwise. The owner is derived from the first
+  `consumes` topic prefix and looked up by *app label* via
+  `apps.get_app_config(label)` — NOT `apps.is_installed()`, which compares
+  dotted module paths. Relies on the convention "app_label == bus namespace
+  prefix" (topology §37).
+- **`comm.projections.read(name, keys)`** — the ONE mode-blind accessor
+  business code uses instead of querying the `ProjectionModel` directly
+  (a direct ORM query silently hard-wires remote mode into the caller).
+  remote: one `projection_key__in` query, bookkeeping columns stripped;
+  local: one synchronous `call(live_query, {"keys": [...]})`. Identical
+  result shape either way: `{key: fields}`, stringified keys.
+- **`validate_registry()`** now branches on the resolved mode: a local
+  projection is valid without `model` but must declare `live_query`; a
+  remote projection must declare `model` (unchanged checks otherwise).
+- **`wire_projections()`** skips local-mode projections — no bus
+  subscription (the owner applies its own events in-process already; there
+  is no table to feed).
+- `rebuild`/`drift_check`/`projection_status` remain remote-only (local data
+  is live by construction — there is nothing to backfill).
+
+### Added — real `info.version` in OpenAPI (api-versioning plan, step 0)
+
+- `get_spectacular_settings()` gains `package="stapel-<mod>"`: resolves
+  `info.version` from the installed distribution's metadata when `version`
+  is not passed explicitly. An explicit `version` wins; with neither, the
+  historical `"1.0.0"` default is kept (an unknown package logs a warning
+  and falls back rather than crashing settings.py). Closes the
+  placeholder-version finding: modules passed nothing, so Swagger UI and
+  emitted `docs/schema.json` lied about the version.
+
 ## [0.10.1] - 2026-07-14
 
 ### Fixed — `users_user.avatar` URLField truncation on OAuth signup (500)

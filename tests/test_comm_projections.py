@@ -354,3 +354,120 @@ def test_command_unknown_projection_errors():
 
     with pytest.raises(CommandError):
         call_command("rebuild_projection", "nope.nope")
+
+
+# ---------------------------------------------------------------------------
+# Local/remote mode: auto-detect, validate branching, wiring, read()
+# (projections-and-composition §1)
+# ---------------------------------------------------------------------------
+
+
+def _local_projection(**overrides):
+    """A projection whose owner app IS installed: topic prefix "users" matches
+    the installed stapel_core.django.users app label — local mode."""
+    attrs = dict(
+        name="catalog.user_badges",
+        consumes="users.badges_changed",
+        source_key="user_id",
+        live_query="users.badges_by_keys",
+    )
+    attrs.update(overrides)
+    return type("_LocalProj", (Projection,), attrs)()
+
+
+def test_resolve_mode_autodetect():
+    from stapel_core.comm.projections import resolve_mode
+
+    # Owner app label "users" is installed → local.
+    assert resolve_mode(_local_projection()) == "local"
+    # Owner app label "engagement" is not installed → remote.
+    assert resolve_mode(_likes_projection()) == "remote"
+
+
+def test_resolve_mode_force_override():
+    from stapel_core.comm.projections import resolve_mode
+
+    proj = _local_projection(name="catalog.forced", force_mode="remote",
+                             model=LikesReadModel)
+    assert resolve_mode(proj) == "remote"
+    bogus = _local_projection(name="catalog.bogus", force_mode="sideways")
+    with pytest.raises(ProjectionConfigError, match="force_mode"):
+        resolve_mode(bogus)
+
+
+def test_validate_local_valid_without_model():
+    _local_projection()  # no model at all
+    validate_registry()  # must not raise
+
+
+def test_validate_local_requires_live_query():
+    _local_projection(live_query="")
+    with pytest.raises(ProjectionConfigError, match="live_query"):
+        validate_registry()
+
+
+def test_validate_remote_requires_model():
+    _likes_projection(model=None)
+    with pytest.raises(ProjectionConfigError, match="model"):
+        validate_registry()
+
+
+def test_wire_skips_local_projections():
+    _local_projection()
+    _likes_projection()
+    count = wire_projections()
+    # Only the remote projection subscribed (one topic).
+    assert count == 1
+    assert action_registry.handlers("users.badges_changed") == []
+    assert len(action_registry.handlers("engagement.likes_changed")) == 1
+
+
+def test_read_remote_via_table(likes_table):
+    from stapel_core.comm.projections import read
+
+    proj = _likes_projection()
+    apply_event(proj, _event({"listing_id": 7, "likes_count": 3, "revision": 1}))
+    apply_event(proj, _event({"listing_id": 8, "likes_count": 5, "revision": 1},
+                             event_id="e2"))
+    result = read("catalog.listing_likes", keys=[7, 8, 999])
+    # Same shape as local mode: {key: fields}, bookkeeping stripped,
+    # absent keys absent.
+    assert result == {"7": {"likes_count": 3}, "8": {"likes_count": 5}}
+
+
+def test_read_local_via_live_query(db):
+    from stapel_core.comm import register_function
+    from stapel_core.comm.projections import read
+    from stapel_core.comm.registry import function_registry
+
+    function_registry.clear()
+    _local_projection()
+    seen = {}
+
+    def badges_by_keys(payload):
+        seen.update(payload)
+        return {k: {"badges": int(k) * 10} for k in payload["keys"]}
+
+    register_function("users.badges_by_keys", badges_by_keys)
+    result = read("catalog.user_badges", keys=[1, 2])
+    assert seen == {"keys": ["1", "2"]}  # keys stringified on the wire
+    assert result == {"1": {"badges": 10}, "2": {"badges": 20}}
+
+
+def test_read_empty_keys_short_circuits():
+    from stapel_core.comm.projections import read
+
+    _local_projection()
+    assert read("catalog.user_badges", keys=[]) == {}
+
+
+def test_read_local_bad_live_query_shape(db):
+    from stapel_core.comm import register_function
+    from stapel_core.comm.projections import read
+    from stapel_core.comm.registry import function_registry
+
+    function_registry.clear()
+    _local_projection()
+    register_function("users.badges_by_keys", lambda payload: [1, 2])
+    with pytest.raises(ProjectionError, match="must return a dict"):
+        read("catalog.user_badges", keys=[1])

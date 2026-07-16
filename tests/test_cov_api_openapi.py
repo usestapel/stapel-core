@@ -228,6 +228,26 @@ class TestGetSpectacularSettings:
         get_spectacular_settings("Other", "D")
         assert SPECTACULAR_SETTINGS["TITLE"] == "Stapel API"
 
+    def test_version_defaults_without_package(self):
+        # Historical default preserved when neither version nor package given.
+        assert get_spectacular_settings("T", "D")["VERSION"] == "1.0.0"
+
+    def test_version_resolved_from_package_metadata(self):
+        from importlib.metadata import version as dist_version
+
+        # info.version = the real installed package version (api-versioning
+        # plan step 0: no more placeholder lies in Swagger UI / schema.json).
+        s = get_spectacular_settings("T", "D", package="stapel-core")
+        assert s["VERSION"] == dist_version("stapel-core")
+
+    def test_explicit_version_wins_over_package(self):
+        s = get_spectacular_settings("T", "D", version="9.9.9", package="stapel-core")
+        assert s["VERSION"] == "9.9.9"
+
+    def test_unknown_package_falls_back(self):
+        s = get_spectacular_settings("T", "D", package="stapel-does-not-exist")
+        assert s["VERSION"] == "1.0.0"
+
 
 class TestSwaggerUrls:
     def test_get_swagger_urls_names(self):

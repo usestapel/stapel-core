@@ -12,8 +12,33 @@ to be safely used in settings.py files.
 from django.urls import include, path
 
 
+def _resolve_package_version(package: str) -> str:
+    """Version of an installed distribution (``importlib.metadata``), or
+    ``"1.0.0"`` (the historical default) with a warning when the package
+    metadata cannot be found — never crash settings.py over a version
+    string."""
+    from importlib.metadata import PackageNotFoundError, version as dist_version
+
+    try:
+        return dist_version(package)
+    except PackageNotFoundError:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "get_spectacular_settings: package %r is not installed — "
+            "info.version falls back to '1.0.0'; pass version=... explicitly",
+            package,
+        )
+        return "1.0.0"
+
+
 def get_spectacular_settings(
-    title: str, description: str, version: str = "1.0.0", **extra_settings
+    title: str,
+    description: str,
+    version: str | None = None,
+    *,
+    package: str | None = None,
+    **extra_settings,
 ) -> dict:
     """
     Get drf-spectacular settings for a service.
@@ -24,7 +49,14 @@ def get_spectacular_settings(
     Args:
         title: API title (e.g., "Stapel Authentication API")
         description: API description (markdown supported)
-        version: API version string
+        version: API version string. Pass the REAL version (read from
+            version.txt / pyproject) — a hardcoded placeholder makes
+            ``info.version`` lie in Swagger UI and in the emitted
+            ``docs/schema.json`` (api-versioning plan, step 0 / SCHEMA001).
+        package: Installed distribution name (e.g. ``"stapel-auth"``) to
+            resolve the version from package metadata when ``version`` is
+            not given explicitly. An explicit ``version`` wins. When neither
+            is given the historical default ``"1.0.0"`` is kept.
         **extra_settings: Additional settings to merge
 
     Returns:
@@ -37,10 +69,13 @@ def get_spectacular_settings(
         SPECTACULAR_SETTINGS = get_spectacular_settings(
             title="Stapel Auth API",
             description="Authentication service for Stapel platform.",
-            version="1.0.0",
+            package="stapel-auth",  # info.version = installed package version
         )
     """
     from stapel_core.django.settings import SPECTACULAR_SETTINGS as base_settings
+
+    if version is None:
+        version = _resolve_package_version(package) if package else "1.0.0"
 
     settings = base_settings.copy()
     settings.update(

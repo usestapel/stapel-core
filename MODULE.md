@@ -191,10 +191,34 @@ batched, all-or-nothing, with progress, and `--check` (`comm.drift_check`)
 compares row counts without writing; **`comm.projection_status(name)`** for
 row count / last sequence / lag.
 
+**Two modes, one declaration** (projections-and-composition §1). The mode is
+a property of TOPOLOGY at process start, never of business code.
+`resolve_mode(proj)` auto-detects it from the owner's app label — the first
+`consumes` topic prefix (`"engagement.likes_changed"` → label `engagement`;
+convention: a module's `app_label` == its bus namespace prefix; looked up
+via `apps.get_app_config(label)`, NOT `is_installed()` which compares dotted
+module paths). Optional `force_mode = "local" | "remote"` overrides.
+
+- **remote** (owner not installed — separate services): everything above; a
+  materialised table fed from the bus, `model` required.
+- **local** (owner installed in the same process): no table, no bus
+  subscription (`wire_projections()` skips it); reads go first-hand through
+  the owner's **`live_query`** Function — a keyed batch lookup, contract
+  `{"keys": [<str>, ...]}` → `{key: {..fields..}}`. `live_query` required
+  in local mode; `model` optional.
+
+Business code never branches on the mode — it calls the ONE accessor
+**`comm.projections.read(name, keys)`** (never the ProjectionModel ORM
+directly — that hard-wires remote mode into the caller): returns
+`{key: fields}` with stringified keys, identical shape in both modes; absent
+keys are simply missing.
+
 Loud config validation at app ready (`validate_registry`, raises
-`ProjectionConfigError`): **one table = one source** (no two projections
-target the same model), the model must derive from `ProjectionModel`, and
-required attributes must be present. Rules the primitive encodes (review/lint
+`ProjectionConfigError`), branched by resolved mode: local requires
+`live_query` (model/table checks skipped); remote requires `model` and the
+existing checks — **one table = one source** (no two projections target the
+same model), the model must derive from `ProjectionModel`, required
+attributes present. Rules the primitive encodes (review/lint
 matters): projections are read-only for business code; one projection owns one
 source domain and its table (projected fields never mixed with locally
 computed aggregates); the data *owner* computes each aggregate and publishes
@@ -203,6 +227,10 @@ never `post_save` recompute loops. The owner's `source_of_truth` Function
 pages with `{"cursor", "limit"}` → `{"rows": [{source_key, "seq", **fields}],
 "cursor", "total"}`. Install the `stapel_core.django.projections` app to get
 the model base and the management command.
+`rebuild`/`drift_check`/`projection_status` remain remote-only (local data is
+live by construction). Composite libs (stapel-shop &c.) are the canonical
+home for cross-domain Projection declarations ("glue" between domain-blind
+engines — reviews may not know about listings; the composite may).
 
 ### Bus backends — `STAPEL_BUS_BACKEND` (`bus/router.py`)
 
