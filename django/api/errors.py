@@ -245,6 +245,25 @@ def build_error_registry() -> list:
 # =============================================================================
 
 
+def _current_error_language() -> str:
+    """The active Django locale (e.g. ``'en'``, ``'ru'``) for ``error``.
+
+    ``error`` is *not* reliably English: ``COMMON_ERRORS``/registered
+    templates are plain strings (always English), but the fallback message on
+    the DRF/Django-ValidationError tiers is ``str(detail)`` — and DRF's own
+    built-in field messages are wrapped in ``gettext_lazy``, so they render in
+    whatever locale ``LocaleMiddleware``/``Accept-Language`` activated for the
+    request. The canon stays client-side translation by
+    ``localizable_error``+``params``; ``error`` is a fallback/debug string —
+    but the client needs to know *which* language it is in before deciding
+    whether to show it verbatim or discard it, hence this field (may be
+    English even when active locale isn't, for registry-template errors).
+    """
+    from django.utils.translation import get_language
+
+    return get_language() or ""
+
+
 @dataclass
 class StapelError:
     """
@@ -252,13 +271,19 @@ class StapelError:
 
     Attributes:
         localizable_error: Translation key for client-side localization. Example: error.404.not_found
-        error: Human-readable message in English. Example: Requested resource not found
+        error: Human-readable fallback/debug message — not reliably English,
+            see error_language. Example: Requested resource not found
         params: Context values for template placeholders. Example: {"retry_after": 30}
+        error_language: Active Django locale `error` was rendered in (e.g.
+            'en', 'ru') — the client uses this to decide whether `error` is
+            safe to show verbatim or whether it must translate from
+            localizable_error+params instead. Example: en
     """
 
     localizable_error: str
     error: str
     params: Dict[str, Any] = field(default_factory=dict)
+    error_language: str = field(default_factory=_current_error_language)
 
 
 class StapelErrorSerializer(StapelDataclassSerializer):

@@ -52,6 +52,7 @@ class TestStapelErrorResponse:
         assert "localizable_error" in resp.data
         assert "error" in resp.data
         assert "params" in resp.data
+        assert "error_language" in resp.data
 
     def test_localizable_error_matches_key(self):
         resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
@@ -249,6 +250,53 @@ class TestError429RateLimit:
 # ---------------------------------------------------------------------------
 # stapel_exception_handler
 # ---------------------------------------------------------------------------
+
+
+class TestErrorLanguage:
+    """error_language: which locale `error` (the fallback/debug message) was
+    rendered in — canon stays client-side translation by
+    localizable_error+params; the client needs to know whether `error` is
+    safe to show verbatim (see StapelError docstring)."""
+
+    def test_default_matches_active_language(self):
+        from django.utils.translation import get_language
+
+        resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
+        assert resp.data["error_language"] == (get_language() or "")
+
+    def test_follows_active_translation_override(self):
+        from django.utils.translation import override
+
+        with override("ru"):
+            resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
+            assert resp.data["error_language"] == "ru"
+        with override("en"):
+            resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
+            assert resp.data["error_language"] == "en"
+
+    def test_present_on_exception_handler_django_validation_tier(self):
+        from django.utils.translation import override
+
+        with override("ru"):
+            exc = DjangoValidationError({"name": ["This field is required."]})
+            resp = stapel_exception_handler(exc, _ctx())
+            assert resp.data["error_language"] == "ru"
+
+    def test_present_on_exception_handler_drf_validation_tier(self):
+        from django.utils.translation import override
+
+        with override("ru"):
+            exc = DRFValidationError({"name": [ErrorDetail("Too long", code="max_length")]})
+            resp = stapel_exception_handler(exc, _ctx())
+            assert resp.data["error_language"] == "ru"
+
+    def test_present_on_service_error_tier(self):
+        from django.utils.translation import override
+
+        with override("ru"):
+            exc = StapelServiceError(403, ERR_403_FORBIDDEN)
+            resp = stapel_exception_handler(exc, _ctx())
+            assert resp.data["error_language"] == "ru"
 
 
 class TestIronExceptionHandler:
