@@ -457,11 +457,21 @@ JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'stapel')
 
 # Message bus backend
 # Options:
-#   stapel_core.bus.backends.kafka.KafkaBus   — production (default)
-#   stapel_core.bus.backends.memory.MemoryBus — tests / local dev without a broker
+#   stapel_core.bus.backends.memory.MemoryBus — default: synchronous
+#                                                in-process delivery, correct
+#                                                for a dev box or a monolith
+#                                                with no broker
+#   stapel_core.bus.backends.kafka.KafkaBus   — cross-process, explicit opt-in
+#   stapel_core.bus.backends.nats.NatsJetStreamBus — cross-process, explicit opt-in
+#
+# Before 0.11.0 this defaulted to Kafka: a deployment that never set this env
+# var and never installed confluent-kafka got a ModuleNotFoundError on every
+# publish() — silently swallowed by fail-soft callers (see
+# notifications.request_notification). A deployment that needs Kafka/NATS
+# must now set STAPEL_BUS_BACKEND explicitly (unaffected if it already does).
 STAPEL_BUS_BACKEND = os.getenv(
     'STAPEL_BUS_BACKEND',
-    'stapel_core.bus.backends.kafka.KafkaBus',
+    'stapel_core.bus.backends.memory.MemoryBus',
 )
 
 # Kafka Configuration (used when STAPEL_BUS_BACKEND = KafkaBus)

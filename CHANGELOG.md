@@ -2,6 +2,83 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-17
+
+### Changed — BREAKING: bus default backend kafka → memory (in-process)
+
+Live run finding (miттудей): `request_notification` (OTP emails) silently
+never left the process — `STAPEL_BUS_BACKEND` defaulted to
+`stapel_core.bus.backends.kafka.KafkaBus`, `confluent-kafka` was not
+installed, and every `publish()` raised `ModuleNotFoundError` deep inside
+`KafkaBus._get_producer()`, swallowed by the (by-contract) fail-soft
+`except Exception: logger.exception(...); return False` in
+`notifications.request_notification`. Nobody was watching that log.
+
+- **Default backend is now `stapel_core.bus.backends.memory.MemoryBus`**
+  (`bus/router.py`, `django/settings.py`) — synchronous, in-process delivery
+  to subscribers of *this* process, the correct semantics for a dev box or a
+  monolith with no broker. Kafka/NATS are explicit opt-in via
+  `STAPEL_BUS_BACKEND` (env var or Django setting) — a deployment that
+  already sets it (to anything, including kafka) is unaffected. A
+  deployment that relied on the *implicit* kafka default with no explicit
+  `STAPEL_BUS_BACKEND` must now set it explicitly to keep cross-process
+  delivery — hence the minor bump, not a patch.
+- **`stapel_core.bus.publish()` logs loudly on a missing transport
+  library**: an `ImportError`/`ModuleNotFoundError` out of the backend
+  (kafka/nats without their extra installed) is now logged at `ERROR` with
+  topic/event_type and a `pip install 'stapel-core[kafka|nats]'` hint,
+  *before* re-raising — callers that fail-soft on publish errors (like
+  `request_notification`) still leave a loud trace instead of a silent one.
+  Other failures (broker unreachable, etc.) propagate unchanged — no new
+  fail-open behavior.
+- **New system check** `stapel_core.bus.checks` (tag `stapel_bus`, E001):
+  `manage.py check` now fails when the *effective* `STAPEL_BUS_BACKEND`
+  names `kafka`/`nats` but the corresponding client library
+  (`confluent_kafka`/`nats`) is not importable — caught at boot-smoke time
+  instead of the first (silently swallowed) `publish()` in production.
+  Registered from `CommonDjangoConfig.ready()`.
+- Tests: `tests/test_bus_checks.py` (check clean/error on
+  memory/routing/custom/kafka/nats, env-over-setting resolution, loud
+  publish-time logging + re-raise, non-`ImportError` failures still
+  propagate unchanged). `tests/test_cov_infra_bus.py`'s
+  `_resolve_backend_path` default-resolution tests updated for the new
+  default.
+
+### Added — admin/API navigation between installed Stapel modules (BACKLOG §37)
+
+A monolith was blind to its own installed apps in the admin: no in-app way
+to jump from one Stapel module's admin section to another's, or to a
+module's Swagger/schema — only the pre-existing cross-*service* "Services"
+menu (STAPEL_SERVICES, admin-suite AS-4), which a monolith doesn't seed
+(§37-уточнение: "монолит не сеет env — он видит свои аппки сам").
+
+- **`stapel_core.django.nav.discover_modules()` / `build_modules()`**: pure
+  `INSTALLED_APPS` introspection, no deploy-config seed required. An
+  AppConfig counts as a Stapel module when it carries `stapel_module = True`
+  (the explicit marker a project's own local app sets to opt in) or its
+  `name` follows the published `stapel_*` pip-package convention
+  (auto-detected; `stapel_core` itself and its `stapel_core.django.*`
+  internal apps are always excluded — framework, not content). Each entry
+  resolves `admin_url` (the stock Django per-app admin index,
+  `/admin/<app_label>/`, mounts-registry-aware fallback when
+  `ROOT_URLCONF` can't resolve it), `swagger_url`/`schema_url` (prefers a
+  per-module Swagger mount when the module has one — the §37
+  `/<mod>/swagger/` canon — else the deployment-wide Swagger when mounted;
+  `None`, never a guessed 404, when introspection is off).
+- **Admin index "Apps" block**: `admin/base_site.html` (the existing
+  template-override seam) gained an Apps dropdown next to the Services one,
+  linking every discovered module to its admin section, Swagger, and
+  schema. Wired via the existing `stapel_services` context processor
+  (`stapel_modules` key).
+- **`GET /nav`** (`stapel_core.django.nav_views.get_nav_urls()`): staff-gated
+  JSON aggregate of modules + services + extra nav sections, for a future
+  frontend to consume the same navigation the admin renders.
+- Tests: `tests/test_nav_modules.py` (marker/pip-convention/core-exclusion
+  filtering, 2-3 mocked modules with correct admin/swagger/schema links incl.
+  the per-module-vs-deployment-wide-fallback branch, the single-module case,
+  the context processor, the `/nav` view incl. staff gating, and a
+  template-level render of the Apps block incl. hidden-when-empty).
+
 ## [0.10.4] - 2026-07-16
 
 ### Added — §55 slice 2: swap declarations, presenter auto-catalog, reference consumer

@@ -51,6 +51,12 @@ class CommonDjangoConfig(AppConfig):
         # for a malformed STAPEL_SERVICES env-JSON or STAPEL_ADMIN["NAV_LINKS"]
         # overlay — otherwise the nav block silently renders empty.
         from stapel_core.django import nav_checks as _nav_checks  # noqa: F401
+        # Bus-backend checks (stapel_core.bus.checks): E-level when the
+        # configured STAPEL_BUS_BACKEND names a transport (kafka/nats) whose
+        # client library is not installed — catches the "publish() raises
+        # ModuleNotFoundError forever" misconfiguration at boot-smoke time
+        # instead of the first (silently swallowed) publish in production.
+        from stapel_core.bus import checks as _bus_checks  # noqa: F401
 
         # Admin visibility (admin-suite AS-3): re-register contrib service
         # tables (auth.Group, sessions.Session) under declaration-aware admins

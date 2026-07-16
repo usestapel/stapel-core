@@ -11,8 +11,16 @@ Bus singleton — backend chosen by environment first, Django setting second.
     # Django settings (fallback, same forms):
     STAPEL_BUS_BACKEND = "memory"
 
-Default is kafka for backward compatibility; new deployments should set
-``nats`` (JetStream) — see docs/module-communication.md.
+Default is ``memory`` — synchronous in-process delivery to subscribers of
+*this* process, the correct semantics for a dev box or a monolith with no
+broker. Kafka/NATS are explicit opt-in via ``STAPEL_BUS_BACKEND`` (env or
+setting); a deployment that needs cross-process delivery must configure one
+of them explicitly — see docs/module-communication.md. (Before 0.11.0 the
+default was ``kafka``: a deployment that never installed ``confluent-kafka``
+and never set ``STAPEL_BUS_BACKEND`` got a ``ModuleNotFoundError`` on every
+publish, silently swallowed by callers that fail-soft on publish errors —
+see ``stapel_core.bus.checks`` for the system check that now catches this at
+boot instead.)
 """
 from __future__ import annotations
 
@@ -43,7 +51,7 @@ def _resolve_backend_path() -> str:
         except Exception:  # settings not configured
             dotted = ""
     if not dotted:
-        dotted = "kafka"
+        dotted = "memory"
     return SHORTHANDS.get(dotted, dotted)
 
 

@@ -453,11 +453,149 @@ def current_dashboard_url(user) -> Optional[str]:
     return None
 
 
+# ─── Module registry (INSTALLED_APPS introspection, BACKLOG §37) ───────────
+#
+# The *service* registry above (STAPEL_SERVICES) is sown by deploy config —
+# right for a microservices topology, where a process cannot see its
+# siblings any other way. A monolith needs no such seed: it hosts every one
+# of its Stapel modules in the same INSTALLED_APPS list already, so it can
+# discover them directly by introspection (§37-уточнение, 2026-07-10).
+#
+# A module counts as a "Stapel module" when either:
+#   - its AppConfig carries ``stapel_module = True`` (a class or instance
+#     attribute — the explicit marker a project's own local app sets to opt
+#     in, e.g. ``apps/tools``: "скелет tools ставит маркер своим"), or
+#   - it is one of the published ``stapel_*`` pip packages (AppConfig.name
+#     starts with "stapel_", the PyPI/import-name convention every module in
+#     this repo follows) — auto-detected, no marker needed. ``stapel_core``
+#     itself (and its ``stapel_core.django.*`` internal apps: users, outbox,
+#     taskstore, …) is the framework, not a content module, and is always
+#     excluded.
+# An AppConfig can also opt *out* of the auto-detect with
+# ``stapel_module = False`` (rare — a stapel_* package that is pure library,
+# no admin/API surface of its own).
+
+
+def _is_stapel_app(app_config: Any) -> bool:
+    marker = getattr(app_config, "stapel_module", None)
+    if marker is not None:
+        return bool(marker)
+    name = app_config.name
+    return name.startswith("stapel_") and not (
+        name == "stapel_core" or name.startswith("stapel_core.")
+    )
+
+
+@dataclass(frozen=True)
+class ModuleNav:
+    """One discovered Stapel module of *this* process."""
+
+    key: str  # app_label
+    name: str  # verbose_name
+    admin_url: str
+    #: None when introspection (Swagger/schema) is not mounted in this
+    #: deployment (``get_dev_urls`` only mounts it for DJANGO_ENV in
+    #: {local, dev}) — never a link to a page that 404s.
+    swagger_url: Optional[str] = None
+    schema_url: Optional[str] = None
+
+
+def _reverse_or_none(name: str, **kwargs) -> Optional[str]:
+    from django.urls import NoReverseMatch, reverse
+
+    try:
+        return reverse(name, **kwargs)
+    except NoReverseMatch:
+        return None
+    except Exception:
+        return None
+
+
+def _module_admin_url(app_config: Any) -> str:
+    """The stock Django per-app admin index — ``/admin/<app_label>/``.
+
+    ``admin:app_list`` is a builtin Django URL name that reverses for any
+    app_label regardless of whether that app registered models with this
+    admin site, so this always succeeds once ``django.contrib.admin`` is
+    installed; a bare prefix (mounts-registry aware) covers the standalone
+    case (no ROOT_URLCONF, e.g. a package test harness).
+    """
+    url = _reverse_or_none("admin:app_list", kwargs={"app_label": app_config.label})
+    if url:
+        return url
+    from stapel_core.django.mounts import admin_index_url
+
+    return f"{admin_index_url()}{app_config.label}/"
+
+
+def _module_api_urls(app_config: Any) -> tuple[Optional[str], Optional[str]]:
+    """(swagger_url, schema_url) for *app_config*.
+
+    Prefers a per-module mount: a module that includes
+    :func:`stapel_core.django.openapi.swagger.get_swagger_urls` under its own
+    URL namespace (the §37 canon — ``/<mod>/swagger/`` + ``/<mod>/schema/``,
+    one schema per module instead of one blob for the whole deployment) gets
+    its own links. Today's typical monolith mounts a single deployment-wide
+    Swagger instead; falling back to it keeps the link real (never a guess
+    at a path that 404s) rather than emitting nothing.
+    """
+    swagger = _reverse_or_none(f"{app_config.label}:swagger-ui")
+    schema = _reverse_or_none(f"{app_config.label}:schema")
+    if swagger or schema:
+        return swagger, schema
+    if not swagger_mounted():
+        return None, None
+    return current_swagger_url(), _reverse_or_none("schema")
+
+
+def discover_modules() -> List[ModuleNav]:
+    """Every installed Stapel module of this process, admin+API linked.
+
+    Sorted by display name for a stable render order. Safe to call with no
+    apps registered (an empty INSTALLED_APPS or a non-Django harness) — with
+    no ``django.apps`` app registry to walk, this is not the framework's
+    business to reconstruct; ``manage.py`` always has one.
+    """
+    from django.apps import apps as django_apps
+
+    modules: List[ModuleNav] = []
+    for app_config in django_apps.get_app_configs():
+        if not _is_stapel_app(app_config):
+            continue
+        swagger_url, schema_url = _module_api_urls(app_config)
+        modules.append(
+            ModuleNav(
+                key=app_config.label,
+                name=getattr(app_config, "verbose_name", app_config.label) or app_config.label,
+                admin_url=_module_admin_url(app_config),
+                swagger_url=swagger_url,
+                schema_url=schema_url,
+            )
+        )
+    modules.sort(key=lambda m: m.name.lower())
+    return modules
+
+
+def build_modules() -> List[dict]:
+    """Render-ready module list — the shape the admin template/``/nav`` need."""
+    return [
+        {
+            "key": m.key,
+            "name": m.name,
+            "admin_url": m.admin_url,
+            "swagger_url": m.swagger_url,
+            "schema_url": m.schema_url,
+        }
+        for m in discover_modules()
+    ]
+
+
 __all__ = [
     "SECTIONS",
     "NavConfigError",
     "Service",
     "NavLink",
+    "ModuleNav",
     "get_services",
     "swagger_mounted",
     "build_services",
@@ -468,4 +606,6 @@ __all__ = [
     "get_nav_links",
     "nav_sections",
     "current_dashboard_url",
+    "discover_modules",
+    "build_modules",
 ]

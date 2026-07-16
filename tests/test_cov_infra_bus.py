@@ -286,10 +286,14 @@ def test_consumer_command_default_poll_timeout():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_defaults_to_kafka_without_env_or_setting(monkeypatch, settings):
+def test_resolve_defaults_to_memory_without_env_or_setting(monkeypatch, settings):
+    """Default is in-process memory delivery (0.11.0+) — kafka/nats are
+    explicit opt-in via STAPEL_BUS_BACKEND (env or setting). Before 0.11.0
+    this defaulted to kafka, which raised ModuleNotFoundError on every
+    publish() in any deployment that never installed confluent-kafka."""
     monkeypatch.delenv("STAPEL_BUS_BACKEND", raising=False)
     del settings.STAPEL_BUS_BACKEND
-    assert _resolve_backend_path() == SHORTHANDS["kafka"]
+    assert _resolve_backend_path() == SHORTHANDS["memory"]
 
 
 def test_resolve_survives_broken_settings(monkeypatch):
@@ -302,7 +306,7 @@ def test_resolve_survives_broken_settings(monkeypatch):
             raise RuntimeError("settings unavailable")
 
     monkeypatch.setattr(django.conf, "settings", BrokenSettings())
-    assert _resolve_backend_path() == SHORTHANDS["kafka"]
+    assert _resolve_backend_path() == SHORTHANDS["memory"]
 
 
 def test_get_bus_rechecks_singleton_under_lock(monkeypatch):

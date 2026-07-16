@@ -1,0 +1,13 @@
+<!-- Minimal stand-in for django.contrib.admin's admin/base.html — just
+     enough block structure for admin/base_site.html (the real, shipped
+     override in stapel_core/django/templates/admin/base_site.html) to
+     extend and render, without pulling in the full contrib.admin site
+     machinery (AdminSite.each_context, messages, app_list, …) that a
+     template-only test has no reason to stand up. -->
+<html>
+<head>{% block extrahead %}{% endblock %}</head>
+<body>
+<div id="header">{% block branding %}{% endblock %}</div>
+<div id="content">{% block content %}{% endblock %}</div>
+</body>
+</html>

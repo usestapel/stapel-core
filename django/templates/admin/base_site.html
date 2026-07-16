@@ -180,6 +180,29 @@
     <a href="{{ current_dashboard_url }}" class="stapel-dashboard-btn">Dashboard</a>
     {% endif %}
 
+    {% if stapel_modules %}
+    <div class="stapel-dropdown">
+        <button class="stapel-dropdown-btn">
+            Apps ▾
+        </button>
+        <div class="stapel-dropdown-content">
+            <div class="stapel-dropdown-section">
+                <div class="stapel-dropdown-title">Installed Apps</div>
+                {% for module in stapel_modules %}
+                <div class="stapel-dropdown-item">
+                    <span>{{ module.name }}</span>
+                    <span class="links">
+                        <a href="{{ module.admin_url }}">Admin</a>
+                        {% if module.swagger_url %}<a href="{{ module.swagger_url }}">Swagger</a>{% endif %}
+                        {% if module.schema_url %}<a href="{{ module.schema_url }}">Schema</a>{% endif %}
+                    </span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <div class="stapel-dropdown">
         <button class="stapel-dropdown-btn">
             Services ▾

@@ -9,6 +9,7 @@ no service list or dashboard map is hardcoded here anymore.
 
 from stapel_core.django.nav import (
     NavConfigError,
+    build_modules,
     build_services,
     current_dashboard_url,
     current_swagger_url,
@@ -46,4 +47,8 @@ def stapel_services(request):
         # Deployment-canonical admin-login path (mounts registry, script-prefix
         # aware) — lets module dashboards drop hardcoded "/auth/admin/login".
         "stapel_admin_login_url": admin_login_url(),
+        # Modules of *this* process (INSTALLED_APPS introspection, §37) —
+        # admin/Swagger/schema links per app, independent of STAPEL_SERVICES
+        # (a monolith needs no env seed to see its own apps).
+        "stapel_modules": build_modules(),
     }
