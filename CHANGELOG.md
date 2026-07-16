@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-07-16
+
+### Added — §55 slice 2: swap declarations, presenter auto-catalog, reference consumer
+
+- **`declare_swap(key, default)` / `declared_swaps()`**
+  (`stapel_core.django.swappable`): import-time registration of a swap
+  point, independent of the first `get_model()`/`get_presenter()` call
+  (which now also records its default lazily, as a backstop). Declarations
+  survive `clear_swap_cache()` — they describe the library's swap surface,
+  not the host's override state.
+- **Presenter auto-catalog** (`stapel_core.django.api.catalog`, spec §4):
+  pure introspection of the two registries — declared STAPEL_SWAP points +
+  every concrete `Presenter` subclass (now tracked by
+  `Presenter.__init_subclass__`; `all_presenters()` exposes it) — rendered
+  into `PRESENTERS.MD`: swap key → default class → DTO → field table
+  (name/type/source/description, descriptions straight from DAO
+  `help_text` / `PresenterField.help_text`). Public API for the scaffold
+  wave: `autodiscover_presenters()` (imports `<app>.presenters`
+  django-admin-style), `presenter_catalog()`, `render_presenters_md()`,
+  `write_presenters_md()`.
+- **`manage.py presenter_catalog [--out PRESENTERS.MD] [--check]`**:
+  regenerate the catalog, or `--check` it against the file (REL-freshness
+  gate — stale/missing catalog exits 1). Core's own `PRESENTERS.MD` is
+  committed at the repo root and ships in the wheel (package-data), like
+  `CONFIG.MD`.
+- **Reference get_presenter() consumer** (`JWTStatusView`): the status
+  payload now carries `profile` — the presented user DTO built through
+  `get_user_profile_presenter()` (never a direct `UserProfilePresenter`
+  import), so `STAPEL_SWAP["USERS_PROFILE_PRESENTER"]` reaches the endpoint
+  with no core fork. `null` when anonymous. The flat legacy `user` block is
+  unchanged (wire compatibility). `users/presenters.py` now declares its
+  swap point at import time (`DEFAULT_PRESENTER` single-sources the dotted
+  path) — previously the swap key was invisible until first resolution.
+- Docstring updates: the SWAP001 lint is no longer "next wave" — it shipped
+  in stapel-tools (`stapel_tools.swap_lint`, part of `stapel-verify`).
+- Tests: `tests/test_presenter_catalog.py` (declarations incl.
+  first-wins/copy/cache-clear semantics, catalog entries for the users
+  pilot, markdown rendering, write, management command incl. `--check`
+  fresh/stale/missing, and the status-view `profile` block: presented DTO,
+  anonymous `null`, honors STAPEL_SWAP).
+
 ## [0.10.3] - 2026-07-16
 
 ### Added — `stapel_core.media`: one media interface, two storage paths (images-and-cdn.md §1, §61)

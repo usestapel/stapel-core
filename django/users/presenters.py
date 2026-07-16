@@ -20,10 +20,19 @@ indirection — see :mod:`stapel_core.django.swappable`).
 from __future__ import annotations
 
 from stapel_core.django.api.presenters import Presenter, PresenterField
-from stapel_core.django.swappable import get_presenter
+from stapel_core.django.swappable import declare_swap, get_presenter
 
 #: Swap key for the host presenter override (STAPEL_SWAP registry).
 PRESENTER_KEY = "USERS_PROFILE_PRESENTER"
+
+#: Dotted path of the default presenter — single source for both the
+#: declare_swap() catalog registration and the get_presenter() fallback.
+DEFAULT_PRESENTER = "stapel_core.django.users.presenters.UserProfilePresenter"
+
+# Import-time declaration: makes the swap point visible to the auto-catalog
+# (PRESENTERS.MD, `manage.py presenter_catalog`) even before the first
+# get_user_profile_presenter() call.
+declare_swap(PRESENTER_KEY, DEFAULT_PRESENTER)
 
 
 def _user_model():
@@ -66,12 +75,15 @@ def get_user_profile_presenter() -> type[Presenter]:
     Consumers (views, other presenters nesting this one) call this instead
     of importing :class:`UserProfilePresenter` directly — that direct import
     is exactly what a ``STAPEL_SWAP["USERS_PROFILE_PRESENTER"]`` override
-    would silently fail to reach (the SWAP001 lint, next wave, will flag it).
+    would silently fail to reach (the SWAP001 lint, ``stapel_tools.swap_lint``,
+    flags it). Reference consumer: ``JWTStatusView``'s ``profile`` block.
     """
-    return get_presenter(
-        PRESENTER_KEY,
-        default="stapel_core.django.users.presenters.UserProfilePresenter",
-    )
+    return get_presenter(PRESENTER_KEY, default=DEFAULT_PRESENTER)
 
 
-__all__ = ["PRESENTER_KEY", "UserProfilePresenter", "get_user_profile_presenter"]
+__all__ = [
+    "PRESENTER_KEY",
+    "DEFAULT_PRESENTER",
+    "UserProfilePresenter",
+    "get_user_profile_presenter",
+]

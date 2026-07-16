@@ -128,8 +128,32 @@ class JWTStatusView(View):
     """
     Check JWT token status.
 
-    Returns the current authentication state and token validity.
+    Returns the current authentication state, token validity, and the
+    presented user profile (``profile``) — the latter built through the
+    swappable ``USERS_PROFILE_PRESENTER`` (``stapel_core.django.swappable``),
+    so a host that config-swaps the presenter changes this endpoint's
+    profile payload without forking core. The flat ``user`` block is the
+    legacy auth-identity shape, kept for wire compatibility.
     """
+
+    @staticmethod
+    def _presented_profile(user):
+        """The active (possibly host-swapped) profile DTO as a dict, or None.
+
+        Reference consumer of the §55 get_presenter() canon: never imports
+        UserProfilePresenter directly — resolution goes through the
+        STAPEL_SWAP registry, so ``STAPEL_SWAP["USERS_PROFILE_PRESENTER"]``
+        reaches this call site (the exact thing a direct import would
+        silently break — SWAP001).
+        """
+        if not user.is_authenticated:
+            return None
+        import dataclasses
+
+        from stapel_core.django.users.presenters import get_user_profile_presenter
+
+        presenter = get_user_profile_presenter()
+        return dataclasses.asdict(presenter.present(user))
 
     def get(self, request):
         """Handle GET status request."""
@@ -165,6 +189,7 @@ class JWTStatusView(View):
                     'is_staff': request.user.is_staff if request.user.is_authenticated else False,
                     'is_superuser': request.user.is_superuser if request.user.is_authenticated else False,
                 },
+                'profile': self._presented_profile(request.user),
                 'tokens': {
                     'access_token_valid': access_valid,
                     'refresh_token_valid': refresh_valid,

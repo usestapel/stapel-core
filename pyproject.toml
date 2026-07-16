@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.10.3"
+version = "0.10.4"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -186,4 +186,4 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*", "py.typed", "notifications/schemas/**/*.json", "CONFIG.MD"]
+"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*", "py.typed", "notifications/schemas/**/*.json", "CONFIG.MD", "PRESENTERS.MD"]

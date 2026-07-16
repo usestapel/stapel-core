@@ -11,9 +11,9 @@ Library code must **never** import a swappable model/presenter directly —
 always go through :func:`get_model` / :func:`get_presenter` below. A stray
 direct import silently defeats the swap for that call site — this is the
 exact bug the research flagged in django-oscar's ``get_class()`` (issue
-#3232). The ``SWAP001`` lint (``stapel_tools``, next wave) makes that
-discipline machine-checked instead of "remember by hand"; until it ships,
-review is the only backstop.
+#3232). The ``SWAP001`` lint (``stapel_tools.swap_lint``, part of
+``stapel-verify``) makes that discipline machine-checked instead of
+"remember by hand".
 
 Registry: one settings dict, ``STAPEL_SWAP``, ``{"KEY": "dotted.Path"}``. A
 key absent from the dict resolves to the caller's own *default* dotted path
@@ -43,6 +43,14 @@ SWAP_SETTING = "STAPEL_SWAP"
 
 _cache: dict[str, type] = {}
 
+#: Declared swap points: logical key -> default dotted path. Fed by
+#: :func:`declare_swap` (module-import time, the canonical way) and, as a
+#: lazy backstop, by any :func:`get_model`/:func:`get_presenter` call whose
+#: default is a dotted string. This is what the presenter auto-catalog
+#: (``stapel_core.django.api.catalog``) introspects — a swap point that is
+#: never declared is invisible to hosts reading PRESENTERS.MD.
+_declared: dict[str, str] = {}
+
 
 def _connect_reload() -> None:
     try:
@@ -61,6 +69,8 @@ _connect_reload()
 
 
 def _resolve(key: str, default: str | type) -> type:
+    if isinstance(default, str):
+        _declared.setdefault(key, default)
     if key in _cache:
         return _cache[key]
 
@@ -95,9 +105,42 @@ def get_presenter(key: str, default: str) -> type:
     return _resolve(key, default)
 
 
+def declare_swap(key: str, default: str) -> None:
+    """Register a swap point (*key* -> *default* dotted class path) at module
+    import time, without resolving it. The owning library calls this next to
+    the class it exposes for swapping::
+
+        PRESENTER_KEY = "USERS_PROFILE_PRESENTER"
+        declare_swap(PRESENTER_KEY, "stapel_core.django.users.presenters.UserProfilePresenter")
+
+    Declaration is what makes a swap point *discoverable*: the auto-catalog
+    (``PRESENTERS.MD``, ``stapel_core.django.api.catalog``) lists declared
+    keys, so a host reads what is swappable without grepping the library.
+    ``get_model``/``get_presenter`` also record their default lazily, but
+    only once actually called — declare eagerly for anything catalog-worthy.
+    """
+    _declared.setdefault(key, default)
+
+
+def declared_swaps() -> dict[str, str]:
+    """Snapshot of declared swap points: ``{key: default dotted path}``."""
+    return dict(_declared)
+
+
 def clear_swap_cache() -> None:
-    """Drop the resolved-class cache (tests, or after editing ``STAPEL_SWAP``)."""
+    """Drop the resolved-class cache (tests, or after editing ``STAPEL_SWAP``).
+
+    Declarations survive — they describe the library's swap surface, not the
+    host's current override state.
+    """
     _cache.clear()
 
 
-__all__ = ["SWAP_SETTING", "get_model", "get_presenter", "clear_swap_cache"]
+__all__ = [
+    "SWAP_SETTING",
+    "get_model",
+    "get_presenter",
+    "declare_swap",
+    "declared_swaps",
+    "clear_swap_cache",
+]

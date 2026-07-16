@@ -190,12 +190,18 @@ class Presenter:
 
     _serializer_cache: dict[type, type] = {}
 
+    #: Every concrete Presenter subclass (one that declared a model and got a
+    #: dto), in definition order. Introspected by the auto-catalog
+    #: (:mod:`stapel_core.django.api.catalog`) to render PRESENTERS.MD.
+    _registry: list[type["Presenter"]] = []
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         # Intermediate abstract subclasses (no model declared yet) get no dto.
         if getattr(cls, "model", None) is None:
             return
         cls._build_dto()
+        Presenter._registry.append(cls)
 
     @classmethod
     def _build_dto(cls) -> None:
@@ -299,4 +305,11 @@ class Presenter:
         return ser_cls
 
 
-__all__ = ["Presenter", "PresenterField"]
+def all_presenters() -> list[type[Presenter]]:
+    """Every concrete :class:`Presenter` subclass defined so far (import
+    order). Modules must be imported for their presenters to appear — see
+    ``stapel_core.django.api.catalog.autodiscover_presenters``."""
+    return list(Presenter._registry)
+
+
+__all__ = ["Presenter", "PresenterField", "all_presenters"]
