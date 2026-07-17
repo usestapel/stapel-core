@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-07-17
+
+### Added — §37 surface topology: reserved_paths() + mount-containment check
+
+The live incident: nginx reserved the bare ``/calendar`` prefix for the
+backend (because *something* Django-side lives under it) and silently
+killed the frontend's SPA page at that same path. Canon (BACKLOG §37) was
+already clear — a backend module owns only ``/<mod>/api/`` (versioned
+inside), ``/<mod>/swagger/``, ``/<mod>/schema.json``, ``/<mod>/admin/``; a
+bare module root or any other suffix is frontend territory — but nothing
+machine-checked it, and nothing published it for generators/KB to read.
+
+- **`stapel_core.django.mounts.reserved_paths()`**: for every Stapel module
+  actually installed in this process (the same `INSTALLED_APPS`
+  introspection `nav.discover_modules()` uses), the fixed set of §37
+  sub-surfaces (`MODULE_RESERVED_SUFFIXES` — `api/`, `swagger/`,
+  `schema.json`, `admin/`) the backend claims under that module's own mount
+  root. Exported on `GET /nav` as the new `reserved_paths` field (keyed by
+  module, alongside `modules`/`services`/`sections`) so a frontend router, a
+  deploy-config generator (nginx/traefik location blocks — reserve only
+  these, never the bare module prefix) and the KB read the one list instead
+  of re-deriving the canon by hand.
+- **`stapel_core.django.nav.is_stapel_app()`**: public wrapper of the
+  existing `_is_stapel_app` marker/pip-package test, for consumers outside
+  `nav` that need the same "is this app_config a Stapel module?" answer.
+- **System check E004** (`stapel_core.mounts.E004`, tag `stapel_mounts`):
+  walks the root resolver depth-first; for every URL pattern owned by an
+  installed Stapel module (same ownership test as module discovery, applied
+  to the view's `__module__`), flags an Error when no `api`/`swagger`/
+  `admin`/`schema(.json)` segment appears anywhere in its full mounted path.
+  Host (non-Stapel) URLs are never matched — a project stays free in its
+  own paths; this is only about the modules it installed. Skips entirely
+  when `ROOT_URLCONF` is unset (standalone package harness).
+- **Fleet audit** (manual, `urls.py`/`urls_v1.py` read across every sibling
+  module): one live violator — `stapel-translate` mounts its dashboard HTML
+  pages at `translate/dashboard/...`, with no canonical segment anywhere —
+  exactly the class of bug E004 exists to catch. Every other module (auth,
+  billing, calendar, chat, cdn, categories, gdpr, listings, notifications,
+  profiles, workspaces, mailtrap, agent, tasks, recordings, geo, video,
+  reviews, currencies) mounts entirely under `api/` (nested `admin`
+  sub-segments, e.g. auth's `admin_api` gate, stay compliant since `api` is
+  present in the same path). Fixing `stapel-translate` is out of scope here
+  (its own repo, its own release) — reported to the coordinator.
+- Tests: `tests/test_mounts.py` (`TestReservedPaths`,
+  `TestModuleSurfaceContainment` — compliant modules, nested-admin-inside-api,
+  the translate-dashboard and bare-module-root violations, host URLs never
+  flagged, nested `include()` walked, mixed installed-modules report only
+  the violators), new fixture `tests/mounts_surface_urls.py`.
+
 ## [0.12.1] - 2026-07-17
 
 ### Added

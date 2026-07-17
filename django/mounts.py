@@ -178,6 +178,104 @@ def mount_reverse(key: str, name: str, **kwargs) -> Optional[str]:
         return None
 
 
+#: The only sub-surfaces a Stapel module's backend may occupy under its own
+#: mount root (BACKLOG §37 canon): ``/<mod>/api/`` (versioned inside),
+#: ``/<mod>/swagger/``, ``/<mod>/schema.json``, ``/<mod>/admin/``. A bare
+#: ``/<mod>`` root or any other suffix is frontend territory — a reverse
+#: proxy that reserves the whole ``/<mod>`` prefix for the backend silently
+#: kills the SPA page living there (the incident this registry exists to
+#: prevent: nginx reserved the bare ``/calendar`` root, breaking the
+#: frontend's calendar page). Fixed by canon, independent of whatever prefix
+#: a given deployment mounts the module at.
+MODULE_RESERVED_SUFFIXES = ("api/", "swagger/", "schema.json", "admin/")
+
+
+def reserved_paths() -> Dict[str, list]:
+    """§37 reservation, machine-readable: for every Stapel module actually
+    installed in *this* process, the sub-surfaces the backend claims under
+    that module's own mount root.
+
+    Module discovery mirrors :func:`stapel_core.django.nav.discover_modules`
+    (same ``INSTALLED_APPS`` introspection — the ``stapel_module`` marker or
+    the published ``stapel_*`` pip-package convention; ``stapel_core`` itself
+    always excluded) so this never drifts from what the nav/admin surface
+    already shows as "this process's modules". Everything a module mounts
+    *outside* :data:`MODULE_RESERVED_SUFFIXES` is frontend territory —
+    consumed by ``GET /nav`` (the ``reserved_paths`` field), by deploy-config
+    generators (nginx/traefik location blocks should reserve only these
+    sub-paths, never the bare module prefix) and by the KB, so all three read
+    the one list instead of re-deriving the canon by hand.
+    """
+    from django.apps import apps as django_apps
+
+    from .nav import is_stapel_app
+
+    return {
+        app_config.label: list(MODULE_RESERVED_SUFFIXES)
+        for app_config in django_apps.get_app_configs()
+        if is_stapel_app(app_config)
+    }
+
+
+def _iter_url_patterns(patterns, prefix: str = ""):
+    """Depth-first walk of a URLconf pattern list.
+
+    Yields ``(full_path, url_pattern)`` for every leaf ``URLPattern`` —
+    ``full_path`` is the best-effort concatenation of every ancestor route
+    string down to this pattern. Good enough to test for the *presence* of a
+    canonical path segment (:func:`stapel_core.django.checks.check_module_surface_containment`'s
+    only use), not a guarantee of the exact browser-facing URL: ``path()``
+    routes concatenate cleanly; a ``re_path()`` ancestor contributes its raw
+    regex source (anchors/groups and all) — no stapel module in this
+    repository uses ``re_path()`` for its own mount, so this is not a
+    practical gap today.
+    """
+    from django.urls import URLPattern, URLResolver
+
+    for entry in patterns:
+        full = f"{prefix}{entry.pattern}"
+        if isinstance(entry, URLResolver):
+            yield from _iter_url_patterns(entry.url_patterns, full)
+        elif isinstance(entry, URLPattern):
+            yield full, entry
+
+
+def _path_segments(full_path: str) -> list:
+    """Non-empty ``/``-delimited segments of *full_path*, regex anchors
+    stripped — good enough for exact-token membership tests
+    (``"api" in segments``), not for reconstructing a real URL."""
+    return [seg for seg in full_path.strip("^$").split("/") if seg]
+
+
+def _callback_owner_app_label(callback) -> Optional[str]:
+    """The ``app_label`` of the Stapel module that owns *callback*, or
+    ``None`` when it belongs to no installed Stapel module (a host's own
+    view, or a third-party one — not this check's business).
+
+    Class-based views keep the class on the view function
+    (``view_class`` — plain Django, ``cls`` — DRF's ``APIView.as_view()``);
+    function-based views/lambdas are used as-is. Ownership is decided the
+    same way module discovery is (``__module__`` dotted-path prefix against
+    each installed Stapel app's ``AppConfig.name`` — covers both the
+    ``stapel_*`` pip packages and a project's own marked ``apps/*``).
+    """
+    from django.apps import apps as django_apps
+
+    from .nav import is_stapel_app
+
+    view = getattr(callback, "view_class", None) or getattr(callback, "cls", None) or callback
+    module_name = getattr(view, "__module__", "") or ""
+    if not module_name:
+        return None
+    for app_config in django_apps.get_app_configs():
+        if not is_stapel_app(app_config):
+            continue
+        name = app_config.name
+        if module_name == name or module_name.startswith(f"{name}."):
+            return app_config.label
+    return None
+
+
 def admin_login_url() -> str:
     """The deployment-canonical admin-login path.
 
@@ -246,4 +344,6 @@ __all__ = [
     "admin_index_url",
     "lazy_admin_login_url",
     "lazy_admin_index_url",
+    "MODULE_RESERVED_SUFFIXES",
+    "reserved_paths",
 ]

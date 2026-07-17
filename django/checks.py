@@ -11,6 +11,13 @@ Paths belonging to a declared **external** mount (``STAPEL_MOUNTS`` /
 ``STAPEL_AUTH_SERVICE_PREFIX`` — a sibling service behind the same proxy)
 cannot be verified in-process and are skipped: they are the deployment
 contract, not this URLconf's business.
+
+E004 is a different kind of mount error — surface *topology* (BACKLOG §37):
+a Stapel module may only mount inside ``/<mod>/api/``, ``/<mod>/swagger/``,
+``/<mod>/schema.json``, ``/<mod>/admin/``. Anything else under a module's
+own prefix (a bare ``/<mod>`` root, a hand-rolled dashboard route, …) is
+frontend territory — a reverse proxy that reserves the bare module prefix
+for the backend silently 404s the SPA page living there.
 """
 from __future__ import annotations
 
@@ -19,7 +26,15 @@ from django.core import checks
 E001_LOGIN_URL_UNRESOLVABLE = "stapel_core.mounts.E001"
 E002_REDIRECT_URL_UNRESOLVABLE = "stapel_core.mounts.E002"
 E003_BAD_MOUNTS = "stapel_core.mounts.E003"
+E004_MODULE_OUTSIDE_CANON = "stapel_core.mounts.E004"
 W001_STOCK_LOGIN_REDIRECT = "stapel_core.mounts.W001"
+
+#: BACKLOG §37 canon — the only path segments a Stapel module's own URL
+#: patterns may live under, anywhere in their full mounted path. Presence,
+#: not position: "auth/api/v1/admin/audit/" is fine (an admin_api endpoint
+#: nested *inside* the module's api/ surface), a bare "translate/dashboard/"
+#: with none of these segments anywhere is not.
+_CANONICAL_MODULE_SEGMENTS = {"api", "swagger", "admin", "schema", "schema.json"}
 
 #: Django's own untouched defaults — flagged W, not E: a service that never
 #: redirects there (pure API, no login_required) should not be blocked.
@@ -144,11 +159,72 @@ def check_auth_redirect_settings(app_configs=None, **kwargs):
     return findings
 
 
+@checks.register("stapel_mounts")
+def check_module_surface_containment(app_configs=None, **kwargs):
+    """E004 — a Stapel module's URL patterns must stay inside its §37
+    canonical sub-surfaces: ``/<mod>/api/`` (versioned inside),
+    ``/<mod>/swagger/``, ``/<mod>/schema.json``, ``/<mod>/admin/``.
+
+    A bare module root or any other suffix is frontend territory — a
+    reverse proxy that reserves the whole ``/<mod>`` prefix for the backend
+    (because *something* Django-side lives there) silently kills the SPA
+    page at that path. That is the live incident this check exists to catch
+    mechanically instead of by someone noticing the page 404 in production.
+
+    Ownership of a URL pattern is decided the same way module discovery is
+    (:func:`stapel_core.django.nav.discover_modules`): the view's
+    ``__module__`` dotted-path against each installed Stapel app's
+    ``AppConfig.name``. Host (non-Stapel) URLs never match any installed
+    Stapel app and are silently skipped — a project is free in its own
+    paths, this check is only about the modules it installed.
+    """
+    from django.conf import settings
+
+    if not getattr(settings, "ROOT_URLCONF", ""):
+        return []  # standalone package harness — nothing to resolve against
+
+    from django.urls import get_resolver
+
+    from stapel_core.django.mounts import (
+        _callback_owner_app_label,
+        _iter_url_patterns,
+        _path_segments,
+    )
+
+    findings = []
+    seen = set()
+    resolver = get_resolver()
+    for full_path, pattern in _iter_url_patterns(resolver.url_patterns):
+        app_label = _callback_owner_app_label(pattern.callback)
+        if app_label is None:
+            continue
+        if any(seg in _CANONICAL_MODULE_SEGMENTS for seg in _path_segments(full_path)):
+            continue
+        key = (app_label, full_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append(checks.Error(
+            f"Stapel module {app_label!r} mounts {full_path!r}, outside "
+            "its §37 canonical sub-surfaces (no api/swagger/schema/admin "
+            "segment anywhere in the path).",
+            hint="A backend module may only occupy /<mod>/api/ (versioned "
+                 "inside), /<mod>/swagger/, /<mod>/schema.json, "
+                 "/<mod>/admin/ — move this view under one of those, or "
+                 "drop it from the backend URLconf: a bare module root or "
+                 "any other suffix belongs to the frontend.",
+            id=E004_MODULE_OUTSIDE_CANON,
+        ))
+    return findings
+
+
 __all__ = [
     "E001_LOGIN_URL_UNRESOLVABLE",
     "E002_REDIRECT_URL_UNRESOLVABLE",
     "E003_BAD_MOUNTS",
+    "E004_MODULE_OUTSIDE_CANON",
     "W001_STOCK_LOGIN_REDIRECT",
     "check_auth_redirect_settings",
     "check_mounts_config",
+    "check_module_surface_containment",
 ]

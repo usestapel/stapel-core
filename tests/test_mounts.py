@@ -10,11 +10,14 @@ from stapel_core.django.checks import (
     E001_LOGIN_URL_UNRESOLVABLE,
     E002_REDIRECT_URL_UNRESOLVABLE,
     E003_BAD_MOUNTS,
+    E004_MODULE_OUTSIDE_CANON,
     W001_STOCK_LOGIN_REDIRECT,
     check_auth_redirect_settings,
     check_mounts_config,
+    check_module_surface_containment,
 )
 from stapel_core.django.mounts import (
+    MODULE_RESERVED_SUFFIXES,
     Mount,
     MountConfigError,
     admin_index_url,
@@ -24,12 +27,36 @@ from stapel_core.django.mounts import (
     lazy_admin_login_url,
     mount_path,
     mount_reverse,
+    reserved_paths,
 )
 
 rf = RequestFactory()
 
 URLS = "tests.mounts_urls"
 URLS_PREFIXED = "tests.mounts_urls_prefixed"
+URLS_SURFACE = "tests.mounts_surface_urls"
+
+
+def _app(name, label=None, stapel_module=None):
+    """A minimal stand-in for a Django AppConfig — mirrors the one in
+    test_nav_modules.py (only the attributes discover_modules()/is_stapel_app()
+    read)."""
+    kwargs = dict(name=name, label=label or name.rsplit(".", 1)[-1])
+    if stapel_module is not None:
+        kwargs["stapel_module"] = stapel_module
+    return SimpleNamespace(**kwargs)
+
+
+@pytest.fixture
+def mock_apps(monkeypatch):
+    """Patch django.apps.apps.get_app_configs() to return *configs."""
+
+    def _set(*configs):
+        import django.apps
+
+        monkeypatch.setattr(django.apps.apps, "get_app_configs", lambda: list(configs))
+
+    return _set
 
 
 @contextmanager
@@ -307,3 +334,97 @@ class TestChecks:
     def test_mounts_config_ok(self, settings):
         settings.STAPEL_MOUNTS = {"auth": {"prefix": "sso/", "external": True}}
         assert check_mounts_config() == []
+
+
+# ---------------------------------------------------------------------------
+# reserved_paths() — §37 machine-readable reservation
+# ---------------------------------------------------------------------------
+
+
+class TestReservedPaths:
+    def test_empty_when_no_stapel_modules(self, mock_apps):
+        mock_apps(_app("myproject.blog", label="blog"))
+        assert reserved_paths() == {}
+
+    def test_lists_installed_modules_only(self, mock_apps):
+        mock_apps(
+            _app("stapel_billing", label="billing"),
+            _app("stapel_core", label="stapel_core"),  # framework — excluded
+            _app("myproject.blog", label="blog"),  # unmarked — excluded
+        )
+        assert reserved_paths() == {"billing": list(MODULE_RESERVED_SUFFIXES)}
+
+    def test_marked_local_app_included(self, mock_apps):
+        mock_apps(_app("myproject.apps.tools", label="tools", stapel_module=True))
+        assert reserved_paths() == {"tools": list(MODULE_RESERVED_SUFFIXES)}
+
+    def test_reservation_shape_matches_canon(self, mock_apps):
+        mock_apps(_app("stapel_calendar", label="calendar"))
+        assert reserved_paths()["calendar"] == ["api/", "swagger/", "schema.json", "admin/"]
+
+
+# ---------------------------------------------------------------------------
+# check_module_surface_containment — E004, BACKLOG §37 surface topology
+# ---------------------------------------------------------------------------
+
+
+class TestModuleSurfaceContainment:
+    def test_no_urlconf_skips(self):
+        assert check_module_surface_containment() == []
+
+    def test_compliant_module_passes(self, settings, mock_apps):
+        settings.ROOT_URLCONF = URLS_SURFACE
+        mock_apps(_app("stapel_billing", label="billing"))
+        assert check_module_surface_containment() == []
+
+    def test_admin_segment_nested_inside_api_is_fine(self, settings, mock_apps):
+        # auth's admin_api gate lives at auth/api/v1/admin/audit/ — "api" is
+        # present in the path, so this is compliant even though "admin" also
+        # appears deeper in.
+        settings.ROOT_URLCONF = URLS_SURFACE
+        mock_apps(_app("stapel_auth", label="auth"))
+        assert check_module_surface_containment() == []
+
+    def test_dashboard_route_outside_canon_is_error(self, settings, mock_apps):
+        # the real fleet finding: stapel-translate's translate/dashboard/
+        # carries no api/swagger/schema/admin segment anywhere.
+        settings.ROOT_URLCONF = URLS_SURFACE
+        mock_apps(_app("stapel_translate", label="translate"))
+        findings = check_module_surface_containment()
+        assert len(findings) == 1
+        assert findings[0].id == E004_MODULE_OUTSIDE_CANON
+        assert "translate/dashboard/" in findings[0].msg
+
+    def test_bare_module_root_is_error(self, settings, mock_apps):
+        # the /calendar incident: a bare module-root pattern, no canonical
+        # segment at all.
+        settings.ROOT_URLCONF = URLS_SURFACE
+        mock_apps(_app("stapel_calendar", label="calendar"))
+        findings = check_module_surface_containment()
+        assert [f.id for f in findings] == [E004_MODULE_OUTSIDE_CANON]
+
+    def test_host_urls_are_never_flagged(self, settings, mock_apps):
+        # "whatever/" belongs to no installed Stapel app — a project is free
+        # in its own paths, this check only polices installed modules.
+        settings.ROOT_URLCONF = URLS_SURFACE
+        mock_apps()  # no Stapel modules installed at all
+        assert check_module_surface_containment() == []
+
+    def test_nested_include_is_walked(self, settings, mock_apps):
+        # billing/api/v1/extra sits behind a nested include() — the DFS walk
+        # must recurse into resolvers, not just scan top-level patterns.
+        settings.ROOT_URLCONF = URLS_SURFACE
+        mock_apps(_app("stapel_billing", label="billing"))
+        assert check_module_surface_containment() == []
+
+    def test_multiple_installed_modules_report_only_violators(self, settings, mock_apps):
+        settings.ROOT_URLCONF = URLS_SURFACE
+        mock_apps(
+            _app("stapel_billing", label="billing"),
+            _app("stapel_auth", label="auth"),
+            _app("stapel_translate", label="translate"),
+            _app("stapel_calendar", label="calendar"),
+        )
+        findings = check_module_surface_containment()
+        assert {f.id for f in findings} == {E004_MODULE_OUTSIDE_CANON}
+        assert len(findings) == 2  # translate/dashboard + calendar bare root

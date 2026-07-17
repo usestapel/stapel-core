@@ -486,6 +486,15 @@ def _is_stapel_app(app_config: Any) -> bool:
     )
 
 
+def is_stapel_app(app_config: Any) -> bool:
+    """Public wrapper of :func:`_is_stapel_app` — the same marker/pip-package
+    test, for consumers outside this module (``mounts.reserved_paths``,
+    ``mounts._callback_owner_app_label``, the §37 mount-containment check)
+    that need to answer "is this app_config a Stapel module?" without
+    reimplementing (or reaching into) the private original."""
+    return _is_stapel_app(app_config)
+
+
 @dataclass(frozen=True)
 class ModuleNav:
     """One discovered Stapel module of *this* process."""
@@ -608,4 +617,5 @@ __all__ = [
     "current_dashboard_url",
     "discover_modules",
     "build_modules",
+    "is_stapel_app",
 ]
