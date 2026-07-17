@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-07-17
+
+### Fixed — drf-spectacular import-order bug: blank schema title/version
+
+Root cause: `stapel_core/django/__init__.py` eagerly imports
+`.openapi.mcp` -> `.openapi.schemas`, and the latter does a *non-lazy*
+`from drf_spectacular.openapi import AutoSchema` (needed as
+`PermissionAwareAutoSchema`'s base class). Any project whose settings
+module opens with `from stapel_core.django.settings import *` (the
+documented pattern) triggers that whole import chain *before* the settings
+module reaches its own `SPECTACULAR_SETTINGS = get_spectacular_settings(...)`
+assignment further down — because importing `stapel_core.django.settings`
+requires first fully executing the parent package's `__init__.py`.
+`drf-spectacular`'s module-level `spectacular_settings` singleton
+snapshots `django.conf.settings.SPECTACULAR_SETTINGS` at that exact
+(too-early) instant and never re-reads it, so it stays permanently pinned
+to the empty defaults (`TITLE=''`, `VERSION='0.0.0'`) — every schema the
+process emits (`/schema/`, Swagger UI, the offline `spectacular` mgmt
+command) reports a blank title and `0.0.0` version regardless of what the
+project configured, for the rest of that process's lifetime.
+
+- **`stapel_core.django.apps._unpoison_spectacular_settings()`**: called
+  from `CommonDjangoConfig.ready()` (which Django only runs after settings
+  are fully resolved). Diffs the already-built `spectacular_settings`
+  singleton against the project's real `SPECTACULAR_SETTINGS` and, if they
+  disagree, corrects it in place via drf-spectacular's own
+  `apply_patches` seam — the same in-place object every module that did
+  `from drf_spectacular.settings import spectacular_settings` already
+  holds a reference to. Idempotent and zero-effect when the import order
+  was already correct (or `SPECTACULAR_SETTINGS` isn't set, or
+  drf-spectacular isn't installed).
+- Regression test (`tests/test_spectacular_import_order.py`) reproduces the
+  broken order by force-reimporting `drf_spectacular.settings` while
+  `SPECTACULAR_SETTINGS` is absent, then asserts the patch corrects it;
+  revert-checked (temporarily neutering the patch reproduces 2 red tests).
+- Projects that locally worked around this in their own `AppConfig.ready()`
+  (e.g. stapel-example-monolith's `_unpoison_spectacular_settings_cache`)
+  can drop the local patch now that the framework fixes it at the source.
+
 ## [0.12.2] - 2026-07-17
 
 ### Added — §37 surface topology: reserved_paths() + mount-containment check

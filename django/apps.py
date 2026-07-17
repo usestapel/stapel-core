@@ -103,3 +103,76 @@ class CommonDjangoConfig(AppConfig):
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Could not auto-load Staff group fixture: {e}")
+
+        # Framework-level fix: unpoison the drf-spectacular settings singleton
+        # if it was built before this project's SPECTACULAR_SETTINGS assignment
+        # (import-order bug — see _unpoison_spectacular_settings docstring).
+        _unpoison_spectacular_settings()
+
+
+def _unpoison_spectacular_settings() -> dict:
+    """Patch drf-spectacular's ``spectacular_settings`` singleton if it was
+    built before the project's ``SPECTACULAR_SETTINGS`` assignment.
+
+    Root cause: many projects write their Django settings module as::
+
+        # config/settings/base.py
+        from stapel_core.django.settings import *   # noqa: F401,F403
+        ...
+        SPECTACULAR_SETTINGS = get_spectacular_settings(...)   # further down
+
+    Importing ``stapel_core.django.settings`` requires first fully executing
+    its parent package, ``stapel_core/django/__init__.py``, which imports
+    ``stapel_core.django.openapi`` -> ``stapel_core.django.openapi.schemas`` —
+    the latter does a *non-lazy* ``from drf_spectacular.openapi import
+    AutoSchema`` (needed as a base class for ``PermissionAwareAutoSchema``,
+    so it can't be deferred the way ``stapel_core.django.openapi.swagger``
+    deliberately defers its own drf-spectacular imports). That cascades into
+    importing ``drf_spectacular.settings``, whose module body constructs the
+    module-level ``spectacular_settings`` *singleton* by snapshotting
+    ``django.conf.settings.SPECTACULAR_SETTINGS`` right then — i.e. *before*
+    the project's settings module reaches its own ``SPECTACULAR_SETTINGS =
+    get_spectacular_settings(...)`` assignment further down. drf-spectacular
+    never re-reads the setting afterwards (no ``setting_changed`` receiver
+    for it), so the singleton stays pinned to the empty defaults
+    (``TITLE=''``, ``VERSION='0.0.0'``) for the rest of the process — i.e.
+    every schema this process emits (live ``/schema/``, Swagger UI, and the
+    offline ``spectacular`` management command) reports a blank title and
+    ``0.0.0`` version, regardless of what the project actually configured.
+
+    ``AppConfig.ready()`` runs from ``apps.populate()``, which Django calls
+    only *after* settings are fully resolved — so patching the
+    already-constructed singleton here, in place, via the
+    apply_patches/clear_patches seam drf-spectacular ships for exactly this
+    kind of override, reaches every module that already did ``from
+    drf_spectacular.settings import spectacular_settings`` (same object, not
+    a fresh one). ``spectacular_settings.reload()`` would *not* work:
+    ``SpectacularSettings`` inherits ``APISettings.user_settings`` as-is,
+    which is hardwired to the ``REST_FRAMEWORK`` key, not
+    ``SPECTACULAR_SETTINGS``.
+
+    Idempotent: if the import order was correct (singleton built after
+    ``SPECTACULAR_SETTINGS`` was assigned, or ``SPECTACULAR_SETTINGS`` isn't
+    set at all), the values already match and no patch is applied — zero
+    effect. Safe if drf-spectacular isn't installed (ImportError -> no-op).
+
+    Returns the dict of patches actually applied (empty if none were
+    needed) — used by tests to assert on the fix without duplicating the
+    patch-detection logic.
+    """
+    try:
+        from drf_spectacular.settings import spectacular_settings
+    except ImportError:
+        return {}
+
+    from django.conf import settings as django_settings
+
+    real = getattr(django_settings, 'SPECTACULAR_SETTINGS', None) or {}
+    patches = {
+        key: real[key]
+        for key in ('TITLE', 'VERSION', 'DESCRIPTION')
+        if real.get(key) and getattr(spectacular_settings, key, None) != real[key]
+    }
+    if patches:
+        spectacular_settings.apply_patches(patches)
+    return patches
