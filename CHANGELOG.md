@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-07-17
+
+### Changed — CDN fields unfrozen: `image_type` is an open string (cdn-modularity.md §2.1)
+
+`django/cdn/fields.py` `CdnImageField`/`CdnImageListField` no longer raise
+`ValueError` at class-definition time against a hardcoded 6-value enum
+(`CDN_ASSET_TYPES`/`CDN_IMAGE_TYPES`/`CDN_ALL_TYPES` — a verbatim copy of
+the legacy marketplace `ImageType`/`AssetType` TextChoices). That froze
+the client half of the stack to a fixed marketplace-specific list while
+the server (`stapel-cdn` 0.7.0+) already accepted any configured type —
+"half the stack is modular, half isn't, and nothing catches the mismatch"
+(cdn-modularity.md §0.1).
+
+- **`image_type`** is now any lowercase slug (`^[a-z0-9_-]+$`) — checked
+  eagerly (cheap, config-independent shape check), but no longer checked
+  against a frozen enum at import time. Whether a type is actually
+  *configured* for this deployment is a lazy, boot-smoke concern (see
+  system checks below), never a model-import-time one.
+- **New `ref_kind` kwarg** (`"hash"` default | `"slug"`) replaces the old
+  implicit `image_type in CDN_ASSET_TYPES` membership test that decided
+  whether a ref's `<id>` half must be a 64-hex hash or a free-form name.
+  `CdnImageField(image_type="catalog", ref_kind="slug")` replaces what
+  used to be inferred from `"catalog"` being a hardcoded "asset" type.
+- **New `django/cdn/conf.py`** — `STAPEL_CDN["ASSET_TYPES"]` (default
+  `("avatar",)`, the zero-infrastructure default: the one CDN type every
+  project plausibly has, nothing marketplace-specific baked in). Single
+  source of truth shared with `stapel-cdn`'s own config for the same
+  namespace.
+- **New `django/cdn/checks.py`** (tag `stapel_cdn`) —
+  `stapel_core.cdn.E001`: a declared field's `image_type` isn't in
+  `STAPEL_CDN["ASSET_TYPES"]` (would fail `validate()`/`full_clean()` on
+  every save attempt). `stapel_core.cdn.E002`: any CDN field is declared
+  but no `cdn.*` comm route is configured at all — the class of "design
+  shouldn't allow this" bug from the miттudei incident (a `CdnImageField`
+  frozen to CDN format with no CDN service behind it, caught only when a
+  user clicks "Change avatar" in production).
+- Removed `CDN_ASSET_TYPES`/`CDN_IMAGE_TYPES`/`CDN_ALL_TYPES` module
+  constants (nothing else in the repo referenced them outside this
+  module's own tests).
+- Fleet note: this is a behavior change for any code that caught the old
+  `ValueError` on unconfigured types (unlikely, unverified across the
+  fleet) — run the full suite after bumping.
+
 ## [0.12.3] - 2026-07-17
 
 ### Fixed — drf-spectacular import-order bug: blank schema title/version

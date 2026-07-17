@@ -7,8 +7,6 @@ from django.db import models
 from django.test import override_settings
 
 from stapel_core.django.cdn.fields import (
-    CDN_ASSET_TYPES,
-    CDN_IMAGE_TYPES,
     CdnImageField,
     CdnImageFormField,
     CdnImageListField,
@@ -33,18 +31,18 @@ HASH64 = "a" * 64
 
 
 def test_validate_empty_value_ok():
-    assert validate_cdn_reference("", "catalog") is None
+    assert validate_cdn_reference("", "catalog", "slug") is None
     assert validate_cdn_reference(None, "product") is None
 
 
 def test_validate_non_string_raises():
     with pytest.raises(ValidationError, match="must be a string"):
-        validate_cdn_reference(123, "catalog")
+        validate_cdn_reference(123, "catalog", "slug")
 
 
 def test_validate_missing_slash_raises():
     with pytest.raises(ValidationError, match="format 'type/id'"):
-        validate_cdn_reference("catalogfoo", "catalog")
+        validate_cdn_reference("catalogfoo", "catalog", "slug")
 
 
 def test_validate_type_mismatch_raises():
@@ -53,9 +51,9 @@ def test_validate_type_mismatch_raises():
 
 
 def test_validate_asset_name_ok_and_bad():
-    validate_cdn_reference("catalog/my-icon_2", "catalog")
+    validate_cdn_reference("catalog/my-icon_2", "catalog", "slug")
     with pytest.raises(ValidationError, match="Asset name"):
-        validate_cdn_reference("catalog/bad name!", "catalog")
+        validate_cdn_reference("catalog/bad name!", "catalog", "slug")
 
 
 def test_validate_image_hash_ok_and_bad():
@@ -64,13 +62,19 @@ def test_validate_image_hash_ok_and_bad():
         validate_cdn_reference("product/short", "product")
 
 
+def test_validate_default_ref_kind_is_hash():
+    # ref_kind defaults to 'hash' — a slug value fails the hash pattern.
+    with pytest.raises(ValidationError, match="64-character hex"):
+        validate_cdn_reference("banner/my-icon", "banner")
+
+
 # ---------------------------------------------------------------------------
 # widgets
 # ---------------------------------------------------------------------------
 
 
 def test_cdn_image_widget_context_asset():
-    widget = CdnImageWidget(image_type="catalog")
+    widget = CdnImageWidget(image_type="catalog", ref_kind="slug")
     ctx = widget.get_context("icon", "catalog/x", None)
     attrs = ctx["widget"]["attrs"]
     assert attrs["data-cdn-image-type"] == "catalog"
@@ -97,7 +101,7 @@ def test_cdn_image_list_widget_context():
 
 
 def test_cdn_image_list_widget_context_asset():
-    widget = CdnImageListWidget(image_type="carousel")
+    widget = CdnImageListWidget(image_type="carousel", ref_kind="slug")
     ctx = widget.get_context("slides", None, {"class": "x"})
     attrs = ctx["widget"]["attrs"]
     assert attrs["data-cdn-is-asset"] == "true"
@@ -110,7 +114,7 @@ def test_cdn_image_list_widget_context_asset():
 
 
 class CdnCovThing(models.Model):
-    icon = CdnImageField(image_type="catalog", blank=True, null=True)
+    icon = CdnImageField(image_type="catalog", ref_kind="slug", blank=True, null=True)
     photo = CdnImageField(image_type="product", blank=True, null=True)
     photos = CdnImageListField(image_type="product", max_images=2, null=True)
 
@@ -118,14 +122,27 @@ class CdnCovThing(models.Model):
         app_label = "users"
 
 
-def test_cdn_image_field_invalid_type_raises():
-    with pytest.raises(ValueError, match="image_type must be one of"):
-        CdnImageField(image_type="bogus")
+def test_cdn_image_field_malformed_type_raises():
+    # image_type is an open string (cdn-modularity.md §2.1) — only the
+    # *shape* (lowercase slug) is checked eagerly. Whether the type is
+    # actually configured for this deployment is a lazy, system-check
+    # concern (see test_cdn_checks.py), not a class-definition-time one.
+    with pytest.raises(ValueError, match="lowercase slug"):
+        CdnImageField(image_type="Bad Type!")
 
 
-def test_cdn_image_field_types_constants():
-    assert "catalog" in CDN_ASSET_TYPES
-    assert "product" in CDN_IMAGE_TYPES
+def test_cdn_image_field_arbitrary_type_allowed():
+    # Previously frozen to a 6-value marketplace enum — now any well-formed
+    # slug is accepted at construction time, even one nothing has
+    # "configured" yet.
+    field = CdnImageField(image_type="banner")
+    assert field.image_type == "banner"
+    assert field.ref_kind == "hash"
+
+
+def test_cdn_image_field_invalid_ref_kind_raises():
+    with pytest.raises(ValueError, match="ref_kind must be one of"):
+        CdnImageField(image_type="avatar", ref_kind="bogus")
 
 
 def test_cdn_image_field_deconstruct_default_max_length():
@@ -141,6 +158,18 @@ def test_cdn_image_field_deconstruct_custom_max_length():
     assert kwargs["max_length"] == 99
 
 
+def test_cdn_image_field_deconstruct_omits_default_ref_kind():
+    field = CdnImageField(image_type="product")
+    _, _, _, kwargs = field.deconstruct()
+    assert "ref_kind" not in kwargs
+
+
+def test_cdn_image_field_deconstruct_keeps_non_default_ref_kind():
+    field = CdnImageField(image_type="catalog", ref_kind="slug")
+    _, _, _, kwargs = field.deconstruct()
+    assert kwargs["ref_kind"] == "slug"
+
+
 def test_cdn_image_field_validate():
     obj = CdnCovThing()
     field = CdnCovThing._meta.get_field("icon")
@@ -154,6 +183,7 @@ def test_cdn_image_field_formfield():
     ff = field.formfield()
     assert isinstance(ff, CdnImageFormField)
     assert ff.image_type == "catalog"
+    assert ff.ref_kind == "slug"
     assert isinstance(ff.widget, CdnImageWidget)
 
 
@@ -187,9 +217,14 @@ def test_cdn_image_field_url_helper_base_override(settings):
 # ---------------------------------------------------------------------------
 
 
-def test_cdn_image_list_field_invalid_type_raises():
-    with pytest.raises(ValueError, match="image_type must be one of"):
-        CdnImageListField(image_type="nope")
+def test_cdn_image_list_field_malformed_type_raises():
+    with pytest.raises(ValueError, match="lowercase slug"):
+        CdnImageListField(image_type="Bad Type!")
+
+
+def test_cdn_image_list_field_arbitrary_type_allowed():
+    field = CdnImageListField(image_type="nope")
+    assert field.image_type == "nope"
 
 
 def test_cdn_image_list_field_deconstruct_removes_defaults():
@@ -236,7 +271,7 @@ def test_cdn_image_list_field_formfield():
 
 
 def test_cdn_image_form_field_validate():
-    ff = CdnImageFormField(image_type="catalog", required=False)
+    ff = CdnImageFormField(image_type="catalog", ref_kind="slug", required=False)
     ff.validate("catalog/ok")
     ff.validate("")  # empty skips CDN validation
     with pytest.raises(ValidationError):

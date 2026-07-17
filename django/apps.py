@@ -63,6 +63,12 @@ class CommonDjangoConfig(AppConfig):
         # first time some code path called get_config(key); this is the
         # boot-smoke gate instead.
         from stapel_core.config import checks as _config_checks  # noqa: F401
+        # CDN-field checks (stapel_core.django.cdn.checks): E-level when a
+        # declared CdnImageField/CdnImageListField's image_type is missing
+        # from STAPEL_CDN["ASSET_TYPES"], or when any such field exists but
+        # no cdn.* comm route is wired at all — the "half the stack is
+        # modular, half isn't" design gap (cdn-modularity.md §0.1/§0.5).
+        from stapel_core.django.cdn import checks as _cdn_checks  # noqa: F401
 
         # Admin visibility (admin-suite AS-3): re-register contrib service
         # tables (auth.Group, sessions.Session) under declaration-aware admins
