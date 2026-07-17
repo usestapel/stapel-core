@@ -99,6 +99,45 @@ def test_check_clean_when_kafka_configured_and_confluent_kafka_installed(setting
     assert check_bus_backend_library() == []
 
 
+def test_check_errors_when_redis_streams_configured_but_redis_missing(
+    settings, poisoned_module
+):
+    settings.STAPEL_BUS_BACKEND = "redis_streams"
+    poisoned_module("redis")
+
+    errors = check_bus_backend_library()
+
+    assert len(errors) == 1
+    assert errors[0].id == E001_MISSING_TRANSPORT_LIBRARY
+    assert "redis_streams" in errors[0].msg
+    assert "redis" in errors[0].msg
+    assert "stapel-core[redis-bus]" in errors[0].hint
+
+
+def test_check_errors_when_redis_alias_configured_but_redis_missing(
+    settings, poisoned_module
+):
+    """The ``redis`` shorthand resolves to the same backend as
+    ``redis_streams`` — the check must catch it too, and report under the
+    canonical name so the fix-it message is consistent regardless of which
+    spelling a deployment used."""
+    settings.STAPEL_BUS_BACKEND = "redis"
+    poisoned_module("redis")
+
+    errors = check_bus_backend_library()
+
+    assert len(errors) == 1
+    assert errors[0].id == E001_MISSING_TRANSPORT_LIBRARY
+    assert "redis_streams" in errors[0].msg
+    assert "stapel-core[redis-bus]" in errors[0].hint
+
+
+def test_check_clean_when_redis_streams_configured_and_redis_installed(settings):
+    pytest.importorskip("redis")
+    settings.STAPEL_BUS_BACKEND = "redis_streams"
+    assert check_bus_backend_library() == []
+
+
 def test_check_env_wins_over_setting(settings, monkeypatch, poisoned_module):
     """The check must resolve the backend the same way get_bus() does:
     env > setting > default — otherwise it could bless a setting that isn't

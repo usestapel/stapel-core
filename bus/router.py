@@ -4,6 +4,7 @@ Bus singleton — backend chosen by environment first, Django setting second.
     # environment (12-factor, wins over settings):
     STAPEL_BUS_BACKEND=nats          # shorthand
     STAPEL_BUS_BACKEND=kafka
+    STAPEL_BUS_BACKEND=redis_streams # or the alias: redis
     STAPEL_BUS_BACKEND=memory
     STAPEL_BUS_BACKEND=routing       # per-topic-prefix routes (STAPEL_BUS_ROUTES)
     STAPEL_BUS_BACKEND=my_app.bus.CustomBus   # or any dotted path
@@ -34,6 +35,8 @@ SHORTHANDS = {
     "memory": "stapel_core.bus.backends.memory.MemoryBus",
     "kafka": "stapel_core.bus.backends.kafka.KafkaBus",
     "nats": "stapel_core.bus.backends.nats.NatsJetStreamBus",
+    "redis_streams": "stapel_core.bus.backends.redis_streams.RedisStreamsBus",
+    "redis": "stapel_core.bus.backends.redis_streams.RedisStreamsBus",  # alias
     "routing": "stapel_core.bus.backends.routing.RoutingBus",
 }
 

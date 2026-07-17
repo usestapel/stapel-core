@@ -69,11 +69,14 @@ it only fills in keys this file does not know about yet. See
 | POSTGRES_HOST | env | Database host. | no | db |
 | POSTGRES_PORT | env | Database port. | no | 5432 |
 | CONN_MAX_AGE | env | Django persistent-connection age (seconds); 0 = per-request. | no | 0 |
-| STAPEL_BUS_BACKEND | env | Message-bus backend dotted path; kafka/nats are explicit opt-in (0.11.0+). | no | stapel_core.bus.backends.memory.MemoryBus |
+| STAPEL_BUS_BACKEND | env | Message-bus backend dotted path; kafka/nats/redis_streams are explicit opt-in (0.11.0+). | no | stapel_core.bus.backends.memory.MemoryBus |
 | KAFKA_BOOTSTRAP_SERVERS | env | Kafka bootstrap servers. | no | kafka:9092 |
 | KAFKA_SECURITY_PROTOCOL | env | Kafka security protocol. | no | PLAINTEXT |
 | KAFKA_SASL_MECHANISM | env | Kafka SASL mechanism. | no | |
 | KAFKA_CLIENT_USER | env | Kafka SASL username. | no | |
+| STAPEL_REDIS_BUS_URL | env | Redis Streams bus connection URL. | no | REDIS_URL, else redis://redis:6379/0 |
+| STAPEL_REDIS_BUS_CLAIM_IDLE_MS | env | XAUTOCLAIM idle threshold (ms) before a pending entry is reclaimed from a presumed-dead consumer. | no | 60000 |
+| STAPEL_REDIS_BUS_STREAM_MAXLEN | env | Approximate XADD stream cap (MAXLEN ~); 0 disables trimming. | no | 100000 |
 | JWT_PUBLIC_KEY | env | RS256 JWT verify key, base64 PEM (non-signing services). | no | |
 | JWT_ALGORITHM | env | JWT algorithm; auto RS256 if a key is present, else HS256. | no | HS256 |
 | JWT_ISSUER | env | JWT `iss` claim. | no | https://STAPEL_HOST |

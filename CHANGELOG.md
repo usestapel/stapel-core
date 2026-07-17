@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-17
+
+### Added
+
+- **Redis Streams bus backend** (`stapel_core.bus.backends.redis_streams.RedisStreamsBus`)
+  — third standard comm-bus transport alongside Kafka and NATS JetStream.
+  Select via `STAPEL_BUS_BACKEND=redis_streams` (or the alias `redis`).
+  One Redis stream per topic (`XADD`, optionally capped with `MAXLEN ~` via
+  `STAPEL_REDIS_BUS_STREAM_MAXLEN`); one consumer group per subscriber
+  (`XREADGROUP`+`XACK`), named after the `group` passed to `consume()` —
+  same convention as Kafka's `group.id` / NATS's durable name. Entries left
+  pending by a consumer that died mid-handler are reclaimed via
+  `XAUTOCLAIM` once idle past `STAPEL_REDIS_BUS_CLAIM_IDLE_MS` (default
+  60s) and re-run through the same retry/DLQ path. Delivery semantics
+  mirror the existing backends: at-least-once, 3x retry with backoff then
+  DLQ (`<topic>.dlq` stream), poison messages DLQ'd raw instead of wedging
+  the consumer, fresh consumer groups start at the beginning of the stream
+  (matches Kafka's `earliest` / JetStream's `DeliverAll`). New extra
+  `redis-bus = ["redis>=5"]` (declared explicitly — redis-py is already a
+  transitive dependency via django-redis, but transitivity is not a
+  contract); `bus.checks` E001 covers it (`pip install
+  'stapel-core[redis-bus]'` hint when `redis` isn't importable). New
+  connection settings: `STAPEL_REDIS_BUS_URL` (falls back to `REDIS_URL`),
+  `STAPEL_REDIS_BUS_CLAIM_IDLE_MS`, `STAPEL_REDIS_BUS_STREAM_MAXLEN`.
+
 ## [0.12.0] - 2026-07-17
 
 Legacy sweep (владельческая директива: only current code, no backward-compat

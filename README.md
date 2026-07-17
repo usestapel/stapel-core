@@ -182,7 +182,9 @@ REST_FRAMEWORK = {
 
 ### `stapel_core.bus` — Event bus
 
-Kafka-backed event bus with an in-memory backend for tests.
+Transport-agnostic event bus: in-memory backend for tests/dev, Kafka, NATS
+JetStream, or Redis Streams for production — pick one via
+`STAPEL_BUS_BACKEND` (or bring your own `BusBackend` subclass).
 
 **Publish** (sync, fire-and-forget):
 
@@ -209,9 +211,14 @@ class ConsumeUsers(BaseBusConsumerCommand):
         ...
 ```
 
-Backend is selected via the `STAPEL_BUS_BACKEND` Django setting
-(`stapel_core.bus.backends.kafka.KafkaBus` in production,
-`stapel_core.bus.backends.memory.MemoryBus` in tests).
+Backend is selected via the `STAPEL_BUS_BACKEND` env var or Django setting
+(shorthand `memory` / `kafka` / `nats` / `redis_streams`, or any dotted
+path). Default is `memory` (`stapel_core.bus.backends.memory.MemoryBus`);
+production picks one of `stapel_core.bus.backends.kafka.KafkaBus`,
+`stapel_core.bus.backends.nats.NatsJetStreamBus`, or
+`stapel_core.bus.backends.redis_streams.RedisStreamsBus` (needs
+`pip install 'stapel-core[kafka]'` / `[nats]` / `[redis-bus]` respectively —
+see `MODULE.md` for connection settings and delivery semantics).
 
 ---
 

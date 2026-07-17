@@ -244,14 +244,16 @@ engines — reviews may not know about listings; the composite may).
 ### Bus backends — `STAPEL_BUS_BACKEND` (`bus/router.py`)
 
 Resolution: env var first (12-factor), Django setting second, default
-`"kafka"`. Value is a shorthand or any dotted path to a `BusBackend`
-subclass — a custom broker needs zero core changes:
+`"memory"` (0.11.0+ — kafka/nats/redis are explicit opt-in; see
+`bus/router.py`'s docstring for why). Value is a shorthand or any dotted
+path to a `BusBackend` subclass — a custom broker needs zero core changes:
 
 | Shorthand | Backend dotted path |
 |---|---|
 | `memory` | `stapel_core.bus.backends.memory.MemoryBus` |
 | `kafka` | `stapel_core.bus.backends.kafka.KafkaBus` |
 | `nats` | `stapel_core.bus.backends.nats.NatsJetStreamBus` |
+| `redis_streams` (alias `redis`) | `stapel_core.bus.backends.redis_streams.RedisStreamsBus` |
 | `routing` | `stapel_core.bus.backends.routing.RoutingBus` |
 
 `routing` splits topics across brokers via `STAPEL_BUS_ROUTES` (env JSON or
@@ -261,7 +263,15 @@ longest-prefix-wins, `""` is the default route (e.g.
 env-first then Django setting): `KAFKA_BOOTSTRAP_SERVERS`,
 `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM` / `_USERNAME` / `_PASSWORD`;
 `NATS_URL`, `STAPEL_NATS_STREAM` (`stapel-events`), `STAPEL_NATS_EVENT_PREFIX`
-(`stapel.evt`). Consumers subclass `BaseBusConsumerCommand`.
+(`stapel.evt`); `STAPEL_REDIS_BUS_URL` (falls back to `REDIS_URL`),
+`STAPEL_REDIS_BUS_CLAIM_IDLE_MS` (`60000` — XAUTOCLAIM staleness threshold),
+`STAPEL_REDIS_BUS_STREAM_MAXLEN` (`100000`, approximate XADD trim; `0`
+disables). `redis_streams` maps one topic to one Redis stream (XADD), one
+consumer group per subscriber (XREADGROUP+XACK, group name = the `group`
+passed to `consume()` — same convention as Kafka's `group.id` / NATS's
+durable name), and reclaims entries abandoned by a dead consumer via
+XAUTOCLAIM once idle past the claim threshold. Consumers subclass
+`BaseBusConsumerCommand`.
 
 ### Verification factors & policy — `STAPEL_VERIFICATION` (`verification/conf.py`)
 

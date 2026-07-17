@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.12.0"
+version = "0.12.1"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -45,6 +45,13 @@ nats = [
     # filter_subjects in ConsumerConfig needs nats-py 2.9+ (server 2.10+)
     "nats-py>=2.9",
 ]
+# Redis Streams bus backend (stapel_core.bus.backends.redis_streams).
+# django-redis already pulls in redis-py transitively for the cache backend,
+# but transitivity is not a contract — declare it explicitly so a deployment
+# that swaps the cache backend doesn't silently lose the bus transport too.
+redis-bus = [
+    "redis>=5",
+]
 sentry = [
     "sentry-sdk>=1.40",
 ]
@@ -72,9 +79,12 @@ dev = [
     # celery executor is an optional runtime path (guarded import in
     # comm/tasks.py); the test suite exercises that branch.
     "celery>=5.3",
+    # in-memory Redis for the Streams bus backend tests — real XADD/
+    # XREADGROUP/XACK/XAUTOCLAIM semantics without a running server.
+    "fakeredis>=2.20",
 ]
 all = [
-    "stapel-core[kafka,nats,sentry,netintel-maxmind,gateway,channels]",
+    "stapel-core[kafka,nats,redis-bus,sentry,netintel-maxmind,gateway,channels]",
 ]
 
 [project.urls]

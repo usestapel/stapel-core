@@ -79,3 +79,35 @@ class NatsBusConfig:
     @classmethod
     def subject_for(cls, topic: str) -> str:
         return f"{cls.subject_prefix()}.{topic}"
+
+
+class RedisStreamsBusConfig:
+    """Redis Streams backend configuration.
+
+    STAPEL_REDIS_BUS_URL          dedicated bus connection (falls back to
+                                   REDIS_URL, the same instance django-redis
+                                   already uses for cache/sessions — fine for
+                                   a dev box; production should point this at
+                                   its own Redis so a cache flush cannot also
+                                   wipe consumer groups/pending entries)
+    STAPEL_REDIS_BUS_CLAIM_IDLE_MS minimum idle time (ms) before a pending
+                                   entry is considered abandoned and eligible
+                                   for XAUTOCLAIM by another consumer
+    STAPEL_REDIS_BUS_STREAM_MAXLEN approximate cap on stream length (XADD
+                                   MAXLEN ~); 0 disables trimming
+
+    A bus topic maps 1:1 to a stream key of the same name (no prefixing —
+    mirrors the Kafka backend, where topic == Kafka topic verbatim).
+    """
+
+    @staticmethod
+    def url() -> str:
+        return _get("STAPEL_REDIS_BUS_URL", "") or _get("REDIS_URL", "redis://redis:6379/0")
+
+    @staticmethod
+    def claim_idle_ms() -> int:
+        return int(_get("STAPEL_REDIS_BUS_CLAIM_IDLE_MS", "60000"))
+
+    @staticmethod
+    def maxlen() -> int:
+        return int(_get("STAPEL_REDIS_BUS_STREAM_MAXLEN", "100000"))

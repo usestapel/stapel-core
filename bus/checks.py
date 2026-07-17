@@ -24,6 +24,7 @@ E001_MISSING_TRANSPORT_LIBRARY = "stapel_core.bus.E001"
 _TRANSPORT_LIBRARIES = {
     "kafka": ("confluent_kafka", "kafka"),
     "nats": ("nats", "nats"),
+    "redis_streams": ("redis", "redis-bus"),
 }
 
 
