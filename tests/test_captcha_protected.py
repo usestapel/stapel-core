@@ -53,19 +53,6 @@ class LevelAwareVerifier(CaptchaVerifier):
         return self.result
 
 
-class LegacyVerifier(CaptchaVerifier):
-    """Old-style backend without the level kwarg — must keep working."""
-
-    def __init__(self, secret=None, result=True):
-        super().__init__(secret)
-        self.result = result
-        self.calls = []
-
-    def verify(self, token, ip=None):
-        self.calls.append((token, ip))
-        return self.result
-
-
 def _with_kind(kind):
     return mock.patch(
         "stapel_core.netintel.classify_ip",
@@ -159,14 +146,6 @@ def test_invalid_token_400():
     assert response.data["localizable_error"] == ERR_400_CAPTCHA_INVALID
 
 
-def test_legacy_backend_without_level_kwarg_still_works():
-    verifier = LegacyVerifier()
-    request = _Req(token="tok-4")
-    with _with_kind("datacenter"), _with_verifier(verifier):
-        assert _View().post(request) == "view-ok"
-    assert verifier.calls == [("tok-4", "192.0.2.1")]
-
-
 def test_token_from_header():
     verifier = LevelAwareVerifier()
     request = _Req(header_token="tok-header")
@@ -219,29 +198,27 @@ def test_decision_is_logged(caplog):
 
 
 # ---------------------------------------------------------------------------
-# Backward compatibility of configuration spellings
+# Configuration
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_flat_settings_still_configure_verifier():
-    from stapel_core.captcha import TurnstileVerifier
-    from stapel_core.django.captcha import get_verifier
-
-    with override_settings(CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="s"):
-        assert isinstance(get_verifier(), TurnstileVerifier)
-
-
-def test_namespaced_settings_take_precedence():
+def test_namespaced_settings_configure_verifier():
     from stapel_core.captcha import HcaptchaVerifier
     from stapel_core.django.captcha import get_verifier
 
-    with override_settings(
-        CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="flat",
-        STAPEL_CAPTCHA={"BACKEND": "hcaptcha", "SECRET": "ns"},
-    ):
+    with override_settings(STAPEL_CAPTCHA={"BACKEND": "hcaptcha", "SECRET": "ns"}):
         verifier = get_verifier()
     assert isinstance(verifier, HcaptchaVerifier)
     assert verifier.secret == "ns"
+
+
+def test_flat_settings_are_ignored():
+    """The retired flat spelling must not configure anything."""
+    from stapel_core.captcha import NoopVerifier as Noop
+    from stapel_core.django.captcha import get_verifier
+
+    with override_settings(CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="s"):
+        assert isinstance(get_verifier(), Noop)
 
 
 def test_namespaced_secret_alone_enables_captcha():

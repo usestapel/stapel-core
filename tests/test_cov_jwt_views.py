@@ -173,9 +173,7 @@ class TestJWTStatusView:
             resp = JWTStatusView.as_view()(req)
         body = _body(resp)
         assert body["authenticated"] is True
-        assert body["user"]["user_id"] == "uid-1"
-        assert body["user"]["email"] == "s@example.com"
-        assert body["user"]["is_staff"] is True
+        assert "user" not in body  # identity travels in the presented profile
         assert body["tokens"]["access_token_valid"] is True
         assert body["tokens"]["refresh_token_valid"] is True
         assert body["tokens"]["access_token_exp"] == 111
@@ -192,7 +190,7 @@ class TestJWTStatusView:
             resp = JWTStatusView.as_view()(req)
         body = _body(resp)
         assert body["authenticated"] is False
-        assert body["user"]["user_id"] is None
+        assert body["profile"] is None
         assert body["tokens"]["access_token_valid"] is False
         assert body["tokens"]["access_token_exp"] is None
 

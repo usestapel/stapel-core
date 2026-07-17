@@ -27,7 +27,6 @@ from .jwt.utils import (
     get_admin_logout_urlpattern,
     load_user_by_uid,
     setup_centralized_admin_login,
-    setup_centralized_admin_logout,
 )
 from .monitoring.health import get_health_urls, register_metrics_exporter
 from .openapi.mcp import (
@@ -40,7 +39,6 @@ __all__ = [
     "JWTAuthMiddleware",
     "load_user_by_uid",
     "setup_centralized_admin_login",
-    "setup_centralized_admin_logout",
     "get_admin_logout_urlpattern",
     "build_mcp_schema_view",
     "convert_openapi_to_openrpc",

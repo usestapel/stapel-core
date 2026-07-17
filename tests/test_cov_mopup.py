@@ -1,21 +1,8 @@
-"""Mop-up coverage: compat shims, __str__ reprs and tiny config branches."""
+"""Mop-up coverage: __str__ reprs and tiny config branches."""
 from unittest.mock import patch
 
 import pytest
 from django.utils import timezone
-
-
-def test_django_authentication_shim_reexports():
-    import stapel_core.django.authentication as shim
-
-    assert callable(shim.is_user_blacklisted)
-
-
-def test_django_utils_shim_reexports():
-    import stapel_core.django.jwt.utils as real
-    import stapel_core.django.utils as shim
-
-    assert shim.load_jwt_config_from_settings is real.load_jwt_config_from_settings
 
 
 def test_outbox_event_str_both_states():

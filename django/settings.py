@@ -17,7 +17,7 @@ __all__ = [
     # Logging
     "LOGGING",
     # Host configuration
-    "IRON_HOST",
+    "STAPEL_HOST",
     # Django core
     "ALLOWED_HOSTS",
     "CSRF_TRUSTED_ORIGINS",
@@ -407,25 +407,23 @@ SECRET_KEY = get_secret('SECRET_KEY', 'django-insecure-auth-service-change-this-
 # HOST CONFIGURATION
 # =============================================================================
 # STAPEL_HOST is the primary host variable (e.g., "stg.example.com").
-# IRON_HOST is honored as a legacy fallback for existing deployments.
-STAPEL_HOST = os.getenv('STAPEL_HOST', os.getenv('IRON_HOST', 'localhost'))
-IRON_HOST = STAPEL_HOST  # legacy alias — do not use in new code
+STAPEL_HOST = os.getenv('STAPEL_HOST', 'localhost')
 
 # Prefix of the service that owns login/admin-login (AdminLoginRedirect
 # middleware, JWKS discovery). Empty = no dedicated auth service.
 STAPEL_AUTH_SERVICE_PREFIX = os.getenv('STAPEL_AUTH_SERVICE_PREFIX', 'auth')
 
-# Allowed hosts - can be overridden via ALLOWED_HOSTS env, otherwise derived from IRON_HOST
+# Allowed hosts - can be overridden via ALLOWED_HOSTS env, otherwise derived from STAPEL_HOST
 _allowed_hosts = os.getenv('ALLOWED_HOSTS', '')
 if _allowed_hosts:
     ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(',') if h.strip()]
 else:
-    # Auto-generate from IRON_HOST
+    # Auto-generate from STAPEL_HOST
     ALLOWED_HOSTS = [STAPEL_HOST, 'localhost', '127.0.0.1']
 
 # CSRF trusted origins - required for Django 4+ with HTTPS
 # Can be set via CSRF_TRUSTED_ORIGINS env var (comma-separated)
-# Or auto-generated from IRON_HOST
+# Or auto-generated from STAPEL_HOST
 _csrf_origins = os.getenv('CSRF_TRUSTED_ORIGINS', '')
 if _csrf_origins:
     CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins.split(',') if o.strip()]
@@ -451,7 +449,7 @@ JWT_SECRET_KEY = get_secret('JWT_SECRET_KEY', SECRET_KEY)
 JWT_PRIVATE_KEY = base64.b64decode(_jwt_private_key_b64).decode('utf-8') if _jwt_private_key_b64 else ''
 JWT_PUBLIC_KEY = base64.b64decode(_jwt_public_key_b64).decode('utf-8') if _jwt_public_key_b64 else ''
 
-# JWT issuer and audience - derived from IRON_HOST if not explicitly set
+# JWT issuer and audience - derived from STAPEL_HOST if not explicitly set
 JWT_ISSUER = os.getenv('JWT_ISSUER', f'https://{STAPEL_HOST}')
 JWT_AUDIENCE = os.getenv('JWT_AUDIENCE', 'stapel')
 

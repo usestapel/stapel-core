@@ -49,8 +49,8 @@ class _Holder(CaptchaMixin):
 
 
 def test_validate_captcha_token_noop_passthrough():
-    # no CAPTCHA_SECRET -> NoopVerifier -> token accepted untouched
-    with override_settings(CAPTCHA_BACKEND="turnstile"):
+    # no SECRET -> NoopVerifier -> token accepted untouched
+    with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile"}):
         assert _Holder().validate_captcha_token("anything") == "anything"
 
 
@@ -58,7 +58,7 @@ def test_validate_captcha_token_success_forwards_ip():
     # remoteip uses netintel.client_ip's trust model (REMOTE_ADDR by default),
     # consistent with classification — not a spoofable X-Forwarded-For header.
     request = _Request({"REMOTE_ADDR": "203.0.113.5"})
-    with override_settings(CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="s"):
+    with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile", "SECRET": "s"}):
         with mock.patch("requests.post") as post:
             post.return_value.json.return_value = {"success": True}
             assert _Holder(request).validate_captcha_token("tok") == "tok"
@@ -66,7 +66,7 @@ def test_validate_captcha_token_success_forwards_ip():
 
 
 def test_validate_captcha_token_failure_raises():
-    with override_settings(CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="s"):
+    with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile", "SECRET": "s"}):
         with mock.patch("requests.post") as post:
             post.return_value.json.return_value = {"success": False}
             with pytest.raises(StapelValidationError):
@@ -75,7 +75,7 @@ def test_validate_captcha_token_failure_raises():
 
 def test_validate_captcha_token_network_error_raises():
     # verifier returns False on network errors -> token rejected (fail closed)
-    with override_settings(CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="s"):
+    with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile", "SECRET": "s"}):
         with mock.patch("requests.post", side_effect=ConnectionError("down")):
             with pytest.raises(StapelValidationError):
                 _Holder(None).validate_captcha_token("tok")

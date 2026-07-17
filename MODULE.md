@@ -380,8 +380,8 @@ per-app catalogs `<app>/translations/D.<lang>.json` — flat `{key: text}` —
 discovered over INSTALLED_APPS and merged **later-wins** (the host app, last,
 overrides module texts without a fork; the same merge-over-builtins semantics
 as every other registry). `flows.i18n` is the `"flows"` domain over this
-(`load_app_catalogs`, `CommDocTranslator`, `DocTranslationCache` re-export from
-here). `docs/errors.json` stays language-agnostic (en canon); localized error
+(`CommDocTranslator`, `DocTranslationCache` live in `stapel_core.i18n`).
+`docs/errors.json` stays language-agnostic (en canon); localized error
 texts live in `translations/errors.<lang>.json`, gen-errors reads them per
 locale.
 
@@ -466,13 +466,12 @@ DRF defaults (`DEFAULT_SCHEMA_CLASS = PermissionAwareAutoSchema`,
 
 | Key | Default | Semantics | What it customizes |
 |---|---|---|---|
-| `BACKEND` | `None` (→ flat `CAPTCHA_BACKEND`, then `noop`) | replace | Verifier: `turnstile` \| `recaptcha` \| `hcaptcha` \| `noop` \| dotted path to a `CaptchaVerifier` subclass |
-| `SECRET` | `None` (→ flat `CAPTCHA_SECRET`) | replace | Backend secret; empty → `NoopVerifier` (captcha disabled) |
+| `BACKEND` | `None` (→ `noop`) | replace | Verifier: `turnstile` \| `recaptcha` \| `hcaptcha` \| `noop` \| dotted path to a `CaptchaVerifier` subclass |
+| `SECRET` | `None` | replace | Backend secret; empty → `NoopVerifier` (captcha disabled) |
 | `CHALLENGE_MATRIX` | `{}` | **merge** over `DEFAULT_CHALLENGE_MATRIX` | ip-kind → level: residential/unknown → `invisible`, datacenter/vpn → `interactive`, tor → `interactive+ratelimit` |
 | `ACTION_OVERRIDES` | `{}` | merge (per action) | `{action: {kind: level} \| "+1"}`; `"+1"` bumps one level (saturates at `block`) |
 | `CHALLENGE_POLICY` | `stapel_core.captcha.policy.MatrixChallengePolicy` | replace (dotted path) | The whole `ChallengePolicy` (`level_for(request, action) -> level`) |
 
-The legacy flat `CAPTCHA_BACKEND` / `CAPTCHA_SECRET` settings keep working;
 `BACKEND`/`SECRET` are read from the `STAPEL_CAPTCHA` dict only (no env
 fallback — a stray generic `SECRET` env var must not enable captcha).
 

@@ -15,7 +15,7 @@ from stapel_core.flows import (
 )
 from stapel_core.flows.checks import check_flows
 from stapel_core.flows.docs import export_json, render_flow_markdown, render_index_markdown
-from stapel_core.flows.i18n import CommDocTranslator, DocTranslationCache
+from stapel_core.i18n import CommDocTranslator, DocTranslationCache
 
 
 @pytest.fixture(autouse=True)

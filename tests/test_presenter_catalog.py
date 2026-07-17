@@ -236,9 +236,8 @@ class TestStatusViewProfileBlock:
             "email": "p@example.com",
             "display_name": "presented",
         }
-        # legacy flat block untouched (wire compatibility)
-        assert body["user"]["user_id"] == "uid-9"
-        assert body["user"]["username"] == "presented"
+        # the legacy flat ``user`` block is gone from the wire
+        assert "user" not in body
 
     def test_profile_none_for_anonymous(self):
         with patch(PROVIDER) as provider:

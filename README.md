@@ -36,11 +36,13 @@ reCAPTCHA v2, hCaptcha, and custom backends.
 **Settings** (per service, in `settings/base.py`):
 
 ```python
-CAPTCHA_BACKEND = env.str('CAPTCHA_BACKEND', 'turnstile')
-CAPTCHA_SECRET  = env.str('CAPTCHA_SECRET', None)  # absent → disabled
+STAPEL_CAPTCHA = {
+    'BACKEND': env.str('CAPTCHA_BACKEND', 'turnstile'),
+    'SECRET': env.str('CAPTCHA_SECRET', None),  # absent → disabled
+}
 ```
 
-**Auto-disable**: if `CAPTCHA_SECRET` is `None` or empty, `build_verifier`
+**Auto-disable**: if the secret is `None` or empty, `build_verifier`
 returns `NoopVerifier` regardless of backend. No separate toggle needed.
 
 **DRF integration** (add mixin to any serializer):
@@ -63,18 +65,14 @@ import path:
 from stapel_core.captcha import CaptchaVerifier
 
 class MyCaptchaVerifier(CaptchaVerifier):
-    def verify(self, token: str, ip: str | None = None) -> bool:
+    def verify(self, token: str, ip: str | None = None, *, level: str | None = None) -> bool:
         return my_service.check(token, self.secret)
 ```
 
 ```python
 # settings.py
-CAPTCHA_BACKEND = 'myapp.captcha.MyCaptchaVerifier'
-CAPTCHA_SECRET  = 'my-secret'
+STAPEL_CAPTCHA = {'BACKEND': 'myapp.captcha.MyCaptchaVerifier', 'SECRET': 'my-secret'}
 ```
-
-The flat settings above keep working; the namespaced equivalent is
-`STAPEL_CAPTCHA = {"BACKEND": ..., "SECRET": ...}`.
 
 **Tiered challenge policy** — instead of a binary on/off, protect a view with
 a strictness level derived from the client's network class (via
@@ -154,7 +152,7 @@ JWT_REFRESH_TOKEN_LIFETIME = 604800  # seconds
 
 ---
 
-### `stapel_core.django.authentication` — JWT cookie auth
+### `stapel_core.django.jwt.authentication` — JWT cookie auth
 
 `JWTCookieAuthentication` reads JWT from `access_token` cookie or
 `Authorization: Bearer <token>` header.
@@ -162,7 +160,7 @@ JWT_REFRESH_TOKEN_LIFETIME = 604800  # seconds
 ```python
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'stapel_core.django.authentication.JWTCookieAuthentication',
+        'stapel_core.django.jwt.authentication.JWTCookieAuthentication',
     ],
 }
 ```

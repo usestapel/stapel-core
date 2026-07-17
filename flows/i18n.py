@@ -9,8 +9,7 @@ literal-only flows keep working unchanged.
 The catalog mechanics (per-app ``translations/<domain>.<lang>.json`` discovery
 + later-wins merge, the ``DOC_TRANSLATOR`` seam, the content-hash cache) are
 the domain-agnostic :mod:`stapel_core.i18n` contour; this module is the
-``"flows"`` domain over it. ``load_app_catalogs``, ``CommDocTranslator`` and
-``DocTranslationCache`` are re-exported here for backward compatibility.
+``"flows"`` domain over it.
 
 ``resolve_flow_texts(flows, language)`` builds the key → text mapping the doc
 renderers consume. Resolution chain for language X:
@@ -33,13 +32,7 @@ import logging
 from pathlib import Path
 from typing import Iterable
 
-# Domain-agnostic catalog mechanics (re-exported for backward compatibility —
-# the flows.conf DOC_TRANSLATOR default resolves ``…flows.i18n.CommDocTranslator``).
-from stapel_core.i18n import (
-    CATALOG_DIRNAME,
-    CommDocTranslator,
-    DocTranslationCache,
-)
+from stapel_core.i18n import DocTranslationCache
 from stapel_core.i18n import load_app_catalogs as _load_app_catalogs
 
 from .registry import Flow
@@ -66,7 +59,7 @@ def load_app_catalogs(
     """Merge ``translations/flows.<language>.json`` catalogs (later-wins).
 
     Thin wrapper over :func:`stapel_core.i18n.load_app_catalogs` for the
-    ``"flows"`` domain — kept for backward compatibility.
+    ``"flows"`` domain.
     """
     return _load_app_catalogs("flows", language, dirs=dirs)
 
@@ -156,9 +149,6 @@ def _source_language() -> str:
 
 
 __all__ = [
-    "CATALOG_DIRNAME",
-    "CommDocTranslator",
-    "DocTranslationCache",
     "flow_source_texts",
     "load_app_catalogs",
     "resolve_flow_texts",

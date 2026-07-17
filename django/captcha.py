@@ -23,17 +23,16 @@ Usage on a view method (tiered by network class — see
 
 Per-service Django settings::
 
-    CAPTCHA_BACKEND = 'turnstile'   # or 'recaptcha' | 'hcaptcha' | 'noop' | dotted.path
-    CAPTCHA_SECRET  = env.str('CAPTCHA_SECRET', None)  # absent → captcha disabled
+    STAPEL_CAPTCHA = {
+        'BACKEND': 'turnstile',  # or 'recaptcha' | 'hcaptcha' | 'noop' | dotted.path
+        'SECRET': env.str('CAPTCHA_SECRET', None),  # absent → captcha disabled
+    }
 
-The flat settings above are the legacy spelling and keep working; the
-namespaced equivalents are ``STAPEL_CAPTCHA = {"BACKEND": ..., "SECRET":
-...}`` plus the challenge-policy keys (``CHALLENGE_MATRIX``,
-``ACTION_OVERRIDES``, ``CHALLENGE_POLICY`` — see ``captcha/conf.py``).
+plus the challenge-policy keys (``CHALLENGE_MATRIX``, ``ACTION_OVERRIDES``,
+``CHALLENGE_POLICY`` — see ``captcha/conf.py``).
 """
 
 import functools
-import inspect
 import logging
 
 from stapel_core.captcha import NoopVerifier, build_verifier
@@ -86,11 +85,9 @@ def _extract_ip(request) -> str | None:
 
 
 def get_verifier() -> 'CaptchaVerifier':  # noqa: F821
-    """Build a verifier from Django settings.
+    """Build a verifier from ``STAPEL_CAPTCHA["BACKEND"/"SECRET"]``.
 
-    Resolution: ``STAPEL_CAPTCHA["BACKEND"/"SECRET"]`` first, the legacy
-    flat ``CAPTCHA_BACKEND`` / ``CAPTCHA_SECRET`` as fallback. Returns
-    ``NoopVerifier`` when no secret is configured, making captcha
+    Returns ``NoopVerifier`` when no secret is configured, making captcha
     effectively disabled with no extra toggle needed.
     """
     from django.conf import settings
@@ -99,12 +96,8 @@ def get_verifier() -> 'CaptchaVerifier':  # noqa: F821
     # generic `BACKEND`/`SECRET` environment variable can never silently
     # enable or reroute captcha via the AppSettings env fallback.
     overrides = getattr(settings, 'STAPEL_CAPTCHA', None) or {}
-    backend = overrides.get('BACKEND')
-    if backend is None:
-        backend = getattr(settings, 'CAPTCHA_BACKEND', 'noop')
+    backend = overrides.get('BACKEND') or 'noop'
     secret = overrides.get('SECRET')
-    if secret is None:
-        secret = getattr(settings, 'CAPTCHA_SECRET', None)
     return build_verifier(backend, secret)
 
 
@@ -176,25 +169,6 @@ def _extract_token(request) -> str | None:
     return None
 
 
-def _call_verifier(verifier, token: str, ip: str | None, level: str) -> bool:
-    """Call ``verifier.verify``, passing ``level`` only if it accepts it.
-
-    Backends may opt into the challenge level via an optional keyword
-    (``def verify(self, token, ip=None, *, level=None)``) — e.g. to force
-    an interactive challenge; legacy two-argument backends keep working.
-    """
-    try:
-        parameters = inspect.signature(verifier.verify).parameters
-    except (TypeError, ValueError):  # builtins/C callables — be conservative
-        parameters = {}
-    accepts_level = 'level' in parameters or any(
-        p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
-    )
-    if accepts_level:
-        return verifier.verify(token, ip=ip, level=level)
-    return verifier.verify(token, ip=ip)
-
-
 def captcha_protected(action: str = 'default'):
     """Protect a view with the tiered challenge policy (see captcha/policy.py).
 
@@ -207,7 +181,7 @@ def captcha_protected(action: str = 'default'):
       when captcha is unconfigured (NoopVerifier) the request passes,
       exactly like the pre-policy behavior.
     - ``interactive`` / ``interactive+ratelimit`` — verify the token; the
-      level is passed to backends that accept it so they can force an
+      level is passed to the backend so it can force an
       interactive challenge. Rate limiting is NOT performed here:
       ``request.stapel_challenge_level`` carries the level for rate-limit
       middleware/hosts to consume.
@@ -283,7 +257,7 @@ def captcha_protected(action: str = 'default'):
             if not token:
                 _log(False)
                 return StapelErrorResponse(400, ERR_400_CAPTCHA_REQUIRED)
-            if not _call_verifier(verifier, token, ip, level):
+            if not verifier.verify(token, ip=ip, level=level):
                 logger.warning('Captcha verification failed ip=%s', ip)
                 _log(False)
                 return StapelErrorResponse(400, ERR_400_CAPTCHA_INVALID)

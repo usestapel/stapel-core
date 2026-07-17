@@ -7,29 +7,13 @@ supported-language constraints.
 Cookie contract (set by profiles service):
     - stapel_app_language:        ISO 639-1 code or absent (auto)
     - stapel_use_device_language: "1" / "0"
-
-Cookie names can be overridden via the ``STAPEL_COOKIE_APP_LANGUAGE`` /
-``STAPEL_COOKIE_USE_DEVICE_LANGUAGE`` Django settings — e.g. the Iron product
-pins them to ``iron_app_language`` / ``iron_use_device_language`` for
-backwards compatibility with existing frontends.
 """
 from typing import Optional
 
-
-def _cookie_setting(name: str, default: str) -> str:
-    """Read a cookie name from Django settings, falling back to *default*."""
-    try:
-        from django.conf import settings  # noqa: PLC0415
-        return getattr(settings, name, default)
-    except Exception:  # noqa: BLE001 — Django not configured
-        return default
-
-
 DEFAULT_LANGUAGE = 'en'
 
-# Cookie names (overridable via Django settings for backwards compatibility).
-COOKIE_APP_LANGUAGE = _cookie_setting('STAPEL_COOKIE_APP_LANGUAGE', 'stapel_app_language')
-COOKIE_USE_DEVICE_LANGUAGE = _cookie_setting('STAPEL_COOKIE_USE_DEVICE_LANGUAGE', 'stapel_use_device_language')
+COOKIE_APP_LANGUAGE = 'stapel_app_language'
+COOKIE_USE_DEVICE_LANGUAGE = 'stapel_use_device_language'
 
 
 

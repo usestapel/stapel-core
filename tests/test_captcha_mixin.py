@@ -55,12 +55,12 @@ class TestExtractIp:
 
 class TestGetVerifier:
     def test_noop_when_secret_absent(self):
-        with override_settings(CAPTCHA_BACKEND="turnstile"):
+        with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile"}):
             assert isinstance(get_verifier(), NoopVerifier)
 
     def test_real_backend_when_secret_set(self):
         from stapel_core.captcha import TurnstileVerifier
-        with override_settings(CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="s"):
+        with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile", "SECRET": "s"}):
             v = get_verifier()
         assert isinstance(v, TurnstileVerifier)
 
@@ -75,13 +75,13 @@ class _CaptchaSerializer(CaptchaMixin, serializers.Serializer):
 
 class TestCaptchaMixin:
     def test_required_raises_when_active_and_token_missing(self):
-        with override_settings(CAPTCHA_BACKEND="turnstile", CAPTCHA_SECRET="s"):
+        with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile", "SECRET": "s"}):
             ser = _CaptchaSerializer(data={}, context={"request": None})
             with pytest.raises(StapelValidationError):
                 ser._require_captcha_if_configured({})
 
     def test_skipped_when_disabled(self):
-        # No CAPTCHA_SECRET -> NoopVerifier -> _require is a no-op.
-        with override_settings(CAPTCHA_BACKEND="turnstile"):
+        # No SECRET -> NoopVerifier -> _require is a no-op.
+        with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile"}):
             ser = _CaptchaSerializer(data={}, context={"request": None})
             assert ser._require_captcha_if_configured({}) is None

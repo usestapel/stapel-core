@@ -1,25 +1,15 @@
-"""Settings namespace for captcha + challenge policy (``STAPEL_CAPTCHA``).
-
-Legacy compatibility: captcha historically configured via the flat Django
-settings ``CAPTCHA_BACKEND`` / ``CAPTCHA_SECRET``. Those keep working —
-``BACKEND`` / ``SECRET`` here default to ``None``, and
-``stapel_core.django.captcha.get_verifier`` falls back to the flat settings
-when the namespaced keys are unset. New keys (challenge matrix/policy) exist
-only in the namespace.
-"""
+"""Settings namespace for captcha + challenge policy (``STAPEL_CAPTCHA``)."""
 from stapel_core.conf import AppSettings
 
 captcha_settings = AppSettings(
     "STAPEL_CAPTCHA",
     defaults={
-        # None → fall back to the legacy flat CAPTCHA_BACKEND ('noop').
-        # NOTE: get_verifier reads BACKEND/SECRET from the STAPEL_CAPTCHA
-        # dict directly (no env fallback) so a stray generic `SECRET` env
-        # var can never silently enable captcha; they are listed here for
-        # discoverability.
+        # None → 'noop'. NOTE: get_verifier reads BACKEND/SECRET from the
+        # STAPEL_CAPTCHA dict directly (no env fallback) so a stray generic
+        # `SECRET` env var can never silently enable captcha; they are
+        # listed here for discoverability.
         "BACKEND": None,
-        # None → fall back to the legacy flat CAPTCHA_SECRET (unset →
-        # NoopVerifier → captcha disabled).
+        # Unset → NoopVerifier → captcha disabled.
         "SECRET": None,
         # ip-kind → challenge level overrides, MERGED over the builtin
         # DEFAULT_CHALLENGE_MATRIX (captcha/policy.py) — a partial dict

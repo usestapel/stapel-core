@@ -10,7 +10,6 @@ from stapel_core.django.jwt.utils import (
     serialize_user_to_jwt_data,
     get_or_create_user_from_jwt,
     load_jwt_config_from_settings,
-    setup_centralized_admin_logout,
 )
 
 _factory = RequestFactory()
@@ -338,13 +337,3 @@ class TestGetOrCreateUserFromJwt:
         user = get_or_create_user_from_jwt(data)
         assert user.is_anonymous is True
 
-
-# ---------------------------------------------------------------------------
-# setup_centralized_admin_logout (deprecated)
-# ---------------------------------------------------------------------------
-
-class TestSetupCentralizedAdminLogout:
-    def test_emits_deprecation_warning(self):
-        admin_site = MagicMock()
-        with pytest.warns(DeprecationWarning, match="deprecated"):
-            setup_centralized_admin_logout(admin_site)

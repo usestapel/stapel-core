@@ -615,12 +615,6 @@ class TestAdminLogoutUrlPattern:
         assert resp.url == "/auth/admin/login/"
 
 
-class TestDeprecatedSetupLogout:
-    def test_warns_deprecation(self):
-        with pytest.warns(DeprecationWarning, match="deprecated"):
-            jwt_utils.setup_centralized_admin_logout(MagicMock())
-
-
 # ---------------------------------------------------------------------------
 # reset_sequences_for_models
 # ---------------------------------------------------------------------------

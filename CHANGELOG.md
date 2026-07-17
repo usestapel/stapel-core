@@ -2,6 +2,59 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-17
+
+Legacy sweep (владельческая директива: only current code, no backward-compat
+shims). **Breaking** — house law: minor bump, no deprecation cycle (alpha
+policy: миграций нет, всё с чистого листа).
+
+### Removed
+
+- **`stapel_core.kafka` legacy transport** — `kafka/consumer.py`
+  (`BaseKafkaConsumerCommand`), `kafka/producer.py`, `kafka/config.py`,
+  `kafka/health.py` deleted; `stapel_core.bus` is the only transport.
+  `kafka/__init__.py` no longer re-exports the bus API
+  (`Event`/`publish_event`/`get_bus`/`KafkaConfig`) nor the
+  `BaseKafkaConsumerCommand` alias — the package now carries only the event
+  contract constants (`EventType`, `TOPIC_*`).
+- **`EventType.TRANSLATIONS_CHANGED` / `TOPIC_TRANSLATIONS_CHANGED`**
+  (deprecated 0.3.x) — the translate→notifications sync is the comm Action
+  `translations.changed`; nothing publishes or consumes the Kafka topic.
+  `DLQ_PREFIX`/`dlq_topic` also gone from `kafka/topics.py` (the bus backend
+  has its own DLQ naming); the `kafka.Event` dataclass (duplicate of
+  `stapel_core.bus.Event`) deleted with the transport.
+- **Django JWT import shims** — `stapel_core.django.utils`,
+  `stapel_core.django.jwt_provider`, `stapel_core.django.authentication`
+  deleted; import from `stapel_core.django.jwt.utils` / `.jwt.provider` /
+  `.jwt.authentication`.
+- **`IRON_HOST`** — env fallback and settings alias removed; `STAPEL_HOST`
+  only (settings `__all__` now exports `STAPEL_HOST`).
+- **Flat captcha settings** — `CAPTCHA_BACKEND` / `CAPTCHA_SECRET` no longer
+  configure anything; `STAPEL_CAPTCHA = {"BACKEND": ..., "SECRET": ...}` is
+  the single spelling.
+- **Captcha dual `verify()` signature** — the level-kwarg signature sniffing
+  (`_call_verifier`) is gone; `CaptchaVerifier.verify(token, ip=None, *,
+  level=None)` is the one contract (built-ins updated; custom backends must
+  accept the keyword).
+- **Language cookie name overrides** — `STAPEL_COOKIE_APP_LANGUAGE` /
+  `STAPEL_COOKIE_USE_DEVICE_LANGUAGE` settings removed;
+  `stapel_app_language` / `stapel_use_device_language` are hardcoded.
+- **`flows.i18n` backward-compat re-exports** — `CATALOG_DIRNAME`,
+  `CommDocTranslator`, `DocTranslationCache` import from
+  `stapel_core.i18n`; the `STAPEL_FLOWS["DOC_TRANSLATOR"]` default now
+  resolves `stapel_core.i18n.CommDocTranslator`.
+- **`setup_centralized_admin_logout()`** (deprecated no-op) — use
+  `get_admin_logout_urlpattern()`.
+- **`JWTStatusView` flat `user` wire block** — the response carries
+  `authenticated` + presented `profile` + `tokens`; the legacy auth-identity
+  shape (`user.user_id`/`username`/…) is gone from the wire.
+- **`RevisionSyncMixin.revision_parameters`** compat alias — use
+  `REVISION_PARAMETERS`.
+
+Kept (флаги «legacy» в коде, но это живой рантайм, не совместимость):
+DAC-поведение при незадействованном мандате (`access/backend.py`),
+`ConfigKeyUnknown`-путь `get_config` без `required=`, nav prefix-fallback.
+
 ## [0.11.2] - 2026-07-17
 
 Three more owner findings from the same live run, all additive/non-breaking.

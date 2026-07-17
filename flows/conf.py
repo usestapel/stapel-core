@@ -13,7 +13,7 @@ flows_settings = AppSettings(
         #     translate(entries: dict[key, source_text],
         #               source_language: str, target_language: str)
         #         -> dict[key, translated_text]
-        "DOC_TRANSLATOR": "stapel_core.flows.i18n.CommDocTranslator",
+        "DOC_TRANSLATOR": "stapel_core.i18n.CommDocTranslator",
         # Canonical language of the in-code flow literals (title/description/
         # note strings). Framework convention: English, mirroring the en
         # catalogs committed next to the flows.

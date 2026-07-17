@@ -6,9 +6,9 @@ Usage:
     verifier = build_verifier('turnstile', secret='your-secret')
     is_valid = verifier.verify(token, ip='1.2.3.4')
 
-Custom backend (dotted import path in CAPTCHA_BACKEND setting):
+Custom backend (dotted import path in ``STAPEL_CAPTCHA["BACKEND"]``):
     class MyCaptchaVerifier(CaptchaVerifier):
-        def verify(self, token, ip=None):
+        def verify(self, token, ip=None, *, level=None):
             return my_service.check(token, self.secret)
 """
 
@@ -24,27 +24,24 @@ class CaptchaVerifier(ABC):
     """Base class for all captcha backends.
 
     Subclass and implement ``verify()`` to add a custom backend, then set
-    ``CAPTCHA_BACKEND = 'myapp.captcha.MyVerifier'`` in Django settings.
+    ``STAPEL_CAPTCHA = {"BACKEND": 'myapp.captcha.MyVerifier', ...}`` in
+    Django settings.
     """
 
     def __init__(self, secret: str | None = None):
         self.secret = secret
 
     @abstractmethod
-    def verify(self, token: str, ip: str | None = None) -> bool:
+    def verify(self, token: str, ip: str | None = None, *, level: str | None = None) -> bool:
         """Return True if the captcha token is valid, False otherwise.
 
         Never raise — network errors or service outages should return False
         so the endpoint stays available while logging the incident.
 
-        Backends MAY additionally accept an optional keyword-only ``level``
-        parameter (``def verify(self, token, ip=None, *, level=None)``) to
-        receive the challenge level decided by the challenge policy
-        (``stapel_core.captcha.policy``) — e.g. to force an interactive
-        challenge when ``level`` is ``"interactive"`` or stricter. The
-        ``@captcha_protected`` decorator passes ``level`` only to backends
-        whose signature declares it, so existing backends keep working
-        unchanged.
+        ``level`` is the challenge level decided by the challenge policy
+        (``stapel_core.captcha.policy``) — e.g. force an interactive
+        challenge when ``level`` is ``"interactive"`` or stricter. Backends
+        that do not tier their behavior simply ignore it.
         """
 
 
@@ -56,7 +53,7 @@ class TurnstileVerifier(CaptchaVerifier):
 
     _VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
 
-    def verify(self, token: str, ip: str | None = None) -> bool:
+    def verify(self, token: str, ip: str | None = None, *, level: str | None = None) -> bool:
         payload = {'secret': self.secret, 'response': token}
         if ip:
             payload['remoteip'] = ip
@@ -77,7 +74,7 @@ class RecaptchaVerifier(CaptchaVerifier):
 
     _VERIFY_URL = 'https://www.google.com/recaptcha/api/siteverify'
 
-    def verify(self, token: str, ip: str | None = None) -> bool:
+    def verify(self, token: str, ip: str | None = None, *, level: str | None = None) -> bool:
         payload = {'secret': self.secret, 'response': token}
         if ip:
             payload['remoteip'] = ip
@@ -98,7 +95,7 @@ class HcaptchaVerifier(CaptchaVerifier):
 
     _VERIFY_URL = 'https://hcaptcha.com/siteverify'
 
-    def verify(self, token: str, ip: str | None = None) -> bool:
+    def verify(self, token: str, ip: str | None = None, *, level: str | None = None) -> bool:
         payload = {'secret': self.secret, 'response': token}
         if ip:
             payload['remoteip'] = ip
@@ -117,7 +114,7 @@ class NoopVerifier(CaptchaVerifier):
     ``build_verifier`` returns this when no secret is configured.
     """
 
-    def verify(self, token: str, ip: str | None = None) -> bool:
+    def verify(self, token: str, ip: str | None = None, *, level: str | None = None) -> bool:
         return True
 
 

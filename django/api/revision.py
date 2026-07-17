@@ -242,9 +242,6 @@ class RevisionViewSetMixin:
     - include_deleted: Include soft-deleted items (default: true)
     """
 
-    # Backwards compatibility alias
-    revision_parameters = REVISION_PARAMETERS
-
     def get_queryset(self):
         """
         Filter queryset based on include_deleted parameter.

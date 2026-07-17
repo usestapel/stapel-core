@@ -638,23 +638,6 @@ def get_admin_logout_urlpattern(
     )
 
 
-def setup_centralized_admin_logout(admin_site, auth_service_prefix: str = "auth"):
-    """
-    DEPRECATED: Use get_admin_logout_urlpattern() instead.
-
-    This function sets admin_site.logout but Django ignores it.
-    The URL pattern approach is required for proper logout handling.
-    """
-    import warnings
-
-    warnings.warn(
-        "setup_centralized_admin_logout is deprecated. "
-        "Use get_admin_logout_urlpattern() and add it before admin.site.urls",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-
 def reset_sequences_for_models(*models):
     """
     Reset PostgreSQL sequences for specified models.

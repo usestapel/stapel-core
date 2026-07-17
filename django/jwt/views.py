@@ -132,8 +132,7 @@ class JWTStatusView(View):
     presented user profile (``profile``) — the latter built through the
     swappable ``USERS_PROFILE_PRESENTER`` (``stapel_core.django.swappable``),
     so a host that config-swaps the presenter changes this endpoint's
-    profile payload without forking core. The flat ``user`` block is the
-    legacy auth-identity shape, kept for wire compatibility.
+    profile payload without forking core.
     """
 
     @staticmethod
@@ -182,13 +181,6 @@ class JWTStatusView(View):
 
             return JsonResponse({
                 'authenticated': request.user.is_authenticated,
-                'user': {
-                    'user_id': str(request.user.id) if request.user.is_authenticated else None,
-                    'email': request.user.email if request.user.is_authenticated else None,
-                    'username': request.user.username if request.user.is_authenticated else None,
-                    'is_staff': request.user.is_staff if request.user.is_authenticated else False,
-                    'is_superuser': request.user.is_superuser if request.user.is_authenticated else False,
-                },
                 'profile': self._presented_profile(request.user),
                 'tokens': {
                     'access_token_valid': access_valid,
