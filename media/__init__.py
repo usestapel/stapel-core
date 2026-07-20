@@ -20,6 +20,7 @@ from .conf import (
     MediaAppSettings,
     media_settings,
 )
+from .descriptor import from_render_metadata, image
 from .providers import (
     CdnRenderMetadataProvider,
     PilRenderMetadataProvider,
@@ -27,7 +28,13 @@ from .providers import (
     describe,
     get_provider,
 )
-from .types import RenderMetadata, VariantMeta
+from .types import (
+    ImageSource,
+    RenderMetadata,
+    StapelImage,
+    StapelImageArray,
+    VariantMeta,
+)
 from .variants import (
     PlannedVariant,
     generate_variants,
@@ -40,6 +47,8 @@ from .variants import (
 __all__ = [
     # facade
     "describe",
+    "image",
+    "from_render_metadata",
     "get_provider",
     # providers
     "RenderMetadataProvider",
@@ -48,6 +57,9 @@ __all__ = [
     # types
     "RenderMetadata",
     "VariantMeta",
+    "StapelImage",
+    "StapelImageArray",
+    "ImageSource",
     # ladder core
     "PlannedVariant",
     "plan_variants",
