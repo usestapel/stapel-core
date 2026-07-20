@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-07-20
+
+### Added — `"sso"` identity anchor on `AbstractStapelUser.AUTH_TYPE_CHOICES`
+
+`django/users/models.py`'s `AUTH_TYPE_CHOICES` gains `("sso", "SSO")`,
+alongside `email`/`phone`/`oauth`/`anonymous`. Consumers (stapel-auth 0.8.0)
+promoting an anonymous guest session via SSO JIT provisioning need an
+accurate `auth_type` to record — reusing `"oauth"` or `"email"` for an SSO
+anchor would misreport how the account was actually established. Migration
+`0008_alter_user_auth_type` — choices-only, no data change.
+
 ## [0.12.4] - 2026-07-17
 
 ### Changed — CDN fields unfrozen: `image_type` is an open string (cdn-modularity.md §2.1)

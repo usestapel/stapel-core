@@ -20,6 +20,7 @@ class AbstractStapelUser(AbstractUser):
         ("email", "Email"),
         ("phone", "Phone"),
         ("oauth", "OAuth"),
+        ("sso", "SSO"),
         ("anonymous", "Anonymous"),
     ]
 
