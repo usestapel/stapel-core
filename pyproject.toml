@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.12.5"
+version = "0.13.0"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }

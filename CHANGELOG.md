@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-22
+
+### Added — source-agnostic image descriptor (`stapel_core.media`)
+
+- `StapelImage` (+ `StapelImageArray`, `ImageSource`): the single contract a
+  renderer (`@stapel/image` `<Image>`) consumes for ANY image — a superset of
+  `RenderMetadata` with a `source` tag (`cdn`/`file`/`link`) and an
+  always-present top-level `url`, so a client renders whether or not a CDN is
+  wired. `variants` is the ladder or `[]` (renderer degrades to the url).
+- `media.image(source, value)` builder — routes BY the per-value `source` to
+  the right provider (`cdn`→CDN comm, `file`→PIL), NOT the deployment's global
+  `STAPEL_MEDIA_BACKEND`. Fixes the empty-ladder gap where a pil-default
+  deployment described cdn-uploaded avatars with the wrong provider (different
+  variant naming → zero variants found).
+- `media.drf` — `StapelImageSerializer` / `StapelImageArraySerializer` /
+  `RenderMetadataSerializer` + `media.dto` dataclass mirrors, so any
+  ref-carrying serializer denormalizes an image next to the ref and
+  drf-spectacular emits a stable component.
+
+### Fixed
+
+- `StapelDataclassSerializer`: a `str` field defaulting to `""` now allows the
+  blank value (was `required=False` but `allow_blank=False`, rejecting the very
+  value it defaulted to). Desynced from `blank=True, default=""` models and
+  made "clear field" indistinguishable from "leave unchanged" on PATCH.
+  `allow_blank` also joins the `field(metadata=…)` override keys.
+
 ## [0.12.5] - 2026-07-20
 
 ### Added — `"sso"` identity anchor on `AbstractStapelUser.AUTH_TYPE_CHOICES`
