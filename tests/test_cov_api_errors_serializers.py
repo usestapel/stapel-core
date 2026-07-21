@@ -229,6 +229,61 @@ class MetaDocSerializer(StapelDataclassSerializer):
 
 
 @dataclass
+class BlankDoc:
+    """A DTO with an empty-string-default field (libgaps Н4 pattern).
+
+    Attributes:
+        title: Required title.
+        description: Optional description defaulting to empty.
+        note: Optional note defaulting to a non-empty value.
+        forced: Empty default but explicitly blank-rejecting via metadata.
+    """
+
+    title: str
+    description: str = ""
+    note: str = "n/a"
+    forced: str = field(default="", metadata={"allow_blank": False})
+
+
+class BlankDocSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = BlankDoc
+
+
+class TestEmptyStringDefaultAllowsBlank:
+    """A str field defaulting to "" must accept "" (libgaps Н4)."""
+
+    def test_empty_default_field_allows_blank(self):
+        f = BlankDocSerializer().fields["description"]
+        assert isinstance(f, drf_serializers.CharField)
+        assert f.allow_blank is True
+        assert f.required is False
+
+    def test_explicit_empty_string_validates(self):
+        s = BlankDocSerializer(data={"title": "t", "description": ""})
+        assert s.is_valid(), s.errors
+        assert s.validated_data.description == ""
+
+    def test_omitted_key_still_validates(self):
+        s = BlankDocSerializer(data={"title": "t"})
+        assert s.is_valid(), s.errors
+
+    def test_non_empty_default_does_not_force_blank(self):
+        # Only an empty-string default implies blank-is-valid; a "n/a" default
+        # is optional but not blankable by this rule.
+        assert BlankDocSerializer().fields["note"].allow_blank is False
+
+    def test_metadata_override_wins(self):
+        # An explicit allow_blank=False in metadata beats the "" default rule.
+        assert BlankDocSerializer().fields["forced"].allow_blank is False
+
+    def test_required_field_rejects_blank(self):
+        s = BlankDocSerializer(data={"title": "", "description": "x"})
+        assert not s.is_valid()
+        assert "title" in s.errors
+
+
+@dataclass
 class StatusDoc:
     status: Status
 

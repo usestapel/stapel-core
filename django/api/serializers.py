@@ -4,11 +4,14 @@ Base serializers for Stapel Django services.
 import dataclasses
 import re
 
+from rest_framework import serializers as drf_serializers
 from rest_framework_dataclasses.fields import EnumField
 from rest_framework_dataclasses.serializers import DataclassSerializer
 
 # Serializer field kwargs that DataclassSerializer doesn't read from metadata.
-_FIELD_META_KEYS = {'help_text', 'label', 'allow_null', 'required', 'default'}
+_FIELD_META_KEYS = {
+    'help_text', 'label', 'allow_null', 'required', 'default', 'allow_blank',
+}
 
 # Regex for "Attributes:" / "Members:" docstring sections (Google-style).
 _SECTION_RE = re.compile(r'^\s{0,4}(Attributes|Members)\s*:', re.MULTILINE)
@@ -115,6 +118,25 @@ class StapelDataclassSerializer(DataclassSerializer):
                     fields[name].help_text = info['help_text']
                 if info.get('example'):
                     _set_field_example(fields[name], info['example'])
+
+        # 1.5. A str field whose DEFAULT is the empty string must accept "".
+        # DataclassSerializer maps `description: str = ""` to a CharField that
+        # is required=False (it has a default) but allow_blank=False (DRF's
+        # default) — so the serializer REJECTS the very value it defaults to.
+        # That desyncs from the Django model (blank=True, default="") and,
+        # worse, forces callers to omit the key instead of sending "", which
+        # makes "clear this field" and "leave it unchanged" indistinguishable
+        # on a PATCH (meettoday libgaps Н4). If the declared default is "",
+        # blank IS a valid value — say so. A field(metadata={'allow_blank':...})
+        # override still wins (applied in step 2 below).
+        for f in dataclasses.fields(dc):
+            field = fields.get(f.name)
+            if (
+                isinstance(field, drf_serializers.CharField)
+                and f.default == ""
+                and not (f.metadata and 'allow_blank' in f.metadata)
+            ):
+                field.allow_blank = True
 
         # 2. field(metadata=…) overrides docstring values
         meta_by_name = {f.name: f.metadata for f in dataclasses.fields(dc) if f.metadata}
