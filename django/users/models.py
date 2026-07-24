@@ -6,6 +6,8 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 
+from .validators import StapelUsernameValidator
+
 
 class AbstractStapelUser(AbstractUser):
     """All Stapel user fields and behavior, as an abstract base.
@@ -22,9 +24,29 @@ class AbstractStapelUser(AbstractUser):
         ("oauth", "OAuth"),
         ("sso", "SSO"),
         ("anonymous", "Anonymous"),
+        # Org-provisioned login/password user (Workspaces Org Program C1):
+        # created by an organization admin, username = "org_slug/local",
+        # typically no email anchor at all.
+        ("login", "Login"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Username re-declared over AbstractUser's ONLY to swap the validator:
+    # org-provisioned logins are namespaced "org_slug/local" and the stock
+    # UnicodeUsernameValidator forbids "/". Everything else (max_length,
+    # unique — USERNAME_FIELD must stay unique) mirrors AbstractUser.
+    username_validator = StapelUsernameValidator()
+    username = models.CharField(
+        _("username"),
+        max_length=150,
+        unique=True,
+        help_text=_(
+            "Required. 150 characters or fewer. Letters, digits and @/./+/-/_ "
+            "characters, with at most one '/' as an organization separator."
+        ),
+        validators=[username_validator],
+        error_messages={"unique": _("A user with that username already exists.")},
+    )
     # Note: unique constraints removed from model - auth service validates uniqueness in business logic
     # This allows other services to sync users from JWT without constraint violations
     email = models.EmailField(_("email address"), null=True, blank=True)
@@ -43,6 +65,12 @@ class AbstractStapelUser(AbstractUser):
     # User status fields
     onboarding_completed = models.BooleanField(default=False)
     profile_completed = models.BooleanField(default=False)
+
+    # First-login policy flags for org-provisioned users (Workspaces Org
+    # Program C2). Set by auth's provision flow; while either flag is up the
+    # password login returns an intermediate challenge instead of a session.
+    password_change_required = models.BooleanField(default=False)
+    mfa_enrollment_required = models.BooleanField(default=False)
 
     # OAuth fields
     oauth_provider = models.CharField(max_length=50, null=True, blank=True)

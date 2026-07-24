@@ -32,6 +32,27 @@ SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "")
 ROLE_HIERARCHY = ["viewer", "member", "admin", "owner"]
 CACHE_TTL_SECONDS = 30
 
+#: Comm Function answering capability checks (workspaces 0.6+).
+CAPABILITY_FUNCTION = "workspaces.check_capability"
+
+# FALLBACK table only — stapel-workspaces owns the authoritative registry
+# (builtin roles + STAPEL_WORKSPACES["ROLES"] overlay). This mirror of the
+# builtin four (org-program spec §A1) exists so require_capability() can
+# degrade gracefully against an old workspaces service that does not yet
+# expose workspaces.check_capability: membership lookup + this map. Client
+# custom roles / overlays are invisible here by design.
+BUILTIN_ROLES = {
+    "owner": {"rank": 400, "capabilities": ["*"]},
+    "admin": {"rank": 300, "capabilities": [
+        "workspace.view", "workspace.update",
+        "members.view", "members.invite", "members.remove",
+        "members.role.change", "members.provision",
+        "workspace.security.manage",
+    ]},
+    "member": {"rank": 200, "capabilities": ["workspace.view", "members.view"]},
+    "viewer": {"rank": 100, "capabilities": ["workspace.view", "members.view"]},
+}
+
 
 @dataclass
 class Membership:
@@ -98,6 +119,87 @@ def require_role(workspace_id, user_id, minimum: str) -> Optional[Membership]:
     membership = get_membership(workspace_id, user_id)
     if membership and _role_at_least(membership.role, minimum):
         return membership
+    return None
+
+
+def _capability_cache_key(workspace_id, user_id, capability) -> str:
+    return f"workspaces:capability:{workspace_id}:{user_id}:{capability}"
+
+
+def _capability_matches(capability: str, granted: str) -> bool:
+    """Match one granted capability string against the requested one.
+
+    Supports the registry wildcards: ``"*"`` (everything) and prefix
+    wildcards like ``"members.*"``.
+    """
+    if granted == "*" or granted == capability:
+        return True
+    if granted.endswith(".*"):
+        return capability.startswith(granted[:-1])
+    return False
+
+
+def _require_capability_fallback(workspace_id, user_id, capability: str) -> Optional[Membership]:
+    """Degrade path for pre-capability workspaces: membership + builtin map."""
+    membership = get_membership(workspace_id, user_id)
+    if membership is None:
+        return None
+    granted = BUILTIN_ROLES.get(membership.role, {}).get("capabilities", [])
+    if any(_capability_matches(capability, g) for g in granted):
+        return membership
+    return None
+
+
+def require_capability(workspace_id, user_id, capability: str) -> Optional[Membership]:
+    """Return membership if the user holds *capability* in the workspace.
+
+    Asks the ``workspaces.check_capability`` comm Function (workspaces 0.6+),
+    caching the verdict briefly like :func:`get_membership`. Against an old
+    workspaces deployment where the Function is not registered/routed, it
+    degrades to :func:`get_membership` plus the builtin role→capability
+    fallback table (custom roles are unknowable there and deny). A remote
+    call failure is fail-closed: ``None``, not cached, next call retries.
+    """
+    key = _capability_cache_key(workspace_id, user_id, capability)
+    cached = cache.get(key)
+    if cached is not None:
+        if cached == "__deny__":
+            return None
+        return Membership(workspace_id=workspace_id, user_id=user_id, role=cached)
+
+    from stapel_core.comm import call
+    from stapel_core.comm.exceptions import (
+        FunctionCallError,
+        FunctionNotRegistered,
+        FunctionRouteNotConfigured,
+    )
+
+    try:
+        result = call(
+            CAPABILITY_FUNCTION,
+            {
+                "workspace_id": str(workspace_id),
+                "user_id": str(user_id),
+                "capability": capability,
+            },
+            timeout=3.0,
+        )
+    except (FunctionNotRegistered, FunctionRouteNotConfigured) as exc:
+        logger.debug(
+            "workspaces.check_capability unavailable (%s) — degrading to "
+            "membership + builtin role map", exc,
+        )
+        return _require_capability_fallback(workspace_id, user_id, capability)
+    except FunctionCallError as exc:
+        logger.warning("workspaces capability check failed: %s", exc)
+        return None
+
+    allowed = bool((result or {}).get("allowed"))
+    role = (result or {}).get("role")
+    if allowed and role:
+        cache.set(key, role, CACHE_TTL_SECONDS)
+        return Membership(workspace_id=workspace_id, user_id=user_id, role=role)
+    cache.set(key, "__deny__", CACHE_TTL_SECONDS)
     return None
 
 

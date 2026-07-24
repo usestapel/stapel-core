@@ -28,9 +28,11 @@ See docs: flows-and-verification.md in the stapel workspace.
 
 from .decorators import VERIFICATION_LEVELS, requires_verification
 from .factors import (
+    FACTOR_STRENGTHS,
     VerificationFactor,
     factor_registry,
     register_factor,
+    strong_factors,
 )
 from .grants import (
     complete_challenge,
@@ -49,9 +51,11 @@ from .policy import (
 __all__ = [
     "requires_verification",
     "VERIFICATION_LEVELS",
+    "FACTOR_STRENGTHS",
     "VerificationFactor",
     "factor_registry",
     "register_factor",
+    "strong_factors",
     "create_challenge",
     "get_challenge",
     "complete_challenge",

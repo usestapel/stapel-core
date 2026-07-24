@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-24
+
+### Added — Workspaces Org Program Wave 0 (all additive; unblocks W1-W5)
+
+- **`verification.factors`: factor strength** — `VerificationFactor.strength:
+  "strong" | "weak"`, default `"weak"`. Canon: an email code alone is NOT 2FA,
+  so a factor is weak unless its registrar explicitly marks it strong
+  (stapel-auth will mark `totp`/`passkey`/`otp_phone`). New surfaces:
+  `factor_registry.describe()` (`[{"id", "strength"}]`),
+  `factor_registry.strong_names()`, and `strong_factors(user)` — the strict
+  "does this user have real 2FA" predicate (strong AND available). `register()`
+  validates strength against `FACTOR_STRENGTHS`. All exported from
+  `stapel_core.verification`.
+- **`django.users`: org-provisioned user primitives** on `AbstractStapelUser`:
+  - `password_change_required` / `mfa_enrollment_required` booleans (default
+    False) — first-login policy flags set by auth's provision flow.
+  - `auth_type` choice `"login"` — org-provisioned login/password identity.
+  - `username_validator = StapelUsernameValidator()` (new
+    `django/users/validators.py`), with the `username` field re-declared to
+    carry it: the stock alphabet plus AT MOST ONE `/` as the org-namespace
+    separator (`org_slug/local`). Bare usernames validate exactly as before;
+    leading/trailing/double slashes and invalid chars on either side reject.
+  - **Migration truth**: `AbstractStapelUser` is abstract — the model changes
+    materialize per concrete user model. Core's own `users.User` ships
+    migration `users.0009_org_program_wave0` (2 AddField with defaults +
+    choices/validator AlterFields — expand-only, no data change, no DB
+    constraint change). Hosts pointing `AUTH_USER_MODEL` at their own subclass
+    must run `makemigrations` in their user app after upgrading and will get
+    the same expand-only operations.
+- **`django.workspaces`: `require_capability(workspace_id, user_id,
+  capability)`** consumer helper — asks the `workspaces.check_capability` comm
+  Function (workspaces 0.6+) with the same 30 s cache pattern as
+  `get_membership` (verdict cached per ws/user/capability; remote failure is
+  fail-closed and uncached). Against an old workspaces without the Function
+  (`FunctionNotRegistered`/`FunctionRouteNotConfigured`) it degrades to
+  `get_membership` + the builtin role→capability fallback table
+  (`BUILTIN_ROLES`, spec §A1 mirror — stapel-workspaces owns the authoritative
+  registry; unknown custom roles deny). Wildcards `"*"` and `"prefix.*"`
+  supported by the matcher.
+
 ## [0.13.0] - 2026-07-22
 
 ### Added — source-agnostic image descriptor (`stapel_core.media`)
