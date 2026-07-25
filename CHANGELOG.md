@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-07-25
+
+### Fixed
+- **The taskstore's initial migration now ADOPTS a pre-rename table**
+  (`django/taskstore/migrations/0001_initial.py`). 0.8.0 renamed this
+  app's label `stapel_tasks` → `stapel_taskstore` and pinned `db_table`
+  to the historical name, so the table never moved — but the migration
+  STATE stayed under the old label, so on every database that migrated
+  before 0.8.0 the app arrived looking unapplied and its `CreateModel`
+  hit `relation "stapel_tasks_taskrecord" already exists`. Result:
+  `manage.py migrate` died at container boot for the whole fleet, while
+  fresh installs were fine — which is why it stayed invisible until a
+  real upgrade (ironmemo stand, three weeks behind). The table and its
+  index are now created only when genuinely absent
+  (`CreateModelIfAbsent` / `AddIndexIfAbsent`, both driven by the
+  HISTORICAL `to_state` model so a fresh database still gets the
+  0001-era shape). `replaces=` was not an option: the old label now
+  belongs to the real `stapel-tasks` module and claiming its migrations
+  would swallow that module's history.
+
 ## [0.14.0] - 2026-07-24
 
 ### Added — Workspaces Org Program Wave 0 (all additive; unblocks W1-W5)
