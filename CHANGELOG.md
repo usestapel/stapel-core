@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [0.15.3] — 2026-07-26
+
+### Fixed
+- **A routing 404 from a peer service is no longer read as a verdict.**
+  Owner-reported live incident: opening "My meetings" on the ironmemo stand
+  showed `Forbidden: not a member of this workspace` — to the account that
+  OWNS the workspace, with the membership row (`role=owner`, accepted, not
+  suspended) sitting right there in the workspaces database.
+
+  stapel-workspaces 0.4.2 moved its whole API under `v1/` (the §60 v1-canon
+  sweep). This library's membership client kept requesting the pre-v1 path,
+  Django's URL resolver answered 404, and `get_membership` read that as "no
+  such membership" — then cached the non-answer for 30 seconds, so every
+  caller that renders `None` as HTTP 403 confidently denied the user. Nothing
+  logged a cause: the 404 branch was the "normal" path. The same bug silently
+  broke `get_or_create_personal_workspace`, so registration produced accounts
+  with no personal workspace.
+
+  Three guards, because each one alone would have let this through:
+  - The internal API's mount point is **discovered**, newest-first, and
+    remembered per process — a mixed-version fleet keeps working in either
+    direction instead of reading routing 404s as answers.
+  - A 404 is only a verdict when the **view** rendered it. DRF answers
+    `application/json`; Django's resolver and proxies answer HTML. A
+    non-answer is never cached and never equated with "not a member".
+  - `get_membership(..., strict=True)` / `require_role(..., strict=True)`
+    raise `WorkspaceLookupUnavailable` instead of returning `None`, so a
+    caller that turns `None` into 403 can turn an outage into 503. The
+    default stays `None`, so existing callers are unaffected.
+
+### Added
+- **`preflight.E004`** — `stapel_preflight` now asks the workspaces service
+  whether it actually serves the path this build calls, before a deploy.
+  Every system check in this codebase validates a service's OWN urlconf;
+  nothing had ever looked outward at a peer, which is precisely where this
+  contract broke. Read-only (it asks about a nil UUID, so any answer proves
+  the route exists). An unreachable peer is `W002`, a warning — only a
+  service that answers on NO known path blocks the deploy.
+
 ## [0.15.2] — 2026-07-26
 
 ### Fixed

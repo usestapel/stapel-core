@@ -28,6 +28,24 @@ WORKSPACES_SERVICE_URL = os.getenv(
 )
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "")
 
+# The internal API's mount point, newest first (owner-reported live incident,
+# 2026-07-26). stapel-workspaces 0.4.2 moved its whole API under `v1/` (the
+# §60 v1-canon sweep) and this client kept asking for the pre-v1 path. Django
+# answered 404 — "no such ROUTE" — and `get_membership` below read that as
+# "no such MEMBERSHIP", cached the non-answer for 30 seconds, and every
+# service that asks about membership started telling the workspace's own
+# OWNER "Forbidden: not a member of this workspace". A client that hardcodes
+# a peer's URL and treats any 404 as a verdict has two bugs, and this fixes
+# both: the path is discovered rather than assumed, and a routing 404 is
+# never a verdict (see `_service_answered`).
+INTERNAL_API_PREFIXES = (
+    "/workspaces/api/workspaces/v1/internal",   # workspaces >= 0.4.2
+    "/workspaces/api/workspaces/internal",      # legacy
+)
+
+#: Prefix that last answered, so the probe cost is paid once per process.
+_resolved_prefix: Optional[str] = None
+
 # Role hierarchy mirrored from stapel-workspaces.workspaces.permissions
 ROLE_HIERARCHY = ["viewer", "member", "admin", "owner"]
 CACHE_TTL_SECONDS = 30
@@ -54,6 +72,19 @@ BUILTIN_ROLES = {
 }
 
 
+class WorkspaceLookupUnavailable(Exception):
+    """The workspaces service did not render a verdict.
+
+    Distinct from "not a member", which is a real answer. This is the
+    membership equivalent of a 502: the peer was unreachable, returned 5xx,
+    or answered 404 from Django's URL resolver rather than from the view (a
+    version skew between this client and the service — see
+    `INTERNAL_API_PREFIXES`). Callers that turn `None` into HTTP 403 should
+    turn this into 503 instead: telling a user "you are not a member" on the
+    strength of a routing mistake is worse than telling them the truth.
+    """
+
+
 @dataclass
 class Membership:
     workspace_id: UUID
@@ -72,10 +103,77 @@ def _role_at_least(role: str, minimum: str) -> bool:
         return False
 
 
-def get_membership(workspace_id, user_id) -> Optional[Membership]:
+def _service_answered(resp) -> bool:
+    """Did the VIEW answer, or did the URL resolver?
+
+    A 404 from stapel-workspaces' internal API is a real answer ("that user
+    is not a member") and carries a JSON body, because DRF renders it. A 404
+    from Django's URL resolver — or from a proxy in front of it — carries an
+    HTML debug/error page. They are indistinguishable by status code alone,
+    which is exactly how a client/server path skew turned into "the owner is
+    not a member of their own workspace" for weeks. The content type tells
+    them apart.
+    """
+    content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+    return content_type == "application/json"
+
+
+def _internal_get(path_suffix: str, *, method: str = "get", timeout: float = 3.0):
+    """Call the workspaces internal API, discovering its mount point.
+
+    Tries the known prefixes newest-first and remembers the one that answers,
+    so a mixed-version fleet (this library ahead of, or behind, the service)
+    keeps working instead of silently reading routing 404s as verdicts.
+    Raises :class:`WorkspaceLookupUnavailable` when NO prefix produced an
+    answer from the view.
+    """
+    global _resolved_prefix
+
+    headers = {"Accept": "application/json"}
+    if SERVICE_API_KEY:
+        headers["X-API-KEY"] = SERVICE_API_KEY
+
+    ordered = INTERNAL_API_PREFIXES
+    if _resolved_prefix:
+        ordered = (_resolved_prefix,) + tuple(
+            p for p in INTERNAL_API_PREFIXES if p != _resolved_prefix
+        )
+
+    last_error: Optional[str] = None
+    for prefix in ordered:
+        url = f"{WORKSPACES_SERVICE_URL}{prefix}{path_suffix}"
+        try:
+            resp = requests.request(method, url, headers=headers, timeout=timeout)
+        except requests.RequestException as exc:
+            # Transport, not routing: another prefix cannot help.
+            raise WorkspaceLookupUnavailable(f"{url}: {exc}") from exc
+        if resp.status_code == 404 and not _service_answered(resp):
+            last_error = f"{url}: 404 from the URL resolver (not the view)"
+            continue  # wrong mount point — try the next one
+        if prefix != _resolved_prefix:
+            _resolved_prefix = prefix
+            logger.info("workspaces internal API resolved at %s", prefix)
+        return resp
+
+    raise WorkspaceLookupUnavailable(
+        "no known mount point for the workspaces internal API — this service "
+        f"and stapel-workspaces disagree about its path ({last_error}). "
+        f"Tried: {', '.join(INTERNAL_API_PREFIXES)}"
+    )
+
+
+def get_membership(workspace_id, user_id, *, strict: bool = False) -> Optional[Membership]:
     """Resolve the user's role in the workspace, or None if not a member.
 
     Cached briefly to avoid an HTTP roundtrip on every request.
+
+    `strict=True` raises :class:`WorkspaceLookupUnavailable` when no verdict
+    could be obtained (peer down, 5xx, path skew) instead of returning
+    ``None``. Prefer it in any caller that renders `None` as HTTP 403 — see
+    that exception's docstring for why. The default stays ``None`` so
+    existing callers keep compiling; what changed regardless of the flag is
+    that a NON-answer is never cached and never silently equated with "not a
+    member".
     """
     key = _cache_key(workspace_id, user_id)
     cached = cache.get(key)
@@ -84,19 +182,17 @@ def get_membership(workspace_id, user_id) -> Optional[Membership]:
             return None
         return Membership(workspace_id=workspace_id, user_id=user_id, role=cached)
 
-    headers = {"Accept": "application/json"}
-    if SERVICE_API_KEY:
-        headers["X-API-KEY"] = SERVICE_API_KEY
-    url = (
-        f"{WORKSPACES_SERVICE_URL}/workspaces/api/workspaces/internal/"
-        f"{workspace_id}/members/{user_id}"
-    )
     try:
-        resp = requests.get(url, headers=headers, timeout=3)
-    except requests.RequestException as exc:
+        resp = _internal_get(f"/{workspace_id}/members/{user_id}")
+    except WorkspaceLookupUnavailable as exc:
         logger.warning("workspaces membership lookup failed: %s", exc)
+        if strict:
+            raise
         return None
+
     if resp.status_code == 404:
+        # The VIEW answered (see `_service_answered`) — a genuine "not a
+        # member", safe to remember.
         cache.set(key, "__none__", CACHE_TTL_SECONDS)
         return None
     if resp.status_code != 200:
@@ -106,6 +202,10 @@ def get_membership(workspace_id, user_id) -> Optional[Membership]:
             workspace_id,
             user_id,
         )
+        if strict:
+            raise WorkspaceLookupUnavailable(
+                f"workspaces answered {resp.status_code}"
+            )
         return None
     role = (resp.json() or {}).get("role")
     if not role:
@@ -114,9 +214,15 @@ def get_membership(workspace_id, user_id) -> Optional[Membership]:
     return Membership(workspace_id=workspace_id, user_id=user_id, role=role)
 
 
-def require_role(workspace_id, user_id, minimum: str) -> Optional[Membership]:
-    """Return membership if the user has at least `minimum`, else None."""
-    membership = get_membership(workspace_id, user_id)
+def require_role(
+    workspace_id, user_id, minimum: str, *, strict: bool = False
+) -> Optional[Membership]:
+    """Return membership if the user has at least `minimum`, else None.
+
+    `strict` forwards to :func:`get_membership` — with it, a lookup that
+    reached no verdict raises instead of being reported as insufficient role.
+    """
+    membership = get_membership(workspace_id, user_id, strict=strict)
     if membership and _role_at_least(membership.role, minimum):
         return membership
     return None
@@ -214,21 +320,24 @@ def get_or_create_personal_workspace(user_id) -> Optional[str]:
     should log and continue — missing workspace is not a hard error at
     registration time).
     """
-    headers = {"Accept": "application/json"}
-    if SERVICE_API_KEY:
-        headers["X-API-KEY"] = SERVICE_API_KEY
-    url = f"{WORKSPACES_SERVICE_URL}/workspaces/api/workspaces/internal/users/{user_id}/personal"
     try:
-        resp = requests.post(url, headers=headers, timeout=5)
-        if resp.status_code == 200:
-            return resp.json().get("workspace_id")
-        logger.warning(
-            "get_or_create_personal_workspace: unexpected %s for user %s",
-            resp.status_code,
-            user_id,
+        resp = _internal_get(
+            f"/users/{user_id}/personal", method="post", timeout=5.0
         )
-    except requests.RequestException as exc:
+    except WorkspaceLookupUnavailable as exc:
+        # Same path-skew blast radius as membership: this used to 404 against
+        # a v1-mounted service and return None, so registration quietly
+        # produced accounts with no personal workspace and logged nothing
+        # that named the cause.
         logger.warning(
             "get_or_create_personal_workspace failed for user %s: %s", user_id, exc
         )
+        return None
+    if resp.status_code == 200:
+        return resp.json().get("workspace_id")
+    logger.warning(
+        "get_or_create_personal_workspace: unexpected %s for user %s",
+        resp.status_code,
+        user_id,
+    )
     return None

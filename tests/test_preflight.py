@@ -45,13 +45,26 @@ def test_reports_ready_when_no_check_objects(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_django_check_errors_are_surfaced_as_findings():
+def test_django_check_errors_are_surfaced_as_findings(monkeypatch):
     """Deploy scripts only meet these inside the container's `migrate` —
-    i.e. after the point of no return. Preflight hoists them out."""
+    i.e. after the point of no return. Preflight hoists them out.
+
+    The Error is injected rather than harvested from the ambient suite: this
+    case used to rely on OTHER test modules registering check-tripping
+    models, so it passed in a full run and failed when this file was run
+    alone — and that is how 0.15.0 went out on a red test."""
+    from django.core.checks import Error as CheckError
+
+    monkeypatch.setattr(
+        pf, "run_checks_impl",
+        lambda: [CheckError("boom", hint="do the thing", id="fields.E001")],
+        raising=False,
+    )
     findings = pf.check_system_checks()
-    assert findings, "the suite registers models that trip system checks"
-    assert all(f.level == pf.ERROR for f in findings)
-    assert all(f.code.startswith("check.") for f in findings)
+    assert [f.code for f in findings] == ["check.fields.E001"]
+    assert findings[0].level == pf.ERROR
+    assert findings[0].message == "boom"
+    assert findings[0].fix == "do the thing"
 
 
 @pytest.mark.django_db
@@ -171,3 +184,48 @@ def test_reports_the_oauth_redirect_uris_a_deployment_will_send(settings, monkey
         findings[0].context["redirect_uris"]["google"]
         == "https://app.example.com/auth/api/v1/oauth/google/callback"
     )
+
+
+class TestPeerInternalRoutes:
+    """Nothing in this codebase had ever checked a PEER's contract — every
+    system check validates a service's own urlconf. That is exactly where it
+    broke: stapel-workspaces moved its API under v1/, the membership client
+    kept calling the old path, and the 404 was read as "not a member" (see
+    tests/test_workspaces_membership_lookup.py)."""
+
+    @staticmethod
+    def _resp(status, *, html=False):
+        class R:
+            status_code = status
+            headers = {
+                "Content-Type": "text/html" if html else "application/json"
+            }
+        return R()
+
+    def test_quiet_when_a_known_mount_point_answers(self, monkeypatch):
+        import requests
+        monkeypatch.setattr(
+            requests, "get", lambda *a, **k: self._resp(404)  # DRF's "no such member"
+        )
+        assert pf.check_peer_internal_routes() == []
+
+    def test_errors_when_no_known_mount_point_answers(self, monkeypatch):
+        import requests
+        monkeypatch.setattr(
+            requests, "get", lambda *a, **k: self._resp(404, html=True)
+        )
+        findings = pf.check_peer_internal_routes()
+        assert [f.code for f in findings] == ["preflight.E004"]
+        assert "not a member" in findings[0].message
+        assert "v1/" in findings[0].fix
+
+    def test_an_unreachable_peer_warns_rather_than_blocking(self, monkeypatch):
+        import requests
+
+        def boom(*a, **k):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(requests, "get", boom)
+        findings = pf.check_peer_internal_routes()
+        assert [f.code for f in findings] == ["preflight.W002"]
+        assert findings[0].level == pf.WARNING

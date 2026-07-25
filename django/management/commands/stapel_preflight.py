@@ -176,6 +176,15 @@ def check_transport_dependencies() -> list[Finding]:
     return findings
 
 
+def run_checks_impl():
+    """Seam: Django's `run_checks`, named so a test can inject an Error
+    instead of depending on some other test module having registered a
+    check-tripping model (which is how 0.15.0 shipped on a red test)."""
+    from django.core.checks import run_checks
+
+    return run_checks()
+
+
 def check_system_checks() -> list[Finding]:
     """Surface Django's own system-check ERRORS as preflight findings.
 
@@ -183,10 +192,9 @@ def check_system_checks() -> list[Finding]:
     container is already starting, i.e. after the point of no return.
     """
     from django.core.checks import Error as CheckError
-    from django.core.checks import run_checks
 
     findings = []
-    for issue in run_checks():
+    for issue in run_checks_impl():
         if isinstance(issue, CheckError) or getattr(issue, "level", 0) >= 40:
             findings.append(Finding(
                 level=ERROR,
@@ -249,6 +257,74 @@ def check_oauth_redirect_uris() -> list[Finding]:
     )]
 
 
+def check_peer_internal_routes() -> list[Finding]:
+    """Does the peer this service calls actually serve the path it calls?
+
+    Owner-reported live incident, 2026-07-26: stapel-workspaces moved its API
+    under `v1/`, this fleet's membership client kept asking for the pre-v1
+    path, Django answered 404, and the client read that as "not a member" —
+    so the workspace's own OWNER was told `Forbidden: not a member of this
+    workspace`, for weeks, on a green CI. Every system check in this
+    codebase validates a service's OWN urlconf; nothing had ever looked
+    outward at a peer, which is precisely where the contract broke.
+
+    Read-only: it asks about a nil UUID, so any answer at all — including
+    "no such membership" — proves the route exists.
+    """
+    import requests
+
+    from stapel_core.django.workspaces import (
+        INTERNAL_API_PREFIXES,
+        SERVICE_API_KEY,
+        WORKSPACES_SERVICE_URL,
+        _service_answered,
+    )
+
+    if not WORKSPACES_SERVICE_URL:
+        return []
+    nil = "00000000-0000-0000-0000-000000000000"
+    headers = {"Accept": "application/json"}
+    if SERVICE_API_KEY:
+        headers["X-API-KEY"] = SERVICE_API_KEY
+
+    tried: list[str] = []
+    for prefix in INTERNAL_API_PREFIXES:
+        url = f"{WORKSPACES_SERVICE_URL}{prefix}/{nil}/members/{nil}"
+        tried.append(prefix)
+        try:
+            resp = requests.get(url, headers=headers, timeout=3)
+        except Exception as exc:
+            return [Finding(
+                level=WARNING,
+                code="preflight.W002",
+                message=f"workspaces service unreachable at {WORKSPACES_SERVICE_URL}: {exc}",
+                fix="If this deployment does use workspaces, it will answer "
+                    "every membership question with 'not a member'.",
+                context={"url": WORKSPACES_SERVICE_URL},
+            )]
+        if resp.status_code == 404 and not _service_answered(resp):
+            continue  # wrong mount point; try the next known one
+        return []  # something served it — the contract holds
+
+    return [Finding(
+        level=ERROR,
+        code="preflight.E004",
+        message=(
+            "The workspaces internal API answers on NONE of the paths this "
+            "version of stapel-core knows. Every membership check will come "
+            "back 'not a member', and users — including workspace owners — "
+            "will be told they lack access."
+        ),
+        fix=(
+            "This service and stapel-workspaces disagree about where the "
+            "internal API is mounted. Upgrade whichever is older (the path "
+            "moved under v1/ in stapel-workspaces 0.4.2). Tried: "
+            + ", ".join(tried)
+        ),
+        context={"service_url": WORKSPACES_SERVICE_URL, "tried": tried},
+    )]
+
+
 CHECKS = (
     check_system_checks,
     check_migration_adoption,
@@ -256,6 +332,7 @@ CHECKS = (
     check_transport_dependencies,
     check_pending_migrations,
     check_oauth_redirect_uris,
+    check_peer_internal_routes,
 )
 
 
