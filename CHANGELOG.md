@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-07-26
+
+Minor: the first half of the upgrade-contract work — a deployment can now
+be *asked* whether it can take the code, instead of finding out by
+crashing.
+
+### Added
+- **`manage.py stapel_preflight`** (`--json` for a release harness): a
+  read-only pre-deploy check that runs against the real settings, database
+  and installed packages. Every check is a failure that took the ironmemo
+  stand down on 2026-07-25/26, each one predictable from information that
+  was already there:
+  - `preflight.E001` — an unapplied INITIAL migration whose table already
+    exists (the app-rename/extraction hazard that killed `migrate` fleet-wide);
+  - `preflight.E002` — `ACTION_TRANSPORT="bus"` on an in-process bus
+    backend (consumer processes that no-op and restart forever);
+  - `preflight.E003` — a configured transport whose client library is not
+    installed (`nats`/`confluent_kafka`);
+  - `check.*` — Django's own system-check ERRORS, surfaced BEFORE the
+    deploy rather than inside the container's `migrate`;
+  - `preflight.I001` — the migrations that would be applied;
+  - `preflight.I002` — the OAuth `redirect_uri` this deployment will send,
+    since that is a third-party registration no code change can update.
+  Findings are structured (level/code/message/fix/context) so a release
+  UI can show decisions instead of a traceback; a broken check degrades to
+  a warning instead of masking the rest. Exit code 1 = do not deploy.
+
 ## [0.14.2] — 2026-07-26
 
 ### Fixed
