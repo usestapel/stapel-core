@@ -175,7 +175,28 @@ def _call_http(name: str, payload: dict, *, timeout: float | None) -> Any:
         raise FunctionCallError(f"function '{name}' unreachable at {url}: {exc!r}") from exc
 
     if resp.status_code == 404:
-        raise FunctionNotRegistered(f"remote service has no function '{name}' ({url})")
+        # "The service has no such function" and "this URL does not exist"
+        # are different facts wearing the same status code, and callers act
+        # on the difference: FunctionNotRegistered is a DEGRADE signal —
+        # `require_capability` answers it by falling back to the builtin
+        # role→capability table, where every client-defined custom role
+        # denies. A mis-set FUNCTION_ROUTES would therefore silently
+        # downgrade authorization instead of failing loudly.
+        #
+        # The remote function view (comm/http.py) renders its 404 as JSON;
+        # Django's URL resolver and any proxy in front of it render HTML.
+        # Same distinction stapel-core/django/workspaces.py draws, and for
+        # the same reason (owner-reported live incident, 2026-07-26: a
+        # routing 404 read as a verdict told a workspace owner they were not
+        # a member).
+        content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+        if content_type == "application/json":
+            raise FunctionNotRegistered(f"remote service has no function '{name}' ({url})")
+        raise FunctionCallError(
+            f"function '{name}': {url} does not route to a function endpoint "
+            f"(404 from the URL resolver, not the view). Check FUNCTION_ROUTES "
+            f"and that the remote service mounts get_function_urls()."
+        )
     if resp.status_code >= 400:
         raise FunctionCallError(
             f"function '{name}' returned HTTP {resp.status_code}: {resp.text[:500]}"

@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.15.4] — 2026-07-26
+
+Two more callers of the same shape 0.15.3 fixed, found by sweeping every
+cross-service call in the fleet after that incident.
+
+### Fixed
+- **`check_cdn_media_exists` was calling a path stapel-cdn stopped serving.**
+  The §60 v1-canon sweep moved the CDN API under `v1/` and this caller was
+  not swept with it, so every existence check had been hitting Django's URL
+  resolver instead of the view. Same treatment as the workspaces client: the
+  mount point is discovered rather than assumed (the prefix depends on what
+  the HOST chose, so no literal here can be right for every deployment), and
+  a 404 that came from the resolver rather than the view is an outage, not
+  "the file does not exist".
+- **A routing 404 no longer degrades authorization.** The HTTP function
+  transport mapped every 404 to `FunctionNotRegistered` — which is a
+  *degrade* signal: `require_capability` answers it by falling back to the
+  builtin role→capability table, where every client-defined custom role
+  denies. So a mis-set `FUNCTION_ROUTES`, or a service that never mounted
+  `get_function_urls()`, would silently downgrade authorization instead of
+  failing loudly. The function view renders its 404 as JSON; the resolver
+  renders HTML — only the former is now read as "no such function".
+
 ## [0.15.3] — 2026-07-26
 
 ### Fixed

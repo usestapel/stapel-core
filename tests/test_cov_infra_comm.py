@@ -363,24 +363,50 @@ def test_http_transport_unreachable(monkeypatch):
             call("svc.x", {})
 
 
-def test_http_transport_404_maps_to_not_registered(monkeypatch):
+def _call_over_fake_http(monkeypatch, response):
     from stapel_core.comm import functions as functions_mod
-
-    class FakeResponse:
-        status_code = 404
 
     class FakeSession:
         def post(self, *a, **k):
-            return FakeResponse()
+            return response
 
     monkeypatch.setattr(functions_mod, "_http_session", lambda: FakeSession())
-    with override_settings(
+    return override_settings(
         STAPEL_COMM={
             "FUNCTION_TRANSPORT": "http",
             "FUNCTION_ROUTES": {"svc.": "http://svc:8000"},
         }
-    ):
+    )
+
+
+class _Resp:
+    def __init__(self, status_code, content_type="application/json"):
+        self.status_code = status_code
+        self.headers = {"Content-Type": content_type}
+        self.text = ""
+
+
+def test_http_transport_404_from_the_view_maps_to_not_registered(monkeypatch):
+    """The remote function view answers JSON — a real "no such function"."""
+    with _call_over_fake_http(monkeypatch, _Resp(404)):
         with pytest.raises(FunctionNotRegistered):
+            call("svc.x", {})
+
+
+def test_http_transport_404_from_the_resolver_is_a_call_error_not_a_degrade(
+    monkeypatch,
+):
+    """Owner-reported live incident, 2026-07-26 (the workspaces membership
+    variant of the same bug): a routing 404 read as a verdict.
+
+    FunctionNotRegistered is a DEGRADE signal — `require_capability` answers
+    it by falling back to the builtin role table, where every client-defined
+    custom role DENIES. So a mis-set FUNCTION_ROUTES, or a service that never
+    mounted get_function_urls(), would silently downgrade authorization
+    instead of failing loudly. Django's resolver renders HTML; the view
+    renders JSON. That is the whole signal."""
+    with _call_over_fake_http(monkeypatch, _Resp(404, "text/html; charset=utf-8")):
+        with pytest.raises(FunctionCallError, match="does not route"):
             call("svc.x", {})
 
 

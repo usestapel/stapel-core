@@ -102,18 +102,28 @@ def check_cdn_media_exists(ref_str: str) -> bool:
     parts = ref_str.split("/")
     file_hash = parts[-1]
 
-    response = requests.get(
-        f"{cdn_url}/cdn/api/file/exists/",
-        params={"file_hash": file_hash},
-        headers=headers,
-        timeout=5,
-    )
-    if response.status_code == 200:
+    # The §60 v1-canon sweep moved stapel-cdn's API under `v1/` and this
+    # caller was not swept with it, so every existence check has been hitting
+    # Django's URL resolver instead of the view. Discovered rather than
+    # assumed, for the same reason as django/workspaces.py: the mount point
+    # depends on the prefix the HOST chose, so no literal here can be right
+    # for every deployment.
+    response = None
+    for prefix in ("/cdn/api/v1/file/exists/", "/cdn/api/file/exists/"):
+        response = requests.get(
+            f"{cdn_url}{prefix}",
+            params={"file_hash": file_hash},
+            headers=headers,
+            timeout=5,
+        )
+        content_type = (response.headers.get("Content-Type") or "").split(";")[0]
+        if response.status_code == 404 and content_type.strip() != "application/json":
+            continue  # wrong mount point — the resolver answered, not the view
+        break
+
+    if response is not None and response.status_code == 200:
         data = response.json()
         return data.get("exists", False)
-    logger.warning(
-        "CDN exists check failed: status=%s ref=%s", response.status_code, ref_str
-    )
-    raise requests.RequestException(
-        f"CDN returned status {response.status_code} for {ref_str}"
-    )
+    status = response.status_code if response is not None else "no response"
+    logger.warning("CDN exists check failed: status=%s ref=%s", status, ref_str)
+    raise requests.RequestException(f"CDN returned status {status} for {ref_str}")

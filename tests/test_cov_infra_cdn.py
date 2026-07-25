@@ -354,11 +354,15 @@ def test_check_cdn_media_exists_no_slash_returns_false():
 def test_check_cdn_media_exists_true():
     with mock.patch("requests.get") as get:
         get.return_value.status_code = 200
+        get.return_value.headers = {"Content-Type": "application/json"}
         get.return_value.json.return_value = {"exists": True}
         with override_settings(CDN_SERVICE_URL="http://cdn:9", SERVICE_API_KEY="k1"):
             assert check_cdn_media_exists(f"product/{HASH64}") is True
     args, kwargs = get.call_args
-    assert args[0] == "http://cdn:9/cdn/api/file/exists/"
+    # v1 first: the §60 canon sweep moved stapel-cdn's API under v1/ and this
+    # caller was not swept with it, so every check had been hitting Django's
+    # URL resolver instead of the view.
+    assert args[0] == "http://cdn:9/cdn/api/v1/file/exists/"
     assert kwargs["params"] == {"file_hash": HASH64}
     assert kwargs["headers"] == {"X-API-KEY": "k1"}
 
@@ -366,6 +370,7 @@ def test_check_cdn_media_exists_true():
 def test_check_cdn_media_exists_false():
     with mock.patch("requests.get") as get:
         get.return_value.status_code = 200
+        get.return_value.headers = {"Content-Type": "application/json"}
         get.return_value.json.return_value = {}
         assert check_cdn_media_exists("product/abc") is False
     # no SERVICE_API_KEY setting -> no headers
@@ -379,3 +384,31 @@ def test_check_cdn_media_exists_error_status_raises():
         get.return_value.status_code = 500
         with pytest.raises(requests_lib.RequestException, match="status 500"):
             check_cdn_media_exists("product/abc")
+
+
+def test_check_cdn_media_exists_falls_back_to_the_pre_v1_mount():
+    """A fleet where stapel-cdn is older than this library still works: the
+    v1 path answers 404 from the RESOLVER (HTML), so the legacy one is
+    tried — as opposed to reporting "the file does not exist", which is what
+    a status-code-only reading would have concluded."""
+    resolver_404 = mock.Mock(status_code=404, headers={"Content-Type": "text/html"})
+    served = mock.Mock(status_code=200, headers={"Content-Type": "application/json"})
+    served.json.return_value = {"exists": True}
+    with mock.patch("requests.get", side_effect=[resolver_404, served]) as get:
+        with override_settings(CDN_SERVICE_URL="http://cdn:9"):
+            assert check_cdn_media_exists(f"product/{HASH64}") is True
+    assert [c.args[0] for c in get.call_args_list] == [
+        "http://cdn:9/cdn/api/v1/file/exists/",
+        "http://cdn:9/cdn/api/file/exists/",
+    ]
+
+
+def test_check_cdn_media_exists_raises_when_no_mount_point_answers():
+    """Neither path routes — that is an outage/skew, not "no such file"."""
+    import requests
+
+    resolver_404 = mock.Mock(status_code=404, headers={"Content-Type": "text/html"})
+    with mock.patch("requests.get", return_value=resolver_404):
+        with override_settings(CDN_SERVICE_URL="http://cdn:9"):
+            with pytest.raises(requests.RequestException):
+                check_cdn_media_exists(f"product/{HASH64}")
