@@ -35,6 +35,17 @@ class KafkaBus(BusBackend):
     def __init__(self) -> None:
         self._producer = None
         self._producer_lock = threading.Lock()
+        self._unknown_topics_seen: set[str] = set()
+
+    def _log_once_per_topic(self, error) -> None:
+        """One WARNING per distinct unknown topic, not one per poll."""
+        text = str(error)
+        if text in self._unknown_topics_seen:
+            return
+        self._unknown_topics_seen.add(text)
+        logger.warning(
+            "KafkaBus: topic not available yet (waiting for it to appear): %s", text
+        )
 
     # ------------------------------------------------------------------
     # Publish
@@ -73,6 +84,67 @@ class KafkaBus(BusBackend):
     # Consume
     # ------------------------------------------------------------------
 
+    def _provision_topics(self, topics: list[str]) -> None:
+        """Create the topics this consumer is about to subscribe to.
+
+        A consumer already DECLARES its topics — it is passing them to
+        `subscribe()` on the next line. Requiring someone to also list them,
+        by hand, somewhere else (a deploy script, a runbook, an infra repo) is
+        a second source of truth that drifts silently: the ironmemo stand ran
+        for weeks with six recordings topics missing from its deploy script's
+        list, and all that surfaced was an endless
+
+            ERROR KafkaBus consumer error: KafkaError{code=UNKNOWN_TOPIC_OR_PART}
+
+        on a container that looked healthy — while nothing whatsoever was
+        delivered. The NATS backend never had this problem, because its stream
+        captures `<prefix>.>` and a new topic needs no broker-side change at
+        all; Kafka was the odd one out, so it catches up here.
+
+        Best-effort by construction: an already-existing topic is the normal
+        case, and a broker that refuses creation (no ACL — set
+        `KAFKA_PROVISION_TOPICS=false` to skip this entirely and say so out
+        loud) must not stop a consumer that may well have the topics already.
+        """
+        from stapel_core.bus._config import KafkaBusConfig
+
+        if not KafkaBusConfig.provision_topics():
+            return
+        try:
+            from confluent_kafka.admin import AdminClient, NewTopic
+
+            admin = AdminClient(KafkaBusConfig.admin_config())
+            existing = set(admin.list_topics(timeout=10).topics)
+            missing = [t for t in dict.fromkeys(topics) if t not in existing]
+            # A poison message goes to `<topic>.dlq` (see `_send_raw_to_dlq`);
+            # a DLQ that does not exist means the poison message is dropped
+            # instead of parked, so they are provisioned together.
+            missing += [
+                _dlq_topic(t) for t in dict.fromkeys(topics)
+                if _dlq_topic(t) not in existing
+            ]
+            if not missing:
+                return
+            new_topics = [
+                NewTopic(
+                    name,
+                    num_partitions=KafkaBusConfig.topic_partitions(),
+                    replication_factor=KafkaBusConfig.topic_replication(),
+                )
+                for name in missing
+            ]
+            for name, future in admin.create_topics(new_topics).items():
+                try:
+                    future.result()
+                    logger.info("KafkaBus created topic %s", name)
+                except Exception as exc:  # already exists (race), or no ACL
+                    logger.info("KafkaBus could not create topic %s: %s", name, exc)
+        except Exception:
+            logger.warning(
+                "KafkaBus topic provisioning skipped (admin client unavailable)",
+                exc_info=True,
+            )
+
     def consume(
         self,
         topics: list[str],
@@ -85,6 +157,7 @@ class KafkaBus(BusBackend):
         from stapel_core.bus._config import KafkaBusConfig
 
         config = KafkaBusConfig.consumer_config(group)
+        self._provision_topics(topics)
         consumer = Consumer(config)
         consumer.subscribe(topics)
 
@@ -108,6 +181,16 @@ class KafkaBus(BusBackend):
                     continue
                 if msg.error():
                     if msg.error().code() == KafkaError._PARTITION_EOF:
+                        continue
+                    if msg.error().code() == KafkaError.UNKNOWN_TOPIC_OR_PART:
+                        # Transient by nature: brokers report this while a
+                        # freshly created topic propagates, and librdkafka
+                        # re-reports it on every metadata refresh — several
+                        # lines per second, per topic. At ERROR that buries
+                        # the real failures in a log nobody can then read; the
+                        # condition itself is handled by `_provision_topics`
+                        # above and by simply waiting.
+                        self._log_once_per_topic(msg.error())
                         continue
                     logger.error("KafkaBus consumer error: %s", msg.error())
                     continue

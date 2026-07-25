@@ -52,6 +52,30 @@ class KafkaBusConfig:
             "enable.auto.commit": False,
         }
 
+    @classmethod
+    def admin_config(cls) -> dict:
+        return dict(cls._base())
+
+    @staticmethod
+    def provision_topics() -> bool:
+        """Whether a consumer creates the topics it subscribes to.
+
+        On by default (see `KafkaBus._provision_topics`). A deployment where
+        topics are owned by an infra team / terraform and applications hold no
+        create ACL sets ``KAFKA_PROVISION_TOPICS=false``.
+        """
+        return _get("KAFKA_PROVISION_TOPICS", "true").strip().lower() not in (
+            "0", "false", "no", "off",
+        )
+
+    @staticmethod
+    def topic_partitions() -> int:
+        return int(_get("KAFKA_TOPIC_PARTITIONS", "1"))
+
+    @staticmethod
+    def topic_replication() -> int:
+        return int(_get("KAFKA_TOPIC_REPLICATION_FACTOR", "1"))
+
 
 class NatsBusConfig:
     """JetStream backend configuration.

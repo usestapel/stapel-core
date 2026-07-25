@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-07-26
+
+### Fixed
+- **A Kafka consumer now provisions the topics it subscribes to.** It
+  already declares them — it passes them to `subscribe()` on the next line.
+  Requiring somebody to *also* list them by hand somewhere else (a deploy
+  script, a runbook, an infra repo) is a second source of truth, and it
+  drifted: the ironmemo stand ran for weeks with six recordings topics
+  missing from its deploy script's list, delivering nothing, on containers
+  that reported healthy. The NATS backend never had this failure mode — its
+  stream captures `<prefix>.>`, so a new topic needs no broker-side change
+  at all; Kafka now matches. Each topic's `.dlq` is created alongside it (a
+  poison message with no DLQ to park in is a dropped message).
+
+  Best-effort by construction: an existing topic is the normal case, and a
+  broker that refuses creation never blocks a consumer that may already
+  have its topics. Deployments where topics are infra-owned and applications
+  hold no create ACL set `KAFKA_PROVISION_TOPICS=false`;
+  `KAFKA_TOPIC_PARTITIONS` / `KAFKA_TOPIC_REPLICATION_FACTOR` (both `1`)
+  size what is created.
+- `UNKNOWN_TOPIC_OR_PART` is logged as a single WARNING per topic instead
+  of an ERROR on every poll. librdkafka re-reports it on each metadata
+  refresh — several lines per second, per topic — which at ERROR buried
+  every real failure in the same log.
+
 ## [0.15.1] — 2026-07-26
 
 ### Fixed
