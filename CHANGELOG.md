@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-07-26
+
+### Fixed
+- 0.15.0's own test suite: the "healthy deployment" case asserted that
+  `stapel_preflight` finds no errors while running inside a suite that
+  deliberately registers check-tripping models — green alone, red in the
+  full run, and the tag went out on it. The case now pins the report shape
+  and the `ok` flag directly, and a separate test asserts that Django check
+  ERRORS are surfaced (using that same pollution as the fixture it is).
+
 ## [0.15.0] — 2026-07-26
 
 Minor: the first half of the upgrade-contract work — a deployment can now

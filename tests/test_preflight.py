@@ -25,12 +25,33 @@ def run() -> dict:
 
 
 @pytest.mark.django_db
-def test_reports_ready_on_a_healthy_deployment():
+def test_reports_ready_when_no_check_objects(monkeypatch):
+    """`ok` mirrors the absence of ERROR findings, and every finding keeps
+    the level/code/message/fix/context shape a release UI renders.
+
+    (The suite as a whole cannot serve as the "healthy deployment" fixture:
+    other test modules deliberately register models that trip system
+    checks, and `check_system_checks` faithfully reports them.)"""
+    monkeypatch.setattr(
+        pf, "CHECKS",
+        (lambda: [pf.Finding(level=pf.INFO, code="preflight.I999", message="fine")],),
+    )
     report = run()
-    assert isinstance(report["findings"], list)
-    # The suite's own settings are consistent, so nothing may block.
-    assert [f for f in report["findings"] if f["level"] == "error"] == []
     assert report["ok"] is True
+    assert report["findings"] == [{
+        "level": "info", "code": "preflight.I999",
+        "message": "fine", "fix": "", "context": {},
+    }]
+
+
+@pytest.mark.django_db
+def test_django_check_errors_are_surfaced_as_findings():
+    """Deploy scripts only meet these inside the container's `migrate` —
+    i.e. after the point of no return. Preflight hoists them out."""
+    findings = pf.check_system_checks()
+    assert findings, "the suite registers models that trip system checks"
+    assert all(f.level == pf.ERROR for f in findings)
+    assert all(f.code.startswith("check.") for f in findings)
 
 
 @pytest.mark.django_db
