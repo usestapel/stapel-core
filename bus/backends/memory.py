@@ -28,6 +28,9 @@ class MemoryBus(BusBackend):
     then appends to ``self.events`` for test introspection.
     """
 
+    # Publisher and consumer share one process by construction.
+    in_process = True
+
     def __init__(self) -> None:
         self.events: list[Event] = []
         self._subscribers: dict[str, list[Callable[[Event], None]]] = defaultdict(list)

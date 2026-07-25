@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-07-26
+
+### Fixed
+- **A standalone bus consumer refuses to run on an in-process bus** instead
+  of exiting silently. `MemoryBus.consume()` drains a queue that lives in
+  the PUBLISHER's memory, so a consumer process gets nothing, returns, exits
+  0 — and a container restart policy turns that into an infinite quiet
+  loop with zero events delivered. 0.11.0 flipped the default backend from
+  Kafka to MemoryBus, so every deployment that did not then set
+  `STAPEL_BUS_BACKEND` landed there and could not tell (ironmemo stand: all
+  actions/consumer workers restart-looping for weeks, cross-service events
+  dead). `BaseBusConsumerCommand` now raises `CommandError` naming the
+  setting and a broker backend; `--allow-in-process` keeps the
+  single-process test path. `BusBackend.in_process` marks such backends.
+
 ## [0.14.1] — 2026-07-25
 
 ### Fixed

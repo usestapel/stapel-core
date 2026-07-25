@@ -375,3 +375,40 @@ def test_dispatch_outbox_loops_and_sleeps(monkeypatch):
         call_command("dispatch_outbox", "--interval", "0.25", stdout=StringIO())
     assert slept == [0.25, 0.25]
     assert passes == [100, 100]  # default batch, one pass per loop iteration
+
+
+def test_consumer_command_refuses_an_in_process_bus(monkeypatch):
+    """A standalone consumer PROCESS on MemoryBus drains an empty queue and
+    exits 0 — with a restart policy that is an infinite silent loop, and no
+    event ever gets handled. Core 0.11.0 made MemoryBus the default, so any
+    deployment that forgot STAPEL_BUS_BACKEND landed exactly there."""
+    import pytest
+    from django.core.management.base import CommandError
+
+    import stapel_core.bus.consumer as consumer_mod
+    from stapel_core.bus.backends.memory import MemoryBus
+
+    monkeypatch.setattr(consumer_mod, "get_bus", lambda: MemoryBus())
+
+    cmd = _DemoConsumer(stdout=StringIO())
+    parser = cmd.create_parser("manage.py", "demo_consumer")
+    options = parser.parse_args([])
+    with pytest.raises(CommandError) as exc:
+        cmd.handle(**vars(options))
+    assert "STAPEL_BUS_BACKEND" in str(exc.value)
+    assert "in-process" in str(exc.value)
+
+
+def test_consumer_command_allows_in_process_when_asked(monkeypatch):
+    """The single-process test path stays available behind an explicit flag."""
+    import stapel_core.bus.consumer as consumer_mod
+    from stapel_core.bus.backends.memory import MemoryBus
+
+    monkeypatch.setattr(consumer_mod, "get_bus", lambda: MemoryBus())
+
+    buf = StringIO()
+    cmd = _DemoConsumer(stdout=buf)
+    parser = cmd.create_parser("manage.py", "demo_consumer")
+    options = parser.parse_args(["--allow-in-process"])
+    cmd.handle(**vars(options))  # drains the empty queue and returns
+    assert "Starting consumer group=notifications" in buf.getvalue()

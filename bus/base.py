@@ -17,6 +17,12 @@ class BusBackend(ABC):
     Configured via ``STAPEL_BUS_BACKEND`` Django setting.
     """
 
+    #: True when publisher and consumer must share one process (the queue
+    #: lives in memory). Standalone consumer commands refuse to run on such
+    #: a backend — see BaseBusConsumerCommand — because they would drain an
+    #: empty queue, exit, and be restarted forever by the container runtime.
+    in_process: bool = False
+
     @abstractmethod
     def publish(self, topic: str, event: Event) -> None:
         """Publish *event* to *topic*. Fire-and-forget."""
