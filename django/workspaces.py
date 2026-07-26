@@ -20,6 +20,8 @@ from uuid import UUID
 import requests
 from django.core.cache import cache
 
+from stapel_core.django.peers import service_answered
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,19 +105,15 @@ def _role_at_least(role: str, minimum: str) -> bool:
         return False
 
 
-def _service_answered(resp) -> bool:
-    """Did the VIEW answer, or did the URL resolver?
-
-    A 404 from stapel-workspaces' internal API is a real answer ("that user
-    is not a member") and carries a JSON body, because DRF renders it. A 404
-    from Django's URL resolver — or from a proxy in front of it — carries an
-    HTML debug/error page. They are indistinguishable by status code alone,
-    which is exactly how a client/server path skew turned into "the owner is
-    not a member of their own workspace" for weeks. The content type tells
-    them apart.
-    """
-    content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
-    return content_type == "application/json"
+#: Did the VIEW answer, or did the URL resolver? A 404 from stapel-workspaces'
+#: internal API is a real answer ("that user is not a member") and carries a
+#: JSON body, because DRF renders it; a 404 from Django's URL resolver carries
+#: an HTML error page. Same-status/different-meaning is exactly how a
+#: client/server path skew turned into "the owner is not a member of their own
+#: workspace" for weeks. The rule now lives in ``stapel_core.django.peers`` so
+#: every cross-service client shares it (translate's key collectors do);
+#: re-exported under the historical private name for in-module callers.
+_service_answered = service_answered
 
 
 def _internal_get(path_suffix: str, *, method: str = "get", timeout: float = 3.0):

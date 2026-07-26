@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [0.15.5] — 2026-07-26
+
+### Added
+- **`stapel_core.django.peers`** — the rule that 0.15.3 and 0.15.4 each
+  re-derived locally, extracted so every cross-service client shares one
+  copy: `service_answered()` (a view's 404 renders JSON, the URL resolver's
+  renders HTML), `get_with_path_discovery()` (candidate mount points
+  newest-first, remembering the one that answered) and
+  `PeerRouteUnavailable` ("this service and its peer disagree about the
+  path" — an explicit failure, never a silent empty result). The fleet sweep
+  that followed the 2026-07-26 incident found seven callers of that shape,
+  which is three too many for a rule kept in one module's private function.
+  `stapel_core.django.workspaces._service_answered` is now an alias.
+- Python **3.14** in the CI matrix. The stand runs 3.14; CI tested
+  3.11–3.13, so an import-lock inversion that deadlocks only on 3.14 shipped
+  and was found by a service answering 502 after every deploy.
+
+### Added — `stapel_core.django.peers`: cross-service calls that cannot mistake a routing 404 for an answer
+
+The rule 0.15.4 introduced inside `django/workspaces.py` (a 404 rendered as
+HTML came from Django's URL resolver, a 404 rendered as JSON came from the
+view) turned out to be needed by every cross-service client: stapel-translate's
+key collectors had the identical pair of bugs — a hardcoded peer path plus a
+404 read as "no keys" — and had silently collected nothing since the §60
+v1-canon sweep.
+
+- `service_answered(resp)` — the Content-Type discriminator, extracted;
+  `workspaces._service_answered` is now an alias of it (no behaviour change).
+- `get_with_path_discovery(base_url, candidates, ...)` — GETs the first
+  candidate mount point that reaches a *view*, returns `(response, url)`, and
+  raises `PeerRouteUnavailable` naming every path it tried when none does.
+  Transport errors propagate unchanged (another path cannot help a refused
+  connection); a view's own 404 stops discovery, because it is an answer.
+- `PathResolver` — remembers the mount point that answered, so the probe
+  costs one extra request per process rather than per call.
+
 ## [0.15.4] — 2026-07-26
 
 Two more callers of the same shape 0.15.3 fixed, found by sweeping every
