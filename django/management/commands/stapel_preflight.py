@@ -272,6 +272,7 @@ def check_peer_internal_routes() -> list[Finding]:
     "no such membership" — proves the route exists.
     """
     import requests
+    from django.apps import apps
 
     from stapel_core.django.workspaces import (
         INTERNAL_API_PREFIXES,
@@ -281,6 +282,17 @@ def check_peer_internal_routes() -> list[Finding]:
     )
 
     if not WORKSPACES_SERVICE_URL:
+        return []
+    # A monolith answers membership IN-PROCESS: with stapel_workspaces
+    # installed, hosts import `stapel_workspaces.permissions.require_role`
+    # directly and this HTTP client is never called — so probing a peer URL
+    # (which defaults to a service hostname that exists only in a
+    # microservice compose) reports a broken peer that nothing talks to.
+    # Found on meettoday, 2026-07-26: W002 fired against
+    # `http://stapel-workspaces:8000` in a monolith whose workspaces app is
+    # local. A check that warns about a topology it never established is the
+    # same defect it exists to catch.
+    if apps.is_installed("stapel_workspaces"):
         return []
     nil = "00000000-0000-0000-0000-000000000000"
     headers = {"Accept": "application/json"}

@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.15.7] — 2026-07-26
+
+### Fixed
+- **`preflight.W002` no longer warns about a peer a monolith never calls.**
+  `check_peer_internal_routes()` probed `WORKSPACES_SERVICE_URL` unconditionally,
+  but a monolith with `stapel_workspaces` installed answers membership
+  in-process — hosts import `stapel_workspaces.permissions.require_role`
+  directly and this HTTP client is never reached. The peer URL defaults to a
+  service hostname that only exists in a microservice compose, so every
+  monolith got a warning about a broken peer that nothing talks to (found on
+  meettoday, 2026-07-26), plus a 3s timeout on each preflight run. The check
+  now skips when the app is installed locally. A check that warns about a
+  topology it never established is the same defect this one exists to catch.
+
 ## [0.15.6] — 2026-07-26
 
 ### Fixed

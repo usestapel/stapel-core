@@ -229,3 +229,26 @@ class TestPeerInternalRoutes:
         findings = pf.check_peer_internal_routes()
         assert [f.code for f in findings] == ["preflight.W002"]
         assert findings[0].level == pf.WARNING
+
+    def test_a_monolith_is_not_probed_over_http_at_all(self, monkeypatch):
+        """With workspaces installed locally, membership never leaves the process.
+
+        meettoday, 2026-07-26: this check warned that
+        `http://stapel-workspaces:8000` was unreachable in a monolith whose
+        workspaces app is installed and whose hosts import
+        `stapel_workspaces.permissions.require_role` directly. The peer URL
+        is a compose-only default; nothing calls it. Warning about a
+        topology the check never established is exactly the defect it was
+        written to catch.
+        """
+        import requests
+        from django.apps import apps
+
+        def boom(*a, **k):  # must never be reached
+            raise AssertionError("probed a peer that is installed in-process")
+
+        monkeypatch.setattr(requests, "get", boom)
+        monkeypatch.setattr(
+            apps, "is_installed", lambda label: label == "stapel_workspaces"
+        )
+        assert pf.check_peer_internal_routes() == []
