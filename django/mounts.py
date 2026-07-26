@@ -243,8 +243,19 @@ def _iter_url_patterns(patterns, prefix: str = ""):
 def _path_segments(full_path: str) -> list:
     """Non-empty ``/``-delimited segments of *full_path*, regex anchors
     stripped — good enough for exact-token membership tests
-    (``"api" in segments``), not for reconstructing a real URL."""
-    return [seg for seg in full_path.strip("^$").split("/") if seg]
+    (``"api" in segments``), not for reconstructing a real URL.
+
+    Anchors are stripped PER SEGMENT, not once across the whole path. A
+    module that registers a `re_path` router (stapel-currencies uses
+    ``r"api/v1"``) and is then mounted under a host prefix produces
+    ``currencies/^api/v1/...`` — the ``^`` lands mid-path, so a single
+    ``full_path.strip("^$")`` leaves the segment reading ``"^api"`` and the
+    §37 containment check reports E004 against a mount that is perfectly
+    canonical. Every client who picked `currencies` got a generated project
+    that failed its own `manage.py check` (found 2026-07-26, via the
+    scaffold's own gate once an unrelated E003 stopped masking it).
+    """
+    return [seg.strip("^$") for seg in full_path.split("/") if seg.strip("^$")]
 
 
 def _callback_owner_app_label(callback) -> Optional[str]:

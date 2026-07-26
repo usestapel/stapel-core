@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.15.6] — 2026-07-26
+
+### Fixed
+- **`stapel_core.mounts.E004` no longer flags a canonical mount as a
+  violation.** `_path_segments` stripped regex anchors once across the whole
+  path instead of per segment, so a module that registers a `re_path` router
+  (stapel-currencies uses `r"api/v1"`) and is then mounted under a host
+  prefix produced `currencies/^api/v1/...` — the `^` landed mid-path, the
+  segment read `"^api"`, and the §37 containment check reported an error
+  against a perfectly correct mount. Every generated project that included
+  `currencies` failed its own `manage.py check`. Surfaced by the scaffold's
+  own gate, once an unrelated E003 stopped masking it.
+
 ## [0.15.5] — 2026-07-26
 
 ### Added

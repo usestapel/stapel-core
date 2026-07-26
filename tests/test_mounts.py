@@ -377,6 +377,18 @@ class TestModuleSurfaceContainment:
         mock_apps(_app("stapel_billing", label="billing"))
         assert check_module_surface_containment() == []
 
+    def test_regex_anchored_router_is_not_a_violation(self, settings, mock_apps):
+        """`currencies/^api/v1/rates` is canonical — the `^` is a regex
+        anchor from the module's own re_path router, not a path segment.
+
+        Stripping anchors once across the whole path (rather than per
+        segment) left this reading as "^api" and reported E004 against a
+        perfectly correct mount, so every generated project that included
+        currencies failed its own `manage.py check`."""
+        settings.ROOT_URLCONF = URLS_SURFACE
+        mock_apps(_app("stapel_currencies", label="currencies"))
+        assert check_module_surface_containment() == []
+
     def test_admin_segment_nested_inside_api_is_fine(self, settings, mock_apps):
         # auth's admin_api gate lives at auth/api/v1/admin/audit/ — "api" is
         # present in the path, so this is compliant even though "admin" also
