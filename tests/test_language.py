@@ -153,8 +153,10 @@ class TestFromRequest:
         stale = _Request(cookies={"django_language": "fr"}, header="en")
         assert resolve_language_from_request(stale) == "en"
 
-    def test_a_request_without_anything_falls_back(self):
-        assert resolve_language_from_request(_Request()) == "en"
+    def test_a_request_without_anything_falls_back_to_the_project(self, settings):
+        """Not to a hardcoded "en" — see TestTheFallbackIsTheProjects."""
+        settings.LANGUAGE_CODE = "en-us"
+        assert resolve_language_from_request(_Request()) == "en-us"
 
 
 @pytest.mark.django_db
@@ -191,3 +193,30 @@ class TestTransportAuthority:
         req = _Request(cookies={"stapel_use_device_language": "0"})
         req.META["HTTP_X_MY_LANGUAGE"] = "fr"
         assert resolve_language_from_request(req) == "fr"
+
+
+@pytest.mark.django_db
+class TestTheFallbackIsTheProjects:
+    """A framework that hardcodes "en" as the final answer imposes a
+    product assumption. A service for a Russian-speaking market wants
+    `ru` there, and every English string it falls back to is a defect."""
+
+    def test_django_language_code_is_the_fallback(self, settings):
+        settings.LANGUAGE_CODE = "ru"
+        assert resolve_language_from_request(_Request()) == "ru"
+
+    def test_explicit_setting_wins_over_django(self, settings):
+        settings.LANGUAGE_CODE = "en-us"
+        settings.STAPEL_LANGUAGE = {"DEFAULT": "ru"}
+        assert resolve_language_from_request(_Request()) == "ru"
+
+    def test_caller_can_still_override_per_call(self, settings):
+        settings.LANGUAGE_CODE = "ru"
+        assert resolve_language_from_request(_Request(), default="de") == "de"
+
+    def test_the_pure_resolver_stays_django_free(self):
+        """resolve_language() must remain importable and callable with no
+        settings configured — it is what the async consumer uses."""
+        from stapel_core.language import DEFAULT_LANGUAGE, resolve_language
+
+        assert resolve_language() == DEFAULT_LANGUAGE

@@ -40,7 +40,43 @@ Two things were fixed in the move rather than carried over:
 """
 from __future__ import annotations
 
+#: Last-ditch value for the pure resolver, which is deliberately
+#: Django-free. Anything running inside a project should use
+#: :func:`default_language` instead — see there for why "en" is not a
+#: safe thing for a framework to assume.
 DEFAULT_LANGUAGE = "en"
+
+
+def default_language() -> str:
+    """The project's own fallback language.
+
+    A framework that hardcodes "en" as the final answer is imposing a
+    product assumption: a service built for a Russian-speaking market
+    wants `ru` there, and every English string it ever falls back to is a
+    defect. So the value comes from the project, in this order::
+
+        STAPEL_LANGUAGE["DEFAULT"]      explicit, wins
+        settings.LANGUAGE_CODE          what Django already knows
+        "en"                            only when there is no project
+
+    Preferring Django's own setting means a host that configured its
+    language gets the right fallback without learning a second knob —
+    the same reasoning as taking LANGUAGE_COOKIE_NAME for the cookie.
+    """
+    try:
+        from django.conf import settings
+    except ImportError:  # pragma: no cover - Django-free use
+        return DEFAULT_LANGUAGE
+    try:
+        conf = getattr(settings, "STAPEL_LANGUAGE", None) or {}
+        explicit = conf.get("DEFAULT")
+        if explicit:
+            return explicit
+        return getattr(settings, "LANGUAGE_CODE", None) or DEFAULT_LANGUAGE
+    except Exception:
+        # Settings not configured (a management command, a bare import) —
+        # a language lookup must never be the thing that breaks that.
+        return DEFAULT_LANGUAGE
 
 
 def parse_accept_language(header: str | None) -> list[str]:
@@ -145,7 +181,7 @@ def resolve_language_from_request(
     request,
     *,
     supported_languages: set[str] | None = None,
-    default: str = DEFAULT_LANGUAGE,
+    default: str | None = None,
 ) -> str:
     """``resolve_language`` fed from a Django request.
 
@@ -210,12 +246,13 @@ def resolve_language_from_request(
         accept_language_header=meta.get("HTTP_ACCEPT_LANGUAGE"),
         supported_languages=supported_languages,
         auto_detected_language=auto_detected_language,
-        default=default,
+        default=default or default_language(),
     )
 
 
 __all__ = [
     "DEFAULT_LANGUAGE",
+    "default_language",
     "parse_accept_language",
     "resolve_language",
     "resolve_language_from_request",

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.15.9] — 2026-07-29
+
+### Added
+- **`default_language()`** — the fallback language is the project's, not the
+  framework's. A framework that hardcodes `"en"` as the final answer imposes a
+  product assumption: a service built for a Russian-speaking market wants `ru`
+  there, and every English string it falls back to is a defect. Resolution:
+  `STAPEL_LANGUAGE["DEFAULT"]` → `settings.LANGUAGE_CODE` → `"en"` only when
+  there is no project at all. Preferring Django's own setting means a host that
+  already configured its language gets the right fallback without learning a
+  second knob — the same reasoning as taking `LANGUAGE_COOKIE_NAME` for the
+  cookie name.
+- `resolve_language_from_request()` now defaults to it. The pure
+  `resolve_language()` keeps its Django-free `DEFAULT_LANGUAGE` so the async
+  consumer path can still import it with no settings configured.
+
+
 ## [0.15.8] — 2026-07-29
 
 ### Added
