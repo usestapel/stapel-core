@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## [0.15.8] — 2026-07-29
+
+### Added
+- **`stapel_core.language`** — one place every service can ask "what language
+  is this for?". Resolution is not a single lookup but a small state machine
+  over four independent inputs: the user's explicit choice, whether the device
+  may override it, what the device asked for this request, and the last
+  language we saw for this user. `app_language` and `use_device_language` stay
+  separate on purpose — someone who picked Russian may still want the device to
+  win while travelling.
+
+  `supported_languages` has two modes and the difference is real: a set means
+  static UI strings exist only in those languages and anything else falls back;
+  `None` means accept whatever was asked for, which is what LLM translation
+  needs and what no fixed catalogue can express.
+
+  `resolve_language()` takes plain values rather than a request, because the
+  caller that needs it most — a notification consumer rendering an email in a
+  different process hours later — has no request to read.
+  `resolve_language_from_request()` is the thin Django wrapper.
+
+  Restored from the marketplace codebase, where it ran for years and then
+  failed to make the trip into the framework. Two things were fixed rather than
+  carried over: Accept-Language is now quality-weighted (the original read the
+  first entry and ignored `q=`, so `"de;q=0.2,en;q=0.9"` resolved to German —
+  the opposite of what the header says), and the region subtag survives when
+  the supported set distinguishes it, so `pt-BR` and `pt-PT` stop collapsing.
+
+  Transports, in order of authority: stored preferences → `X-App-Language`
+  header (a mobile client or a service-to-service hop has no cookie jar) →
+  cookie. The cookie name defaults to Django's own `LANGUAGE_COOKIE_NAME`
+  rather than an invented one, so the stock `set_language` view interoperates
+  for free; header and cookie names are overridable via `STAPEL_LANGUAGE`.
+
+
 ## [0.15.7] — 2026-07-26
 
 ### Fixed
