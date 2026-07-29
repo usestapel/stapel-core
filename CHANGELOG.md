@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.15.10] — 2026-07-29
+
+### Added
+- **`stapel_core.hashing`** — `canonical_hash()` / `canonical_json()`: a stable
+  version key for a JSON-able artifact. Derived work (a summary, an LLM
+  extraction, a user's edit log) has to say which version of its source it was
+  built from; a timestamp cannot answer that, because it moves when nothing
+  meaningful changed, and a revision counter cannot either, because two writers
+  hand the same number to different content.
+- The canonicalization is the substance, not the sha256 around it. `json.dumps`
+  leaves key order, whitespace and non-ASCII escaping free, and each of those
+  changes the bytes without changing the meaning — so two processes that
+  disagree on any of them mint different keys for identical content, which
+  every reader downstream interprets as "the source changed". All three are
+  pinned, and pinned as a compatibility contract: this recipe reproduces a
+  digest recorded by an independent implementation over a 107-segment
+  transcript (`sha256:798782c1…`, checked 2026-07-29), so relaxing any of them
+  invalidates every key already stored.
+- Digests carry their algorithm (`sha256:<hex>`). A bare hex string is
+  un-migratable — the day another algorithm is needed, nothing distinguishes an
+  old value from a new one and every stored key has to be discarded.
+- Non-JSON input (UUID, datetime) raises `TypeError` rather than falling back
+  to `default=str`. That fallback would hash `repr` output, so a value whose
+  representation changed but whose meaning did not would read as changed
+  content — a false staleness signal, the failure mode that is hardest to
+  notice because nothing errors.
+
 ## [0.15.9] — 2026-07-29
 
 ### Added
