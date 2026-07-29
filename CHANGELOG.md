@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.15.12] — 2026-07-29
+
+### Fixed
+- The `to_strict_subset` tests no longer import pydantic. Core does not depend
+  on it and must not: dataclasses inside, DRF at the HTTP edge, pydantic only
+  where untrusted structured text arrives. The test passed locally because the
+  shared dev venv had pydantic from a sibling library, and failed in CI where
+  the dependency list is the truth — 0.15.11 never reached PyPI as a result.
+  The schema shapes are now literals, which is also more honest: a test in core
+  should not need pydantic to describe pydantic's behaviour. The companion test
+  pinning that premise stays in `stapel-agent`, which has pydantic legitimately.
+
 ## [0.15.11] — 2026-07-29
 
 ### Added
