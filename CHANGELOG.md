@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.15.11] — 2026-07-29
+
+### Added
+- **`stapel_core.schema_strict.to_strict_subset()`** — moved here from
+  `stapel-agent` 0.6.6 (one day old; `stapel_agent.schema_strict` still
+  re-exports it, so nothing breaks). It is a pure JSON Schema transform with no
+  provider knowledge in it, and two different sides need it: the transport that
+  sends the schema, and any caller that wants to inspect what will actually go
+  out *before* paying for the call. With it living inside the transport, the
+  second was impossible without importing the LLM library into a service that
+  has no business making LLM calls in-process.
+
 ## [0.15.10] — 2026-07-29
 
 ### Added
