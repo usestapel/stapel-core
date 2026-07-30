@@ -51,6 +51,11 @@ class CommonDjangoConfig(AppConfig):
         # for a malformed STAPEL_SERVICES env-JSON or STAPEL_ADMIN["NAV_LINKS"]
         # overlay — otherwise the nav block silently renders empty.
         from stapel_core.django import nav_checks as _nav_checks  # noqa: F401
+        # Adoption checks (stapel_core.django.adoption_checks): E-level when
+        # the AUTH_ANONYMOUS axis is on and a view gates on a bare
+        # IsAuthenticated without saying whether guests are meant to pass —
+        # the finding is "declare a stance", never "close the view".
+        from stapel_core.django import adoption_checks as _adoption_checks  # noqa: F401
         # Bus-backend checks (stapel_core.bus.checks): E-level when the
         # configured STAPEL_BUS_BACKEND names a transport (kafka/nats) whose
         # client library is not installed — catches the "publish() raises

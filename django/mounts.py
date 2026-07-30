@@ -50,6 +50,8 @@ from typing import Any, Dict, Optional
 
 from django.utils.functional import lazy
 
+from . import urlsurvey as _urlsurvey
+
 
 class MountConfigError(Exception):
     """A STAPEL_MOUNTS entry does not parse — reported as a system-check Error."""
@@ -217,74 +219,15 @@ def reserved_paths() -> Dict[str, list]:
     }
 
 
-def _iter_url_patterns(patterns, prefix: str = ""):
-    """Depth-first walk of a URLconf pattern list.
+# --- shared URLconf survey -------------------------------------------------
+# These three primitives moved to :mod:`stapel_core.django.urlsurvey` once a
+# second check family (``stapel_adoption``) needed the same resolver walk.
+# Re-exported under their original private names: the §37 containment check
+# and the package tests import them from here.
 
-    Yields ``(full_path, url_pattern)`` for every leaf ``URLPattern`` —
-    ``full_path`` is the best-effort concatenation of every ancestor route
-    string down to this pattern. Good enough to test for the *presence* of a
-    canonical path segment (:func:`stapel_core.django.checks.check_module_surface_containment`'s
-    only use), not a guarantee of the exact browser-facing URL: ``path()``
-    routes concatenate cleanly; a ``re_path()`` ancestor contributes its raw
-    regex source (anchors/groups and all) — no stapel module in this
-    repository uses ``re_path()`` for its own mount, so this is not a
-    practical gap today.
-    """
-    from django.urls import URLPattern, URLResolver
-
-    for entry in patterns:
-        full = f"{prefix}{entry.pattern}"
-        if isinstance(entry, URLResolver):
-            yield from _iter_url_patterns(entry.url_patterns, full)
-        elif isinstance(entry, URLPattern):
-            yield full, entry
-
-
-def _path_segments(full_path: str) -> list:
-    """Non-empty ``/``-delimited segments of *full_path*, regex anchors
-    stripped — good enough for exact-token membership tests
-    (``"api" in segments``), not for reconstructing a real URL.
-
-    Anchors are stripped PER SEGMENT, not once across the whole path. A
-    module that registers a `re_path` router (stapel-currencies uses
-    ``r"api/v1"``) and is then mounted under a host prefix produces
-    ``currencies/^api/v1/...`` — the ``^`` lands mid-path, so a single
-    ``full_path.strip("^$")`` leaves the segment reading ``"^api"`` and the
-    §37 containment check reports E004 against a mount that is perfectly
-    canonical. Every client who picked `currencies` got a generated project
-    that failed its own `manage.py check` (found 2026-07-26, via the
-    scaffold's own gate once an unrelated E003 stopped masking it).
-    """
-    return [seg.strip("^$") for seg in full_path.split("/") if seg.strip("^$")]
-
-
-def _callback_owner_app_label(callback) -> Optional[str]:
-    """The ``app_label`` of the Stapel module that owns *callback*, or
-    ``None`` when it belongs to no installed Stapel module (a host's own
-    view, or a third-party one — not this check's business).
-
-    Class-based views keep the class on the view function
-    (``view_class`` — plain Django, ``cls`` — DRF's ``APIView.as_view()``);
-    function-based views/lambdas are used as-is. Ownership is decided the
-    same way module discovery is (``__module__`` dotted-path prefix against
-    each installed Stapel app's ``AppConfig.name`` — covers both the
-    ``stapel_*`` pip packages and a project's own marked ``apps/*``).
-    """
-    from django.apps import apps as django_apps
-
-    from .nav import is_stapel_app
-
-    view = getattr(callback, "view_class", None) or getattr(callback, "cls", None) or callback
-    module_name = getattr(view, "__module__", "") or ""
-    if not module_name:
-        return None
-    for app_config in django_apps.get_app_configs():
-        if not is_stapel_app(app_config):
-            continue
-        name = app_config.name
-        if module_name == name or module_name.startswith(f"{name}."):
-            return app_config.label
-    return None
+_iter_url_patterns = _urlsurvey.iter_url_patterns
+_path_segments = _urlsurvey.path_segments
+_callback_owner_app_label = _urlsurvey.callback_owner_app_label
 
 
 def admin_login_url() -> str:

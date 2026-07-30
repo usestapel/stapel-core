@@ -2,6 +2,63 @@
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-07-30
+
+### Added
+- **Adoption checks — a third genre of system check (tag `stapel_adoption`,
+  `stapel_core.django.adoption_checks`).** Config checks (`stapel_nav`) ask
+  whether a setting is well-formed; topology checks (`stapel_mounts` E004) ask
+  whether a mount is where it belongs. An *adoption* check asks the question
+  `stapel-tools`' `adoption_lint` (ADO001) asks from outside the process, from
+  inside it: **the project switched an axis on — did the code the axis affects
+  actually take a position on it?** Its idiom is three parts, and the third is
+  the one that keeps such a check alive: derivable premise → derivable
+  obligation → **an explicit waiver instead of silence**.
+- The first one is the anonymous axis. Premise: `stapel-auth`'s
+  `AUTH_ANONYMOUS` is on, so guest sessions exist and a guest *is*
+  `request.user.is_authenticated`. Obligation: a view whose entire gate is a
+  bare `IsAuthenticated` therefore admits guests, and its source says nothing
+  about whether that was meant. `stapel_core.adoption.E001` reports that
+  silence — never the choice. Three ways to be green, all explicit:
+  `IsNotAnonymousUser` in `permission_classes`; any other/stronger permission
+  class (capability, object, role); or
+  `stapel_anonymous_access = ANONYMOUS_ALLOWED` / `ANONYMOUS_DENIED` on the
+  view (new constants in `stapel_core.django.api.permissions`).
+- The formulation is the substance. A check that demanded `IsNotAnonymousUser`
+  everywhere would be wrong on its first real consumer — in meettoday an
+  anonymous guest joining a call is the product, and several views must stay
+  open to one — and would be added to `SILENCED_SYSTEM_CHECKS` whole on day
+  one. Turning an unwritten assumption into a declared one is also worth as
+  much as the protection: "guests may join this call" stops being an unwritten
+  property of a permission class that is not there.
+- `stapel_anonymous_access` is deliberately hard to set by accident: a
+  `stapel_`-prefixed attribute nothing in Django or DRF carries, with a closed
+  two-value vocabulary — a misspelled value is reported
+  (`stapel_core.adoption.E002`), never read as a declaration.
+- Two asymmetries, both about keeping the check un-mutable.
+  `stapel_core.adoption.W001` reports a bare-`IsAuthenticated`
+  `DEFAULT_PERMISSION_CLASSES` **once, at the setting**, instead of charging
+  every view that never wrote a `permission_classes` line for a decision made
+  in `settings.py`. `stapel_core.adoption.W002` carries the same finding at
+  W-level when the view arrived in an installed `stapel_*` wheel: E-level
+  findings become deploy blockers through `stapel_preflight`, and blocking a
+  deploy on a file the reader cannot edit is exactly how a whole tag gets
+  silenced. Level follows who can act.
+- **`stapel_core.django.urlsurvey`** — the one URLconf walk every
+  surface-reasoning check shares (`iter_surface()`, `iter_url_patterns`,
+  `path_segments`, `callback_owner_app_label`, `view_of`). These lived as
+  private helpers inside `django/mounts.py` and served exactly one check; a
+  second check needing the same walk is what makes them a mechanism rather
+  than a helper. `mounts._iter_url_patterns` / `_path_segments` /
+  `_callback_owner_app_label` re-export from there unchanged.
+
+### Notes
+- Minor, not patch: a new Error-level check can turn a currently green
+  consumer red at `manage.py check` / `stapel_preflight` time. Nothing is
+  removed or renamed, so it is not a major. First live run (meettoday,
+  63 findings): 25 E001 in the project's own `rooms`/`recordings`/`accounts`/
+  `calendar_app` views, 37 W002 across five installed modules, 1 W001.
+
 ## [0.15.12] — 2026-07-29
 
 ### Fixed

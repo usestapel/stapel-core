@@ -1012,6 +1012,80 @@ prefix accepts any local link). At most one link should carry the flag per
 deployment; `stapel_core.nav.W003` warns (does not block) when more than one
 does — the first one in registry order still wins, the rest are ignored.
 
+### Adoption checks — silence is the error (`django/adoption_checks.py`)
+
+A third genre of system check, next to the config checks (`stapel_nav`) and
+the topology checks (`stapel_mounts`). Config and topology checks ask "is this
+setting well-formed / is this mount where it belongs". An **adoption** check
+asks the question `stapel-tools`' `adoption_lint` (ADO001) asks from outside
+the process, from inside it:
+
+> the project switched an axis on — did the code the axis affects actually
+> take a position on it?
+
+Same three parts every time, and they are the genre:
+**derivable premise → derivable obligation → an explicit waiver instead of
+silence.** The waiver is what keeps the check alive: a check that demands one
+particular answer gets silenced wholesale the first time a product legitimately
+needs the other one.
+
+**The first one (tag `stapel_adoption`) — the anonymous axis.** Premise:
+`stapel-auth`'s `AUTH_ANONYMOUS` is on, so guest sessions exist and a guest is
+`request.user.is_authenticated`. Obligation: a view whose *whole* gate is a
+bare `IsAuthenticated` therefore admits guests, and nothing in its source says
+whether that was meant. Waiver: any of three explicit answers.
+
+```python
+from stapel_core.django.api.permissions import (
+    ANONYMOUS_ALLOWED, ANONYMOUS_DENIED, IsNotAnonymousUser,
+)
+
+class CreateRoomView(APIView):                 # 1. keep guests out, enforced
+    permission_classes = [IsAuthenticated, IsNotAnonymousUser]
+
+class RoomInfoView(APIView):                   # 2. a more specific gate
+    permission_classes = [IsAuthenticated, HasRoomAccess]
+
+class JoinRoomView(APIView):                   # 3. guests are the product
+    permission_classes = [IsAuthenticated]
+    stapel_anonymous_access = ANONYMOUS_ALLOWED
+```
+
+Only the view that says nothing is red. `stapel_anonymous_access` takes exactly
+`ANONYMOUS_ALLOWED` / `ANONYMOUS_DENIED` — a `stapel_`-prefixed name nothing in
+Django or DRF carries (it cannot appear by accident) with a closed vocabulary
+(a misspelled value is reported, never read as a declaration).
+
+| id | level | meaning |
+|---|---|---|
+| `stapel_core.adoption.E001` | Error | a view **in this project's own source** gates on bare `IsAuthenticated` with no stance declared anywhere in its MRO |
+| `stapel_core.adoption.E002` | Error | `stapel_anonymous_access` is set to something that is not a stance |
+| `stapel_core.adoption.W001` | Warning | `DEFAULT_PERMISSION_CLASSES` is *itself* bare `IsAuthenticated` — reported once, at the setting, not once per view |
+| `stapel_core.adoption.W002` | Warning | the same silence, but in a view that arrived in an installed `stapel_*` wheel |
+
+Two deliberate asymmetries, both about keeping the check un-mutable:
+
+- **views that never wrote a `permission_classes` line are not reported.** They
+  inherit the project default; charging each of them for a decision made in
+  `settings.py` is a flood, so W001 reports the decision once where it lives.
+- **level follows who can act.** E-level findings become deploy blockers via
+  `stapel_preflight`; blocking a deploy on a file that lives in someone else's
+  wheel is how a whole tag ends up in `SILENCED_SYSTEM_CHECKS`. Library-side
+  silence is the same finding at W-level (W002 names the package), to be fixed
+  at the modules' release cadence.
+
+Does **not** catch: authorization done inside the view body (report it with
+`ANONYMOUS_DENIED`, which also makes it discoverable from the class header);
+whether an `ANONYMOUS_ALLOWED` view is *correct* (it is a declaration of
+intent, not a proof); non-DRF views gated by `login_required`, which has the
+same guest ambiguity and is invisible here.
+
+**Shared surface survey (`django/urlsurvey.py`).** Every check that reasons
+about the *actual HTTP surface* — §37 mount containment and this one — walks
+the resolver through the same primitives (`iter_surface()`, `iter_url_patterns`,
+`path_segments`, `callback_owner_app_label`). Written once they are a
+mechanism; the `stapel_mounts` private names re-export from there unchanged.
+
 ## Anti-patterns
 
 - **Do not import other stapel modules from core** (or from each other).

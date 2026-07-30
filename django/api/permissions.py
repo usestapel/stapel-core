@@ -6,6 +6,34 @@ These permissions enforce staff-only access to DRF API endpoints and Swagger doc
 
 from rest_framework import permissions
 
+#: Attribute a view sets to state, in its own source, what an *anonymous*
+#: (guest) session may do with it — the declaration the ``stapel_adoption``
+#: E001 check asks for when the ``AUTH_ANONYMOUS`` axis is on and the view's
+#: only gate is a bare ``IsAuthenticated`` (which a guest session passes).
+#:
+#: Deliberately a ``stapel_``-prefixed name with a *closed* value vocabulary:
+#: nothing in Django or DRF carries it, so it cannot appear by accident, and a
+#: typo in the value is reported (E002) instead of silently reading as
+#: "declared".
+ANONYMOUS_DECLARATION_ATTR = "stapel_anonymous_access"
+
+#: ``stapel_anonymous_access = ANONYMOUS_ALLOWED`` — guests are *meant* to
+#: reach this view (a guest joining a call, a public read). The check goes
+#: quiet; the intent is now readable in the view instead of implied by the
+#: absence of a permission class.
+ANONYMOUS_ALLOWED = "anonymous-allowed"
+
+#: ``stapel_anonymous_access = ANONYMOUS_DENIED`` — guests must not reach this
+#: view, and the gate that keeps them out lives elsewhere than
+#: ``permission_classes`` (a service-layer check, an object permission, a
+#: mixin). Prefer adding :class:`IsNotAnonymousUser` when the gate *can* be a
+#: permission class: the declaration records an intent, the permission class
+#: enforces it.
+ANONYMOUS_DENIED = "anonymous-denied"
+
+#: The only two admissible values of :data:`ANONYMOUS_DECLARATION_ATTR`.
+ANONYMOUS_DECLARATIONS = (ANONYMOUS_ALLOWED, ANONYMOUS_DENIED)
+
 
 class IsStaffUser(permissions.BasePermission):
     """

@@ -178,27 +178,16 @@ def check_module_surface_containment(app_configs=None, **kwargs):
     Stapel app and are silently skipped — a project is free in its own
     paths, this check is only about the modules it installed.
     """
-    from django.conf import settings
-
-    if not getattr(settings, "ROOT_URLCONF", ""):
-        return []  # standalone package harness — nothing to resolve against
-
-    from django.urls import get_resolver
-
-    from stapel_core.django.mounts import (
-        _callback_owner_app_label,
-        _iter_url_patterns,
-        _path_segments,
-    )
+    from stapel_core.django.urlsurvey import iter_surface, path_segments
 
     findings = []
     seen = set()
-    resolver = get_resolver()
-    for full_path, pattern in _iter_url_patterns(resolver.url_patterns):
-        app_label = _callback_owner_app_label(pattern.callback)
+    for entry in iter_surface():
+        app_label = entry.app_label
         if app_label is None:
             continue
-        if any(seg in _CANONICAL_MODULE_SEGMENTS for seg in _path_segments(full_path)):
+        full_path = entry.full_path
+        if any(seg in _CANONICAL_MODULE_SEGMENTS for seg in path_segments(full_path)):
             continue
         key = (app_label, full_path)
         if key in seen:
