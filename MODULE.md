@@ -281,14 +281,23 @@ XAUTOCLAIM once idle past the claim threshold. Consumers subclass
 | `DEFAULT_MAX_AGE` | `300` | Grant lifetime (s) when a view doesn't pass `max_age` |
 | `CHALLENGE_TTL` | `600` | Challenge lifetime (s) |
 | `MAX_ATTEMPTS` | `5` | Failed attempts before a challenge is invalidated |
-| `EXTRA_FACTORS` | `[]` | Dotted paths of custom factor classes, applied by `load_configured_factors()` |
+| `EXTRA_FACTORS` | `[]` | Dotted paths of custom factor classes, applied at boot by `CommonDjangoConfig.ready()` |
 | `DEFAULT_LEVEL` | `"strict"` | Level used when a view passes `level=None`: `strict` \| `default_on` \| `opt_in` |
 | `POLICY_CACHE_TTL` | `60` | Cache TTL (s) for the resolved per-user policy |
 
 Custom factors: subclass `VerificationFactor` (define `id`, implement
 `verify`, optionally `available_for` / `initiate`) and call
 `register_factor(instance_or_dotted_path)` from an `AppConfig.ready()`, or
-list the dotted path in `EXTRA_FACTORS`. `@requires_verification(scope=...,
+list the dotted path in `EXTRA_FACTORS` — **declaring it is enough**:
+`stapel_core.django.apps.CommonDjangoConfig.ready()` calls
+`load_configured_factors()` at boot (0.16.1; before that the loader had no
+caller anywhere in the framework and the setting was inert). Entries are
+registered *pinned*: a factor id the host claims in `EXTRA_FACTORS` beats any
+library registration of the same id whatever the `INSTALLED_APPS` order is, so
+overriding e.g. stapel-auth's `otp_phone` no longer depends on where the
+host's app sits in the list. A dotted path that cannot be imported (or is not
+a valid factor) raises `ImproperlyConfigured` at boot.
+`@requires_verification(scope=...,
 factors=..., max_age=..., level=...)` protects any DRF view method; the
 per-user policy for `default_on` / `opt_in` levels is owned by the auth
 service and resolved via the `auth.verification.policy` comm Function —

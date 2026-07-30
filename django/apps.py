@@ -75,6 +75,18 @@ class CommonDjangoConfig(AppConfig):
         # modular, half isn't" design gap (cdn-modularity.md §0.1/§0.5).
         from stapel_core.django.cdn import checks as _cdn_checks  # noqa: F401
 
+        # Verification factors declared by the host in
+        # STAPEL_VERIFICATION["EXTRA_FACTORS"] (#145). MODULE.md documents the
+        # setting as THE way a host substitutes or adds a factor, but until
+        # 0.16.1 nothing in the framework applied it — declaring it did
+        # nothing, silently, and a product had to call the loader from its own
+        # app layer to make a security fix real. Registered pinned, so the
+        # host's id wins over the library factor stapel-auth registers later,
+        # whatever the INSTALLED_APPS order is.
+        from stapel_core.verification.factors import load_configured_factors
+
+        load_configured_factors()
+
         # Admin visibility (admin-suite AS-3): re-register contrib service
         # tables (auth.Group, sessions.Session) under declaration-aware admins
         # and apply STAPEL_ADMIN["MODELS"] overrides (None = unregister,

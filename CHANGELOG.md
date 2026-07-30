@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-07-30
+
+### Fixed
+- **`STAPEL_VERIFICATION["EXTRA_FACTORS"]` was a documented escape hatch with
+  no caller (#145).** `load_configured_factors()` is what MODULE.md names as
+  the way a host substitutes or adds a verification factor — and nothing in
+  stapel-core or stapel-auth ever called it. A host that followed the
+  documentation to the letter got a decorative setting, silently: no factor
+  registered, no check, no warning. A product hit this on a real security fix
+  (a phone factor that sends nothing had to be demoted to `strength="weak"`,
+  otherwise `strong_factors()` was non-empty and 2FA enrolment was waived) and
+  had to call the loader from its own `AppConfig.ready()` to make the fix real.
+  `CommonDjangoConfig.ready()` now calls it, so the declaration is the whole
+  wiring — the documentation became true instead of being corrected downwards.
+- **The override is now order-independent.** `EXTRA_FACTORS` entries are
+  registered *pinned*: the registry keeps the host's factor for that id and
+  ignores a later library registration of the same id. Before, "last
+  registration wins" meant the overriding app had to be listed **below**
+  `stapel_auth` in `INSTALLED_APPS`, and moving it up made the override
+  decorative again with no signal. An app that already calls the loader itself
+  (the pre-0.16.1 workaround) keeps working and simply re-pins the same class.
+- An `EXTRA_FACTORS` dotted path that cannot be imported, or does not yield a
+  valid factor, now raises `ImproperlyConfigured` at boot instead of being
+  skipped — a broken escape hatch is louder than a silent one.
+- `FactorRegistry.register(factor, *, pin=False)` and
+  `register_factor(factor, *, pin=False)` gained the keyword; `pinned_names()`
+  exposes the host-claimed ids for introspection. Existing call sites are
+  unaffected.
+
+### Notes
+- Audit of the same defect class across all 28 stapel repos (public,
+  documented host-substitution setting whose applying loader is never called
+  inside its own shipping unit): this was the **only** truly dead one. The one
+  neighbour worth naming is `GDPR_PROVIDERS` — the registry lives in
+  stapel-core but the only code that applies the setting is
+  `stapel_gdpr/apps.py`, so declaring it without `stapel_gdpr` in
+  `INSTALLED_APPS` is inert in the same shape, one repo removed (and it is a
+  flat setting outside any `AppSettings` namespace, hence invisible to the
+  CONFIG.MD tooling). Not fixed here.
+
 ## [0.16.0] — 2026-07-30
 
 ### Added

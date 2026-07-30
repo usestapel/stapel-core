@@ -50,9 +50,21 @@ class VerificationFactor(ABC):
 class FactorRegistry:
     def __init__(self) -> None:
         self._factors: dict[str, VerificationFactor] = {}
+        #: ids claimed by the host project through EXTRA_FACTORS — a library
+        #: registration for the same id loses, whatever the app order is.
+        self._pinned: set[str] = set()
         self._lock = threading.Lock()
 
-    def register(self, factor: VerificationFactor) -> None:
+    def register(self, factor: VerificationFactor, *, pin: bool = False) -> None:
+        """Put *factor* in the registry under its ``id``.
+
+        ``pin=True`` marks the id as **host-owned**: later library
+        registrations of the same id are ignored, so the host's override
+        does not depend on where its app sits in ``INSTALLED_APPS``.
+        Only :func:`load_configured_factors` (i.e. an explicit
+        ``STAPEL_VERIFICATION['EXTRA_FACTORS']`` declaration) pins; a pinned
+        id can still be re-pinned (last host declaration wins).
+        """
         if not factor.id:
             raise ValueError("factor must define a non-empty id")
         if factor.strength not in FACTOR_STRENGTHS:
@@ -61,7 +73,11 @@ class FactorRegistry:
                 f"{factor.strength!r} (expected one of {FACTOR_STRENGTHS})"
             )
         with self._lock:
+            if factor.id in self._pinned and not pin:
+                return
             self._factors[factor.id] = factor
+            if pin:
+                self._pinned.add(factor.id)
 
     def get(self, factor_id: str) -> VerificationFactor:
         try:
@@ -105,18 +121,23 @@ class FactorRegistry:
         """Tests only."""
         with self._lock:
             self._factors.clear()
+            self._pinned.clear()
+
+    def pinned_names(self) -> list[str]:
+        """Ids claimed by the host through ``EXTRA_FACTORS`` (introspection)."""
+        return sorted(self._pinned)
 
 
 factor_registry = FactorRegistry()
 
 
-def register_factor(factor: VerificationFactor | str) -> None:
+def register_factor(factor: VerificationFactor | str, *, pin: bool = False) -> None:
     """Register a factor instance or a dotted path to a factor class."""
     if isinstance(factor, str):
         from django.utils.module_loading import import_string
 
         factor = import_string(factor)()
-    factor_registry.register(factor)
+    factor_registry.register(factor, pin=pin)
 
 
 def strong_factors(user) -> list[str]:
@@ -130,11 +151,37 @@ def strong_factors(user) -> list[str]:
 
 
 def load_configured_factors() -> None:
-    """Register factors listed in STAPEL_VERIFICATION['EXTRA_FACTORS']."""
+    """Register factors listed in ``STAPEL_VERIFICATION['EXTRA_FACTORS']``.
+
+    Called by ``stapel_core.django.apps.CommonDjangoConfig.ready()`` — the
+    host only has to *declare* the dotted path, exactly as MODULE.md
+    promises. (Before 0.16.1 the function had no caller anywhere in the
+    framework, so a host that followed the documentation to the letter got
+    a decorative setting and no warning; meettoday #124 had to call this
+    loader from its own app layer to make a security fix real.)
+
+    Order-independent: entries are registered *pinned*, so a factor id the
+    host claims here beats any later library registration of the same id
+    regardless of ``INSTALLED_APPS`` order — an app that already calls this
+    loader itself (below the library, the pre-0.16.1 workaround) keeps
+    working and simply re-pins the same class.
+
+    A dotted path that cannot be imported or is not a valid factor raises
+    ``ImproperlyConfigured`` at boot: a broken escape hatch is louder than
+    a silent one.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+
     from .conf import verification_settings
 
     for dotted in verification_settings.EXTRA_FACTORS or []:
-        register_factor(dotted)
+        try:
+            register_factor(dotted, pin=True)
+        except Exception as exc:  # ImportError, ValueError, TypeError...
+            raise ImproperlyConfigured(
+                f"STAPEL_VERIFICATION['EXTRA_FACTORS'] entry {dotted!r} could "
+                f"not be registered: {exc}"
+            ) from exc
 
 
 __all__: list[str] = [
