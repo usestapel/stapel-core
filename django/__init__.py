@@ -22,6 +22,7 @@ from .api.pagination import (
     UpdatedAtAnchorPagination,
 )
 from .cdn.fields import CdnImageField, CdnImageListField
+from .fieldspec import FieldSpec, FieldSpecError
 from .jwt.middleware import JWTAuthMiddleware
 from .jwt.utils import (
     get_admin_logout_urlpattern,
@@ -47,6 +48,9 @@ __all__ = [
     "register_metrics_exporter",
     "CdnImageField",
     "CdnImageListField",
+    # Copy-seam field partition
+    "FieldSpec",
+    "FieldSpecError",
     # Pagination
     "AnchorPagination",
     "AnchorPaginationSerializer",

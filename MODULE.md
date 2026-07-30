@@ -876,6 +876,38 @@ when the save is nested in a long outer `transaction.atomic` the mutex
 releases before the outer COMMIT — multi-threaded writers there should use
 PostgreSQL or SQLite `"transaction_mode": "IMMEDIATE"`.
 
+### Copy-seam field partition — `FieldSpec` (`django/fieldspec.py`)
+
+For a seam that materializes one row from another (series master →
+occurrence, template → instance, draft → published). Declare on the model
+which side of the seam every field falls on:
+
+```python
+FIELD_SPEC = FieldSpec(
+    copy=("access_level", "admit_required", "pin_code"),   # carried verbatim
+    recompute=("id", "code", "title", "created_by"),       # derived by the seam
+    never=("created_at", "started_at"),                    # left at the default
+)
+```
+
+`FIELD_SPEC.values(source)` builds the `copy` half as a dict (drop it into
+`objects.create(...)` / `get_or_create(defaults=...)`) and validates the
+partition first: every concrete field must appear in **exactly one** list, or
+`FieldSpecError` names the offenders — unassigned fields, names that are not
+fields, and names in two lists. `FIELD_SPEC.validate(Model)` is the same check
+for a test.
+
+Why: a hand-written "fields to carry" list is right exactly once, and the next
+field added to the model is silently not carried. In a real product this lost
+two of four settings fields on a meeting room, and both losses inverted the
+host's intent (an "open" series slammed the door on the first join; a
+PIN-protected series materialized rooms with no PIN). Adding a field now reds
+until the author says which of the three it is.
+
+**Boundary:** this enforces that a decision was made, not that it was right —
+a field wrongly classified `never` passes green. What it removes is the field
+nobody ever classified.
+
 ### Signals (`signals.py`)
 
 In-process seams for host projects (analytics, cache warm-up,

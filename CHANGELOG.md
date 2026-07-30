@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-07-30
+
+### Added
+- **`FieldSpec` (`stapel_core.django.fieldspec`) — a copy seam must classify
+  every field of its model (#133).** A seam that materializes one row from
+  another (recurring series master → occurrence, template → instance, draft →
+  published) always begins as a hand-written list of fields to carry over.
+  That list is correct exactly once: the next field added to the model is
+  silently not carried, and nothing says so. In a real product this dropped
+  two of four settings fields from a meeting room, and both losses inverted
+  the host's declared intent — an "open" series slammed the door on the first
+  join, and a PIN-protected series materialized rooms with no PIN. Found by
+  users, not by tests.
+- The declaration lives on the model, next to the fields:
+  `FieldSpec(copy=(...), recompute=(...), never=(...))`. `spec.values(source)`
+  builds the `copy` half as a dict and validates first; `spec.validate(Model)`
+  is the same check for a test. Every concrete field must land in **exactly
+  one** list — `FieldSpecError` names unassigned fields, declared names that
+  are not fields (a rename left behind), and names in two lists. "Forgot"
+  becomes "must decide".
+- Deliberately small, and honest about its limit: it enforces that a decision
+  was made, **not that it was right**. A field wrongly classified `never`
+  passes green. What it removes is the field nobody ever classified — the case
+  that actually leaked.
+
 ## [0.16.1] — 2026-07-30
 
 ### Fixed
