@@ -1,0 +1,147 @@
+{
+  "module": "stapel-core",
+  "version": "0.17.0",
+  "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
+  "axes": [],
+  "extension_points": [
+    {
+      "name": "STAPEL_VERIFICATION[\"EXTRA_FACTORS\"]",
+      "kind": "dotted_path_list",
+      "summary": "Register host-owned verification factors (subclass VerificationFactor) by dotted path — declaring is enough, CommonDjangoConfig.ready() calls load_configured_factors() at boot and pins the host's id over any library registration of the same name."
+    },
+    {
+      "name": "AUTH_USER_MODEL",
+      "kind": "swappable_model",
+      "summary": "Standard Django user swap — subclass AbstractStapelUser; core itself only ever goes through get_user_model()."
+    },
+    {
+      "name": "STAPEL_ADMIN[\"NAV_LINKS\"]",
+      "kind": "merge_registry",
+      "summary": "Two-channel admin/Swagger navigation registry: a module registers its dashboard in AppConfig.ready() via register_nav_link(), the project adds/patches/removes via the setting (partial dict patches, None removes). Sections are fixed by the mechanism, contents are policy."
+    },
+    {
+      "name": "STAPEL_SERVICES",
+      "kind": "deploy_registry",
+      "summary": "The sibling services of this deployment (env-JSON or setting), seeded by stapel-create-project and appended by stapel-new-service; a monolith leaves it unset and one implicit service is derived."
+    },
+    {
+      "name": "STAPEL_MOUNTS",
+      "kind": "url_registry",
+      "summary": "Where each local/external mount lives; LOGIN_URL and friends derive from it lazily, so a module never emits an absolute URL path and works at the root, under a service prefix and in a monolith alike."
+    },
+    {
+      "name": "STAPEL_COMM",
+      "kind": "transport_map",
+      "summary": "Per-name transport for Actions/Functions/Tasks (in-process, bus, HTTP) — the seam that makes 'monolith or microservices' deployment configuration rather than code."
+    },
+    {
+      "name": "STAPEL_BUS_BACKEND",
+      "kind": "dotted_path",
+      "summary": "Bus backend behind publish()/get_bus(): in-memory, Kafka, NATS JetStream or a per-topic router."
+    },
+    {
+      "name": "STAPEL_NETINTEL[\"PROVIDER\"]",
+      "kind": "dotted_path",
+      "summary": "IP-intelligence provider behind classify_ip()/country_of(): MaxMind mmdb, generic HTTP JSON, or null. Cached and fail-open."
+    },
+    {
+      "name": "STAPEL_EVENTSTORE[\"BACKEND\"]",
+      "kind": "dotted_path",
+      "summary": "Append-only stream backend behind append/query/rollup/purge — Postgres with time partitions by default, ClickHouse the documented scale-out point."
+    },
+    {
+      "name": "STAPEL_MEDIA_BACKEND",
+      "kind": "enum",
+      "summary": "media.describe() source: the zero-infrastructure PIL/ImageField path, or the stapel-cdn service via the cdn.describe comm Function."
+    },
+    {
+      "name": "STAPEL_CAPTCHA",
+      "kind": "dotted_path",
+      "summary": "CaptchaVerifier backend (turnstile / recaptcha / hcaptcha / noop) plus the tiered challenge policy driven by the client's network class."
+    },
+    {
+      "name": "STAPEL_SECRETS",
+      "kind": "dotted_path",
+      "summary": "Secret provider; a missing production secret is a loud boot failure (SecretUnavailable), never a silent empty string."
+    },
+    {
+      "name": "STAPEL_GATEWAY",
+      "kind": "merge_registry",
+      "summary": "Deny-by-default verb registry of the privilege gateway (name + JSON schema + policy + handler) — capability without credentials."
+    },
+    {
+      "name": "gdpr_registry",
+      "kind": "in_process_registry",
+      "summary": "GDPRProvider implementations a module registers for export/erasure; microservices mode consumes the same providers through GDPRServiceConsumerCommand."
+    }
+  ],
+  "surface": [
+    {
+      "name": "admin/base_site.html",
+      "kind": "template",
+      "path": "django/templates/admin/base_site.html",
+      "intent": "The admin shell that renders the cross-service navigation: STAPEL_SERVICES, the NAV_LINKS sections and the introspection-gated Swagger link. A project that ships its own admin/base_site.html instead of extending this one silently loses all three and gets no error — override blocks, do not replace the file."
+    },
+    {
+      "name": "IsNotAnonymousUser",
+      "kind": "permission_class",
+      "path": "stapel_core.django.api.permissions.IsNotAnonymousUser",
+      "intent": "The write-gate for any endpoint that needs a REAL account: rejects the anonymous/guest sessions that stapel-auth's AUTH_ANONYMOUS axis issues. Reach for this, not DRF's IsAuthenticated, on anything that creates or owns user content — an anonymous session IS authenticated and sails straight through IsAuthenticated.",
+      "instead_of": [
+        "rest_framework.permissions.IsAuthenticated"
+      ]
+    },
+    {
+      "name": "IsServiceRequest",
+      "kind": "permission_class",
+      "path": "stapel_core.django.api.permissions.IsServiceRequest",
+      "intent": "Marks an endpoint as internal service-to-service only: passes exactly when ServiceAPIKeyMiddleware recognised the X-API-KEY. Reach for it instead of comparing the header in the view — the middleware already resolved it, and a second reading of a secret is a second place to get it wrong."
+    },
+    {
+      "name": "IsStaffUser",
+      "kind": "permission_class",
+      "path": "stapel_core.django.api.permissions.IsStaffUser",
+      "intent": "Staff-or-superuser gate — the one to put on the browsable API, Swagger and any back-office endpoint; also the intended DEFAULT_PERMISSION_CLASSES for a service whose API is internal."
+    },
+    {
+      "name": "IsSuperUser",
+      "kind": "permission_class",
+      "path": "stapel_core.django.api.permissions.IsSuperUser",
+      "intent": "Superuser-only gate for destructive or global-configuration endpoints, where 'staff' is too wide."
+    },
+    {
+      "name": "ReadOnlyOrStaff",
+      "kind": "permission_class",
+      "path": "stapel_core.django.api.permissions.ReadOnlyOrStaff",
+      "intent": "Public catalogue shape: anyone (including anonymous) may read, only staff may write. Use it instead of hand-rolling a SAFE_METHODS branch inside a viewset's get_permissions().",
+      "instead_of": [
+        "rest_framework.permissions.IsAuthenticatedOrReadOnly"
+      ]
+    },
+    {
+      "name": "ReadOnlyOrSuperUser",
+      "kind": "permission_class",
+      "path": "stapel_core.django.api.permissions.ReadOnlyOrSuperUser",
+      "intent": "Same public-read shape as ReadOnlyOrStaff, tightened so only a superuser may write — for reference data a staff member must not edit."
+    },
+    {
+      "name": "load_configured_factors",
+      "kind": "factory",
+      "path": "stapel_core.verification.factors.load_configured_factors",
+      "intent": "Boot-time loader that turns STAPEL_VERIFICATION['EXTRA_FACTORS'] from a declaration into registrations (pinned, so host ids beat library ones whatever the INSTALLED_APPS order). CommonDjangoConfig.ready() calls it since 0.16.1 — a host app must NOT call it from its own AppConfig any more; before 0.16.1 it had no caller anywhere in the framework and the setting was decorative, which is exactly the failure this whole section exists to make impossible."
+    },
+    {
+      "name": "register_factor",
+      "kind": "factory",
+      "path": "stapel_core.verification.factors.register_factor",
+      "intent": "Register a step-up verification factor (instance or dotted path) from an AppConfig.ready() — the fork-free way for a library or a host to add OTP/TOTP/passkey-shaped proof of presence. A host that only has a dotted path should use the EXTRA_FACTORS setting instead and let the boot loader do this."
+    },
+    {
+      "name": "strong_factors",
+      "kind": "predicate",
+      "path": "stapel_core.verification.factors.strong_factors",
+      "intent": "The strict 'does this user really have 2FA' predicate — ids of STRONG factors the user can actually complete. Any require_mfa policy or mfa_status endpoint must branch on this and not on 'has any factor': an email code alone is not a second factor, it only proves reach to the channel that resets the password."
+    }
+  ],
+  "requires": []
+}

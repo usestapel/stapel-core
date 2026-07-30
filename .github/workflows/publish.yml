@@ -35,7 +35,7 @@ jobs:
       - name: Install test dependencies
         # .[dev] brings pytest/pytest-cov + celery (the optional executor the
         # tests exercise); phonenumbers is a declared runtime dependency now.
-        run: pip install ".[dev]" pytest-django
+        run: pip install ".[dev]" pytest-django "stapel-tools>=0.22.0,<1"
 
       - name: Tests with coverage
         run: |

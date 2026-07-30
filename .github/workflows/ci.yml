@@ -46,7 +46,10 @@ jobs:
       - name: Install test dependencies
         # .[dev] brings pytest/pytest-cov + celery (the optional executor the
         # tests exercise); phonenumbers is a declared runtime dependency now.
-        run: pip install ".[dev]" pytest-django
+        # stapel-tools (dependency-free) carries the capabilities emitter that
+        # tests/test_contract.py drift-gates — without it that gate would skip,
+        # and a silently skipped gate is how docs/capabilities.json rots.
+        run: pip install ".[dev]" pytest-django "stapel-tools>=0.22.0,<1"
 
       - name: Tests with coverage
         run: |

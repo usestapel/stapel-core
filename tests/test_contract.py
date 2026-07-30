@@ -1,0 +1,130 @@
+"""Drift gate for ``docs/capabilities.json`` — the core's contract document.
+
+stapel-core was the fleet's only significant library with no
+``docs/capabilities.json``. The reason was structural, not neglectful: the
+format described the CONFIGURATION surface (``axes``) and the SUBSTITUTION
+surface (``extension_points``), and the core has no feature axes and no OpenAPI
+operations — it had nothing to say in the format. What it does have is the
+USAGE surface: the permission classes, factories, predicates and templates a
+product is supposed to call. That is the ``surface`` section
+(discoverability-design.md §1.2–§1.3, :mod:`stapel_tools.surface`).
+
+Two things are gated here, and the second one is the point:
+
+1. the committed document matches a fresh emission (``make contract``);
+2. every symbol the declared roots select carries a curated ``intent`` — the
+   emitter fails LOUDLY otherwise, so this test cannot pass while an export
+   sits there unexplained. A library that exports a mechanism it cannot
+   describe has just built the next mechanism nobody adopts; that is exactly
+   how six of them shipped unused in one night.
+"""
+import json
+from pathlib import Path
+
+import pytest
+
+stapel_tools = pytest.importorskip(
+    "stapel_tools",
+    reason="stapel-tools is not installed — the capabilities drift gate needs "
+    "the emitter. CI installs it; locally use the workspace venv or "
+    "`pip install stapel-tools`.",
+)
+
+from stapel_tools.surface import (  # noqa: E402
+    KINDS,
+    _stable_json,
+    build_static_capabilities,
+    load_meta,
+)
+
+REPO = Path(__file__).resolve().parent.parent
+COMMITTED = REPO / "docs" / "capabilities.json"
+
+
+@pytest.fixture(scope="module")
+def emitted() -> dict:
+    try:
+        return build_static_capabilities(REPO, load_meta(REPO))
+    except SystemExit as exc:  # the LOUD rule — report it, don't bury it
+        pytest.fail(f"capabilities emission refused: {exc}", pytrace=False)
+
+
+def test_capabilities_committed():
+    assert COMMITTED.is_file(), (
+        "docs/capabilities.json is missing — run `make contract` and commit it"
+    )
+
+
+def test_no_drift(emitted):
+    assert COMMITTED.read_text() == _stable_json(emitted), (
+        "docs/capabilities.json is stale — run `make contract` and commit it"
+    )
+
+
+def test_version_matches_pyproject(emitted):
+    """The document carries the module version; a bump without a re-emission is
+    green lint, a green local suite and one red matrix branch in CI."""
+    import tomllib
+
+    pyproject = tomllib.loads((REPO / "pyproject.toml").read_text())
+    committed = json.loads(COMMITTED.read_text())
+    assert committed["version"] == pyproject["project"]["version"]
+    assert emitted["version"] == pyproject["project"]["version"]
+
+
+def test_no_operations_total_without_a_schema(emitted):
+    """The core serves no catalogued HTTP surface, and the document says so by
+    OMITTING the counter rather than claiming a zero — an absent field is a
+    limit of the format, a zero would be a claim about the module."""
+    assert not (REPO / "docs" / "schema.json").exists()
+    assert "operations_total" not in emitted
+
+
+def test_every_surface_entry_is_explained_and_typed(emitted):
+    surface = emitted["surface"]
+    assert surface, "the core's whole reason to have this document is `surface`"
+    for entry in surface:
+        assert entry["kind"] in KINDS, entry
+        assert entry["intent"].strip(), entry
+        assert entry["path"], entry
+
+
+def test_the_six_permission_classes_are_indexed(emitted):
+    """`IsNotAnonymousUser` and its five neighbours were indexed NOWHERE — not
+    in JSON, not in YAML, not even in prose — which is how a product ended up
+    writing its own gate next to a ready one."""
+    names = {e["name"] for e in emitted["surface"] if e["kind"] == "permission_class"}
+    assert names == {
+        "IsStaffUser",
+        "IsSuperUser",
+        "ReadOnlyOrSuperUser",
+        "ReadOnlyOrStaff",
+        "IsServiceRequest",
+        "IsNotAnonymousUser",
+    }
+
+
+def test_is_not_anonymous_user_declares_what_it_displaces():
+    """`instead_of` is the field the duplicate-of-surface check will run on:
+    it turns "the product reached for DRF's IsAuthenticated" from a code review
+    remark into something a machine can name."""
+    committed = json.loads(COMMITTED.read_text())
+    entry = next(
+        e for e in committed["surface"] if e["name"] == "IsNotAnonymousUser"
+    )
+    assert "rest_framework.permissions.IsAuthenticated" in entry["instead_of"]
+
+
+def test_load_configured_factors_is_surface_not_an_extension_point(emitted):
+    """The seam and the call are different objects. What a host may PLUG IN is
+    ``STAPEL_VERIFICATION['EXTRA_FACTORS']`` — an extension point. What somebody
+    has to CALL for that setting to mean anything is ``load_configured_factors``
+    — usage surface. Before 0.16.1 the seam was declared and the loader had no
+    caller anywhere in the framework: the extension point was documented and
+    inert. Keeping both, in their own sections, is what makes that state
+    describable."""
+    surface = {e["name"] for e in emitted["surface"]}
+    eps = {e["name"] for e in emitted["extension_points"]}
+    assert "load_configured_factors" in surface
+    assert "STAPEL_VERIFICATION[\"EXTRA_FACTORS\"]" in eps
+    assert "load_configured_factors" not in eps

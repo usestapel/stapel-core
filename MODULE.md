@@ -78,6 +78,32 @@ points below; a generic fix or gap belongs **upstream** (see
 All public root exports are lazy (PEP 562, see `__init__.py`); importing
 `stapel_core` never touches Django until a Django-dependent attribute is used.
 
+### The contract document — `docs/capabilities.json` (`make contract`)
+
+The machine-readable answer to *"does stapel already have a mechanism for X?"*.
+Until 0.17 this repository — the most reused one in the fleet — was the only
+significant library with no such document, and the reason was structural, not
+neglectful: the format could describe the **configuration** surface (`axes`,
+"what can be switched on") and the **substitution** surface
+(`extension_points`, "what can be replaced"), and the core has no feature axes
+and no OpenAPI operations. It had nothing to say in the format.
+
+What the core does have is the **usage** surface — the symbols a product is
+meant to *call* — and that is the third section, `surface`: one entry per
+permission class, factory, predicate and template, each with a curated line
+saying when to reach for it, and (where it applies) `instead_of`, naming the
+outside symbol it displaces. Two rules make it stay true:
+
+- the entry set is **derived** by AST from the `surface_roots` declared in
+  `docs/capabilities.meta.json` — scopes, not symbols, so it cannot be a stale
+  hand-written list;
+- a selected export with **no intent line fails emission**, naming the symbol.
+  A library that exports a mechanism it cannot explain in one line has just
+  built the next mechanism nobody adopts.
+
+Run `make contract` after touching anything under a declared root and commit
+the result; `tests/test_contract.py` is the drift gate.
+
 ## Extension points (fork-free)
 
 ### Settings namespaces (`stapel_core.conf.AppSettings`)
