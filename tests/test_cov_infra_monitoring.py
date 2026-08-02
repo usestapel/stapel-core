@@ -45,8 +45,10 @@ def rf():
 @pytest.fixture(autouse=True)
 def _isolate_exporters():
     saved = list(health_mod._custom_metrics_exporters)
+    saved_deps = list(health_mod._dependency_checks)
     yield
     health_mod._custom_metrics_exporters[:] = saved
+    health_mod._dependency_checks[:] = saved_deps
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +79,117 @@ def test_health_check_degraded_on_db_error(rf, monkeypatch):
     # unknown defaults when settings absent
     assert body["service"] == "unknown"
     assert body["version"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# register_dependency_check (docs/pending/env-address-class-v2.md §3.6) —
+# the "meettoday LiveKit twirp call silently no-op'd in prod" lamp.
+# ---------------------------------------------------------------------------
+
+
+def test_health_check_clean_with_no_registered_dependencies(rf, monkeypatch):
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    resp = health_mod.health_check(rf.get("/api/health/"))
+    assert resp.status_code == 200
+    assert json.loads(resp.content)["status"] == "healthy"
+
+
+def test_health_check_ok_dependency_stays_healthy(rf, monkeypatch):
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    health_mod.register_dependency_check("livekit", lambda: True, critical=False)
+    resp = health_mod.health_check(rf.get("/api/health/"))
+    body = json.loads(resp.content)
+    assert resp.status_code == 200
+    assert body["status"] == "healthy"
+    assert body["checks"]["livekit"] == "ok"
+
+
+def test_health_check_noncritical_dependency_down_degrades_but_stays_200(rf, monkeypatch):
+    """The lamp lights up (status degraded, checks names it) but a monitor
+    that pulls traffic on non-200 never fires — a downed LiveKit must not
+    take the rest of the product with it (v2 §2)."""
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    health_mod.register_dependency_check("livekit", lambda: False, critical=False)
+    resp = health_mod.health_check(rf.get("/api/health/"))
+    body = json.loads(resp.content)
+    assert resp.status_code == 200
+    assert body["status"] == "degraded"
+    assert body["checks"]["livekit"] == "error"
+
+
+def test_health_check_critical_dependency_down_returns_503(rf, monkeypatch):
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    health_mod.register_dependency_check("primary_store", lambda: False, critical=True)
+    resp = health_mod.health_check(rf.get("/api/health/"))
+    body = json.loads(resp.content)
+    assert resp.status_code == 503
+    assert body["status"] == "degraded"
+    assert body["checks"]["primary_store"] == "error"
+
+
+def test_health_check_dependency_probe_raising_counts_as_down(rf, monkeypatch):
+    """A probe must never be able to take the endpoint down by raising —
+    same posture as a broken metrics exporter."""
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+
+    def boom():
+        raise RuntimeError("livekit twirp: connection refused")
+
+    health_mod.register_dependency_check("livekit", boom, critical=False)
+    resp = health_mod.health_check(rf.get("/api/health/"))
+    body = json.loads(resp.content)
+    assert resp.status_code == 200
+    assert body["checks"]["livekit"] == "error"
+
+
+def test_register_dependency_check_fix_flips_the_lamp_back_off(rf, monkeypatch):
+    """"Break it -> lamp on; fix it -> lamp off" round-trip, the exact
+    machine-checked outcome the task requires — not two independent asserts,
+    one registration mutated in place between two requests."""
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    reachable = {"ok": False}
+    health_mod.register_dependency_check("livekit", lambda: reachable["ok"], critical=False)
+
+    broken = health_mod.health_check(rf.get("/api/health/"))
+    assert json.loads(broken.content)["checks"]["livekit"] == "error"
+    assert json.loads(broken.content)["status"] == "degraded"
+
+    reachable["ok"] = True
+    fixed = health_mod.health_check(rf.get("/api/health/"))
+    assert json.loads(fixed.content)["checks"]["livekit"] == "ok"
+    assert json.loads(fixed.content)["status"] == "healthy"
+
+
+def test_readiness_probe_ignores_noncritical_dependency(rf, monkeypatch):
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    health_mod.register_dependency_check("livekit", lambda: False, critical=False)
+    resp = health_mod.readiness_probe(rf.get("/api/health/ready/"))
+    assert resp.status_code == 200
+
+
+def test_readiness_probe_503_on_critical_dependency_down(rf, monkeypatch):
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    health_mod.register_dependency_check("primary_store", lambda: False, critical=True)
+    resp = health_mod.readiness_probe(rf.get("/api/health/ready/"))
+    assert resp.status_code == 503
+    assert b"primary_store" in resp.content
+
+
+def test_prometheus_dependency_up_metric(rf, monkeypatch):
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    health_mod.register_dependency_check("livekit", lambda: True, critical=False)
+    health_mod.register_dependency_check("payments", lambda: False, critical=True)
+    with override_settings(SERVICE_NAME="My Service"):
+        resp = health_mod.prometheus_metrics(rf.get("/api/metrics/"))
+    text = resp.content.decode()
+    assert 'stapel_dependency_up{service="my_service",dependency="livekit"} 1' in text
+    assert 'stapel_dependency_up{service="my_service",dependency="payments"} 0' in text
+
+
+def test_prometheus_no_dependency_metric_when_none_registered(rf, monkeypatch):
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    resp = health_mod.prometheus_metrics(rf.get("/api/metrics/"))
+    assert "dependency_up" not in resp.content.decode()
 
 
 # ---------------------------------------------------------------------------

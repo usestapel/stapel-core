@@ -1182,6 +1182,24 @@ mechanism; the `stapel_mounts` private names re-export from there unchanged.
 - **Do not swallow Function failures into fail-open defaults on
   security-relevant paths** (`comm.call` docstring); the verification policy
   module shows the correct fail-safe pattern.
+- **A best-effort `try/except` around a network call is only correct paired
+  with two other things**, never on its own
+  (docs/pending/env-address-class-v2.md §3.6, motivated by meettoday's
+  LiveKit twirp calls — host-kick and room-PIN wrapped every failure in
+  `try/except` + `logger.warning` and then silently did nothing in
+  production for as long as LiveKit was unreachable, with no signal anywhere
+  an operator would look): (a) `logger.error`, not `.warning` — a warning
+  that fires for days in production is invisible by construction, and (b) a
+  `register_dependency_check(name, probe, critical=...)`
+  (`django/monitoring/health.py`, next to `register_metrics_exporter`) on the
+  same probe, so the first failed call lights up `checks{}` on
+  `/api/health/` and `stapel_dependency_up{dependency=...}` on
+  `/api/metrics/` instead of nowhere. `critical=False` (the default) keeps
+  the process at HTTP 200/`degraded` — a downed non-essential dependency must
+  not take the rest of the product's surface down with it (the same blast-
+  radius argument as the nginx upstream gate, §2 of that document);
+  `critical=True` is for a dependency this process cannot serve its purpose
+  without, and flips readiness to 503.
 - **Do not read `getattr(settings, ...)` ad hoc in a stapel package** — expose
   an `AppSettings` namespace so keys, defaults and dotted-path seams stay
   discoverable.
