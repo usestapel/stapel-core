@@ -1,8 +1,11 @@
 # stapel_core
 
-[![CI](https://github.com/usestapel/stapel-core/actions/workflows/ci.yml/badge.svg)](https://github.com/usestapel/stapel-core/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/usestapel/stapel-core/graph/badge.svg)](https://codecov.io/gh/usestapel/stapel-core)
-[![PyPI](https://img.shields.io/pypi/v/stapel-core.svg)](https://pypi.org/project/stapel-core/)
+[![CI](https://img.shields.io/github/actions/workflow/status/usestapel/stapel-core/ci.yml?branch=main&logo=github&label=CI)](https://github.com/usestapel/stapel-core/actions/workflows/ci.yml?query=branch%3Amain)
+[![coverage](https://img.shields.io/codecov/c/github/usestapel/stapel-core?branch=main&logo=codecov&label=coverage)](https://app.codecov.io/gh/usestapel/stapel-core)
+[![pypi](https://img.shields.io/pypi/v/stapel-core?logo=pypi&logoColor=white&label=pypi)](https://pypi.org/project/stapel-core/)
+[![downloads](https://static.pepy.tech/badge/stapel-core/month)](https://pepy.tech/project/stapel-core)
+[![python](https://img.shields.io/pypi/pyversions/stapel-core?logo=python&logoColor=white)](https://pypi.org/project/stapel-core/)
+[![license](https://img.shields.io/github/license/usestapel/stapel-core)](https://github.com/usestapel/stapel-core/blob/main/LICENSE)
 
 Shared Python library for Stapel services. Provides JWT authentication, captcha
 verification, event bus, notifications, and Django utilities used across all
