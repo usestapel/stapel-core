@@ -197,4 +197,4 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*", "py.typed", "notifications/schemas/**/*.json", "CONFIG.MD", "PRESENTERS.MD", "docs/capabilities.json", "docs/flows.json", "docs/errors.json"]
+"stapel_core" = ["migrations/*.py", "django/templates/**/*", "static/**/*", "py.typed", "notifications/schemas/**/*.json", "CONFIG.MD", "PRESENTERS.MD", "docs/capabilities.json", "docs/llms.txt", "docs/flows.json", "docs/errors.json"]
