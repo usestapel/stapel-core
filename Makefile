@@ -21,9 +21,15 @@ migration-lint:
 # Emitted from docs/capabilities.meta.json: the ENTRY SET is derived from the
 # declared surface_roots by AST, never hand-listed, and a selected symbol with
 # no curated intent line fails this target naming the symbol.
+#
+# docs/llms.txt — the fifth contract artifact (badge-canon §3), an agent-sized
+# slice of docs/capabilities.json (stapel_tools.llms_txt). Regenerated in the
+# same target so it can never drift a release behind capabilities.json.
 contract:
 	$(PYTHON) -m stapel_tools.surface .
+	$(PYTHON) -m stapel_tools.llms_txt .
 
 # Drift gate — the authoritative CI form is tests/test_contract.py.
 contract-check:
 	$(PYTHON) -m stapel_tools.surface . --check
+	$(PYTHON) -m stapel_tools.llms_txt . --check

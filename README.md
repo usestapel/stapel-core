@@ -6,6 +6,7 @@
 [![downloads](https://static.pepy.tech/badge/stapel-core/month)](https://pepy.tech/project/stapel-core)
 [![python](https://img.shields.io/pypi/pyversions/stapel-core?logo=python&logoColor=white)](https://pypi.org/project/stapel-core/)
 [![license](https://img.shields.io/github/license/usestapel/stapel-core)](https://github.com/usestapel/stapel-core/blob/main/LICENSE)
+[![llms.txt](https://img.shields.io/badge/llms.txt-blue)](https://github.com/usestapel/stapel-core/blob/main/docs/llms.txt)
 
 Shared Python library for Stapel services. Provides JWT authentication, captcha
 verification, event bus, notifications, and Django utilities used across all

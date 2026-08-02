@@ -36,9 +36,12 @@ from stapel_tools.surface import (  # noqa: E402
     build_static_capabilities,
     load_meta,
 )
+from stapel_tools.llms_txt import load_inputs as load_llms_inputs  # noqa: E402
+from stapel_tools.llms_txt import render as render_llms_txt  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 COMMITTED = REPO / "docs" / "capabilities.json"
+COMMITTED_LLMS_TXT = REPO / "docs" / "llms.txt"
 
 
 @pytest.fixture(scope="module")
@@ -59,6 +62,27 @@ def test_no_drift(emitted):
     assert COMMITTED.read_text() == _stable_json(emitted), (
         "docs/capabilities.json is stale — run `make contract` and commit it"
     )
+
+
+def test_llms_txt_committed():
+    assert COMMITTED_LLMS_TXT.is_file(), (
+        "docs/llms.txt is missing — run `make contract` and commit it"
+    )
+
+
+def test_llms_txt_has_no_drift():
+    """docs/llms.txt (the fifth contract artifact) must match a fresh render of
+    the committed docs/capabilities.json byte for byte."""
+    rendered = render_llms_txt(load_llms_inputs(REPO))
+    assert COMMITTED_LLMS_TXT.read_text() == rendered, (
+        "docs/llms.txt is stale — run `make contract` and commit it"
+    )
+
+
+def test_llms_txt_emission_is_deterministic():
+    a = render_llms_txt(load_llms_inputs(REPO))
+    b = render_llms_txt(load_llms_inputs(REPO))
+    assert a == b
 
 
 def test_version_matches_pyproject(emitted):
