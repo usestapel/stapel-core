@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.17.1] — 2026-08-02
+
+### Added
+- `docs/capabilities.json` — the core's first contract document: a `surface`
+  section cataloguing the permission classes, factories, predicates and
+  templates a product is meant to call instead of rolling its own (#183).
+- `docs/llms.txt` — the fifth contract artifact, an agent-sized slice of
+  `docs/capabilities.json`, wired into `make contract` / `make contract-check`
+  and drift-gated in `tests/test_contract.py` (badge-canon §3).
+- Badge canon in README, classifier 3.14, `migration-lint` enabled in CI.
+
+### Fixed
+- `docs/capabilities.json`, `docs/flows.json`, `docs/errors.json` and
+  `CONFIG.MD` now ship in the wheel via `package-data` (#184); `docs/llms.txt`
+  likewise, so `--from-installed` tooling actually sees all five contract
+  artifacts.
+
 ## [0.17.0] — 2026-07-30
 
 ### Added
