@@ -23,12 +23,22 @@ from pathlib import Path
 
 import pytest
 
-stapel_tools = pytest.importorskip(
-    "stapel_tools",
-    reason="stapel-tools is not installed — the capabilities drift gate needs "
-    "the emitter. CI installs it; locally use the workspace venv or "
-    "`pip install stapel-tools`.",
-)
+try:
+    import stapel_tools  # noqa: F401  (probe: the emitter must be importable)
+except ImportError as exc:  # pragma: no cover - environment failure, not a branch
+    # NOT pytest.importorskip. A drift gate that skips when its emitter is
+    # missing reports `1 skipped`, exits 0, and disappears among a hundred
+    # green tests — making "the tool is absent" indistinguishable from "there
+    # is no drift". Measured across the fleet on 2026-08-03: ten gates behaved
+    # exactly this way, and they only kept working because an earlier CI step
+    # happened to install stapel-tools first. A gate that cannot run has
+    # FAILED; it has not passed.
+    raise RuntimeError(
+        "contract drift gate cannot run: stapel-tools is not importable, and "
+        "it carries the emitter this gate measures drift against. Install it "
+        "(workspace venv, or `pip install stapel-tools`) and re-run. This is a "
+        "hard failure on purpose — a skipped drift gate is silently no gate."
+    ) from exc
 
 from stapel_tools.surface import (  # noqa: E402
     KINDS,

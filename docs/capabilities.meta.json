@@ -1,10 +1,7 @@
 {
   "_comment": "Curated layer of docs/capabilities.json (capability-config.md §2, discoverability-design.md §1.2-§1.3). stapel-core was the fleet's ONLY significant library without a capabilities.json — not out of neglect: the document could describe config axes and OpenAPI operations, and the core has neither, so it had literally nothing to say in the format. The `surface` section is what it does have to say: the symbols a product is meant to CALL. Emit with `make contract`, drift-gated by `make contract-check` / tests/test_contract.py. surface_roots select the symbols; every selected symbol MUST carry an intent line here or emission fails naming it.",
-
   "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
-
   "axes": [],
-
   "extension_points": [
     {
       "name": "STAPEL_VERIFICATION[\"EXTRA_FACTORS\"]",
@@ -77,17 +74,30 @@
       "summary": "GDPRProvider implementations a module registers for export/erasure; microservices mode consumes the same providers through GDPRServiceConsumerCommand."
     }
   ],
-
   "surface_roots": [
-    {"select": "permission_classes", "path": "django/api/permissions.py"},
-    {"select": "functions", "path": "verification/factors.py"},
-    {"select": "templates", "path": "django/templates"}
+    {
+      "select": "permission_classes",
+      "path": "django/api/permissions.py"
+    },
+    {
+      "select": "functions",
+      "path": "verification/factors.py"
+    },
+    {
+      "select": "templates",
+      "path": "django/templates"
+    },
+    {
+      "select": "functions",
+      "path": "django/monitoring/health.py"
+    }
   ],
-
   "surface": {
     "IsNotAnonymousUser": {
       "intent": "The write-gate for any endpoint that needs a REAL account: rejects the anonymous/guest sessions that stapel-auth's AUTH_ANONYMOUS axis issues. Reach for this, not DRF's IsAuthenticated, on anything that creates or owns user content — an anonymous session IS authenticated and sails straight through IsAuthenticated.",
-      "instead_of": ["rest_framework.permissions.IsAuthenticated"]
+      "instead_of": [
+        "rest_framework.permissions.IsAuthenticated"
+      ]
     },
     "IsStaffUser": {
       "intent": "Staff-or-superuser gate — the one to put on the browsable API, Swagger and any back-office endpoint; also the intended DEFAULT_PERMISSION_CLASSES for a service whose API is internal."
@@ -97,7 +107,9 @@
     },
     "ReadOnlyOrStaff": {
       "intent": "Public catalogue shape: anyone (including anonymous) may read, only staff may write. Use it instead of hand-rolling a SAFE_METHODS branch inside a viewset's get_permissions().",
-      "instead_of": ["rest_framework.permissions.IsAuthenticatedOrReadOnly"]
+      "instead_of": [
+        "rest_framework.permissions.IsAuthenticatedOrReadOnly"
+      ]
     },
     "ReadOnlyOrSuperUser": {
       "intent": "Same public-read shape as ReadOnlyOrStaff, tightened so only a superuser may write — for reference data a staff member must not edit."
@@ -119,8 +131,35 @@
     },
     "admin/base_site.html": {
       "intent": "The admin shell that renders the cross-service navigation: STAPEL_SERVICES, the NAV_LINKS sections and the introspection-gated Swagger link. A project that ships its own admin/base_site.html instead of extending this one silently loses all three and gets no error — override blocks, do not replace the file."
+    },
+    "register_dependency_check": {
+      "intent": "Register a probe for an OUTBOUND dependency (LiveKit, an STT provider, a payment gateway) so its state shows up as checks.<name> on /api/health/ and stapel_dependency_up{dependency=\"<name>\"} on /api/metrics/. Reach for this whenever you wrap a network call in a best-effort try/except: the wrapper is fine, the wrapper WITHOUT a registered check is how meettoday's host-kick and room-PIN silently did nothing in production for a day. Canon: swallowed exception + logger.error + register_dependency_check, never the first alone.",
+      "kind": "factory"
+    },
+    "register_metrics_exporter": {
+      "intent": "Contribute additional Prometheus lines to /api/metrics/ from a module or a product, without forking the view. Use it instead of standing up a second metrics endpoint — one scrape target per service is the contract deployments are built against.",
+      "kind": "factory"
+    },
+    "get_health_urls": {
+      "intent": "The urlpatterns for the whole health/metrics family — include() this in a service's root urls.py instead of wiring the four views by hand, so every service in the fleet answers the same paths and a deployment's probes are portable between them.",
+      "kind": "factory"
+    },
+    "health_check": {
+      "intent": "The human/dashboard-facing health view: overall status plus a checks map with one entry per registered dependency. This is the endpoint an uptime monitor should watch — it is where register_dependency_check results become visible.",
+      "kind": "gate_function"
+    },
+    "liveness_probe": {
+      "intent": "Is the process alive at all — deliberately dependency-free, so an orchestrator does NOT restart a healthy container just because an outbound dependency is down. Pair with readiness_probe; do not point a liveness probe at health_check.",
+      "kind": "gate_function"
+    },
+    "readiness_probe": {
+      "intent": "Should this instance receive traffic — checks the dependencies it cannot serve without. This is the one an orchestrator uses to pull an instance out of rotation, as opposed to killing it.",
+      "kind": "gate_function"
+    },
+    "prometheus_metrics": {
+      "intent": "The service's single Prometheus scrape endpoint, including stapel_dependency_up per registered dependency plus whatever register_metrics_exporter contributed. One scrape target per service is the contract; do not stand up a second.",
+      "kind": "gate_function"
     }
   },
-
   "requires": []
 }

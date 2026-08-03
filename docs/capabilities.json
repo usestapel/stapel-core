@@ -1,6 +1,6 @@
 {
   "module": "stapel-core",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
   "axes": [],
   "extension_points": [
@@ -123,6 +123,48 @@
       "kind": "permission_class",
       "path": "stapel_core.django.api.permissions.ReadOnlyOrSuperUser",
       "intent": "Same public-read shape as ReadOnlyOrStaff, tightened so only a superuser may write — for reference data a staff member must not edit."
+    },
+    {
+      "name": "get_health_urls",
+      "kind": "factory",
+      "path": "stapel_core.django.monitoring.health.get_health_urls",
+      "intent": "The urlpatterns for the whole health/metrics family — include() this in a service's root urls.py instead of wiring the four views by hand, so every service in the fleet answers the same paths and a deployment's probes are portable between them."
+    },
+    {
+      "name": "health_check",
+      "kind": "gate_function",
+      "path": "stapel_core.django.monitoring.health.health_check",
+      "intent": "The human/dashboard-facing health view: overall status plus a checks map with one entry per registered dependency. This is the endpoint an uptime monitor should watch — it is where register_dependency_check results become visible."
+    },
+    {
+      "name": "liveness_probe",
+      "kind": "gate_function",
+      "path": "stapel_core.django.monitoring.health.liveness_probe",
+      "intent": "Is the process alive at all — deliberately dependency-free, so an orchestrator does NOT restart a healthy container just because an outbound dependency is down. Pair with readiness_probe; do not point a liveness probe at health_check."
+    },
+    {
+      "name": "prometheus_metrics",
+      "kind": "gate_function",
+      "path": "stapel_core.django.monitoring.health.prometheus_metrics",
+      "intent": "The service's single Prometheus scrape endpoint, including stapel_dependency_up per registered dependency plus whatever register_metrics_exporter contributed. One scrape target per service is the contract; do not stand up a second."
+    },
+    {
+      "name": "readiness_probe",
+      "kind": "gate_function",
+      "path": "stapel_core.django.monitoring.health.readiness_probe",
+      "intent": "Should this instance receive traffic — checks the dependencies it cannot serve without. This is the one an orchestrator uses to pull an instance out of rotation, as opposed to killing it."
+    },
+    {
+      "name": "register_dependency_check",
+      "kind": "factory",
+      "path": "stapel_core.django.monitoring.health.register_dependency_check",
+      "intent": "Register a probe for an OUTBOUND dependency (LiveKit, an STT provider, a payment gateway) so its state shows up as checks.<name> on /api/health/ and stapel_dependency_up{dependency=\"<name>\"} on /api/metrics/. Reach for this whenever you wrap a network call in a best-effort try/except: the wrapper is fine, the wrapper WITHOUT a registered check is how meettoday's host-kick and room-PIN silently did nothing in production for a day. Canon: swallowed exception + logger.error + register_dependency_check, never the first alone."
+    },
+    {
+      "name": "register_metrics_exporter",
+      "kind": "factory",
+      "path": "stapel_core.django.monitoring.health.register_metrics_exporter",
+      "intent": "Contribute additional Prometheus lines to /api/metrics/ from a module or a product, without forking the view. Use it instead of standing up a second metrics endpoint — one scrape target per service is the contract deployments are built against."
     },
     {
       "name": "load_configured_factors",

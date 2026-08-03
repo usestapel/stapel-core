@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-08-03
+
+### Added
+- `register_dependency_check(name, probe, *, critical=False)` — the outbound
+  dependency lamp, next to the existing `register_metrics_exporter`. A module
+  or a product registers a cheap probe for an outbound dependency; the first
+  failed call shows up as `checks.<name>` on the health endpoint and
+  `stapel_dependency_up{dependency="<name>"}` on the metrics endpoint.
+
+  Motivated by a production incident (`docs/pending/env-address-class-v2.md`
+  §3.6): meettoday's host-kick and room-PIN writes both go through twirp calls
+  wrapped in best-effort `try/except`, so an unreachable LiveKit meant those
+  two features silently did nothing — for a day, with nothing anywhere saying
+  so. Best-effort is a legitimate pattern; best-effort *without a lamp* is how
+  a broken dependency becomes invisible. The accompanying canon: a
+  swallowed exception is allowed only paired with `logger.error` and a
+  registered check.
+
+- `register_dependency_check` and the pre-existing `register_metrics_exporter`,
+  plus the four health/metrics views and `get_health_urls`, are now declared in
+  the `surface` catalogue — so an agent asking "does the fleet already have a
+  way to signal a broken outbound dependency?" gets an answer. Shipping the
+  registry without cataloguing it would have repeated the exact defect it was
+  built to fix.
+
+### Changed
+- `tests/test_contract.py` no longer uses `pytest.importorskip` for
+  `stapel_tools`. A drift gate whose emitter is missing was reporting
+  `1 skipped` and exit 0 — indistinguishable from "no drift", and invisible
+  among the rest of a green run. It now fails hard and says why. Measured
+  across the fleet on 2026-08-03: ten gates shared this shape, kept alive only
+  by an earlier CI step incidentally installing the tool.
+
 ## [0.17.1] — 2026-08-02
 
 ### Added
