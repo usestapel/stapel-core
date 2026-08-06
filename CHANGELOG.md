@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.19.0] — 2026-08-06
+
+### Fixed — a Function call no longer dies silently on the transport's size cap
+
+Measured on ironmemo (upload path, 2026-08-06): a ``llm.complete`` reply over a
+meeting transcript exceeded NATS's 1 MiB ``max_payload``. ``msg.respond()``
+raised ``MaxPayloadError`` INSIDE the subscription callback — after the
+function had already run. Nothing was sent back, so the caller sat until its
+timeout and reported a generic failure; the work was done, the answer thrown
+away, and the only line naming the real cause lived in another process's log on
+another host.
+
+Both ends of the seam now refuse to fail quietly:
+
+* **Server** (``serve_functions``): the reply size is checked against the
+  broker's announced ``max_payload`` and, when it does not fit, a small
+  structured marker goes out INSTEAD of the result. ``respond()`` is also
+  wrapped — an exception there is, again, a caller that hears nothing at all.
+  The size check lives in the module-level ``fit_reply()`` so it is testable.
+* **Client** (``nats_function_transport``): an oversized REQUEST is refused
+  before publishing (nats-py otherwise raises a bare ``MaxPayloadError`` that
+  arrives as an opaque "failed over NATS"), and the server's marker is turned
+  back into the same precise exception.
+
+New ``FunctionPayloadTooLarge(FunctionCallError)`` carries the function name,
+the actual size, the limit and the direction, and says what to do about it: a
+Function is a request/response seam, not a file transfer — return a REFERENCE
+the caller resolves. Raising the broker's ``max_payload`` buys headroom, not a
+different answer. Subclassing ``FunctionCallError`` keeps existing handlers
+working.
+
 ## [Unreleased]
 
 ## [0.18.0] — 2026-08-03

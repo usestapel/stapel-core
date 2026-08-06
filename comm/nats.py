@@ -27,7 +27,11 @@ import threading
 from typing import Any
 
 from .config import comm_setting
-from .exceptions import FunctionCallError, FunctionNotRegistered
+from .exceptions import (
+    FunctionCallError,
+    FunctionNotRegistered,
+    FunctionPayloadTooLarge,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +86,10 @@ class NatsBridge:
                     logger.info("stapel-nats connected to %s", self._url)
         return self._nc
 
+    def max_payload(self, timeout: float = 5.0) -> int:
+        """The broker's per-message cap, as the server announced it."""
+        return int(getattr(self._connection(timeout), "max_payload", 0) or 0)
+
     def request(self, subject: str, data: bytes, timeout: float) -> bytes:
         nc = self._connection(timeout)
         # +2s slack so the protocol-level timeout fires first with a
@@ -124,8 +132,19 @@ def nats_function_transport(name: str, payload: dict, *, timeout: float | None =
     effective_timeout = timeout or comm_setting("FUNCTION_TIMEOUT", 5.0)
     data = json.dumps({"payload": payload}, default=str).encode()
 
+    # Refuse an oversized REQUEST here rather than at the wire: nats-py raises
+    # a bare MaxPayloadError from publish(), which arrives as an opaque
+    # "failed over NATS" and says nothing about what to do about it.
+    bridge = get_bridge()
     try:
-        raw = get_bridge().request(subject_for(name), data, effective_timeout)
+        limit = bridge.max_payload(effective_timeout)
+    except Exception:  # connection problems are the request()'s to report
+        limit = 0
+    if limit and len(data) > limit:
+        raise FunctionPayloadTooLarge(name, len(data), limit, direction="request")
+
+    try:
+        raw = bridge.request(subject_for(name), data, effective_timeout)
     except FunctionCallError:
         raise
     except Exception as exc:
@@ -140,5 +159,15 @@ def nats_function_transport(name: str, payload: dict, *, timeout: float | None =
 
     reply = json.loads(raw.decode() or "{}")
     if isinstance(reply, dict) and reply.get("error"):
+        # The server ran the function fine but its answer did not fit the wire.
+        # It sends this small marker INSTEAD of the result so the caller gets a
+        # real error instead of sitting until timeout — see serve_functions.
+        if reply.get("error_code") == "payload_too_large":
+            raise FunctionPayloadTooLarge(
+                name,
+                int(reply.get("size") or 0),
+                int(reply.get("limit") or 0),
+                direction="reply",
+            )
         raise FunctionCallError(f"function '{name}' failed remotely: {reply['error']}")
     return reply.get("result") if isinstance(reply, dict) else reply
