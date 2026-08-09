@@ -94,7 +94,13 @@ def test_error_docs_localized_marks_uncovered_keys_as_en_fallback():
 # app is not installed in the core test config, as with generate_error_keys).
 # ---------------------------------------------------------------------------
 
-def test_translate_and_check_commands_wire_end_to_end(tmp_path):
+def test_translate_and_check_commands_wire_end_to_end(tmp_path, settings):
+    """Both commands write and read the SAME directory — one the loader has.
+
+    The output directory is no longer whatever the caller names: it has to be a
+    catalog root the runtime actually walks. Here the tmp dir is registered as
+    an ``EXTRA_CATALOG_DIRS`` root, which is the seam a config repo uses.
+    """
     import pytest
 
     from stapel_core.django.management.commands.check_translation_catalogs import (
@@ -106,21 +112,29 @@ def test_translate_and_check_commands_wire_end_to_end(tmp_path):
     from stapel_core.django.management.commands.translate_catalogs import (
         Command as Translate,
     )
+    from stapel_core.i18n.conf import i18n_settings
+
+    settings.STAPEL_I18N = {"EXTRA_CATALOG_DIRS": [str(tmp_path)]}
+    i18n_settings.reload()
+    out = tmp_path / "translations"
 
     # Seed a couple of real registry keys; the rest stay missing.
     seed = tmp_path / "seed.json"
     seed.write_text('{"error.400.bad_request": "Некорректный запрос", '
                     '"error.404.not_found": "Ресурс не найден"}', encoding="utf-8")
-    Translate().handle(domain="errors", lang="ru", out=str(tmp_path),
-                       seed=str(seed), seed_label="stapel-builtin", llm=False,
-                       approve=None, approve_all=False)
-    assert (tmp_path / "errors.ru.json").is_file()
-    assert (tmp_path / ".state.json").is_file()
+    try:
+        Translate().handle(domain="errors", lang="ru", out=str(out),
+                           seed=str(seed), seed_label="stapel-builtin", llm=False,
+                           approve=None, approve_all=False)
+        assert (out / "errors.ru.json").is_file()
+        assert (out / ".state.json").is_file()
 
-    # The gate fails (most keys still missing) → SystemExit(1).
-    with pytest.raises(SystemExit):
-        Check().handle(domain="errors", out=str(tmp_path), languages="ru", strict=False)
+        # The gate fails (most keys still missing) → SystemExit(1).
+        with pytest.raises(SystemExit):
+            Check().handle(domain="errors", out=str(out), languages="ru", strict=False)
 
-    # errors.en.md renders from the registry.
-    Docs().handle(out=str(tmp_path), lang="en", translations=str(tmp_path))
-    assert (tmp_path / "errors.en.md").read_text().startswith("# Errors — English")
+        # errors.en.md renders from the registry.
+        Docs().handle(out=str(tmp_path), lang="en", translations=str(out))
+        assert (tmp_path / "errors.en.md").read_text().startswith("# Errors — English")
+    finally:
+        i18n_settings.reload()

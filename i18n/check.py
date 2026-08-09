@@ -10,9 +10,11 @@ catalog directory, verify each shipped locale:
   ``{param}`` slot relative to the canon (a client override MUST preserve the
   canon placeholders — §3);
 * **E** not byte-stable — the catalog file is not in ``dump_catalog`` form;
-* **W** unreviewed — a value whose provenance is machine (``origin: llm``) or
-  unknown (no sidecar entry); a *counter*, not a release blocker (§5, open
-  question #3).
+* **W** unreviewed — a value no human has signed off: machine
+  (``origin: llm``), curated corpus (``origin: seed:<label>`` — paid for, still
+  machine-made), imported with unknown authorship, or with no sidecar entry at
+  all. A *counter*, not a release blocker (§5, open question #3), and it counts
+  what has not been READ, not what came from a poor source.
 
 Pure over its inputs (``source_texts`` + a directory) so a module's pytest can
 call it directly, exactly like ``check_flows``.
@@ -23,12 +25,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .catalogs import (
-    ORIGIN_LLM,
     STATE_FILENAME,
     StateSidecar,
     catalog_filename,
     content_hash,
     dump_catalog,
+    is_reviewed,
     load_catalog_file,
 )
 from .domains import params_of
@@ -98,11 +100,12 @@ def check_translation_catalogs(
                     f"{lang}: {key!r} is stale — the en source changed since it "
                     f"was translated; re-run `translate_catalogs`",
                 ))
-            if st is None or st.get("origin") == ORIGIN_LLM:
+            if not is_reviewed((st or {}).get("origin")):
                 issues.append(CatalogIssue(
                     "warning", "unreviewed", lang,
                     f"{lang}: {key!r} is unreviewed "
-                    f"(origin={(st or {}).get('origin', 'unknown')})",
+                    f"(origin={(st or {}).get('origin', 'unknown')}) — no human "
+                    f"has approved this text",
                 ))
 
         # Orphans — catalog keys not in the canon. Allowed (a host app may

@@ -28,8 +28,9 @@ points below; a generic fix or gap belongs **upstream** (see
   `flow_registry`) with doc generation and a CI completeness gate.
 - `i18n` — domain-agnostic shipping of localized content: per-app
   `translations/<domain>.<lang>.json` catalogs (later-wins, fork-free host
-  override), a `.state.json` provenance sidecar, write-time
-  `translate_catalogs` (seed → translator seam, byte-stable) and the
+  override), a `.state.json` provenance sidecar where only `origin: human`
+  counts as reviewed, write-time `translate_catalogs` (seed → translator seam,
+  byte-stable, writing only where the loader reads) and the
   `check_translation_catalogs` gate. `STAPEL_I18N["LOCALES"]` is the single
   project-languages knob.
 - `django` — service conventions: transactional outbox, task store,
@@ -434,14 +435,31 @@ Localized texts are a **static, reviewed-as-code artifact**, generated
 write-time:
 
 - `manage.py translate_catalogs --domain errors --lang ru [--seed FILE] [--llm]
-  [--approve KEY… | --approve-all]` materializes `<out>/errors.ru.json`
-  (byte-stable) + a `.state.json` **provenance sidecar** keyed `<domain>.<lang>`
-  → `{key: {hash: h(source_en), origin}}`. Per key: keep (source hash still
-  matches) → seed from a curated corpus (`origin: seed:<label>`) → the
-  `STAPEL_I18N["TRANSLATOR"]` seam (`--llm`, content-hash cached, `origin: llm`
-  = machine/unreviewed) → left missing (fails the gate). `--approve` flips
-  reviewed keys to `origin: human` without retranslating. Editing the en canon
-  auto-staleness-marks exactly that one key (the hash no longer matches).
+  [--app LABEL | --out DIR] [--approve KEY… | --approve-all]` materializes
+  `<out>/errors.ru.json` (byte-stable) + a `.state.json` **provenance sidecar**
+  keyed `<domain>.<lang>` → `{key: {hash: h(source_en), origin}}`. Per key: keep
+  (source hash still matches) → seed from a curated corpus
+  (`origin: seed:<label>`) → the `STAPEL_I18N["TRANSLATOR"]` seam (`--llm`,
+  content-hash cached, `origin: llm`) → left missing (fails the gate).
+  `--approve` flips keys to `origin: human` without retranslating. Editing the
+  en canon auto-staleness-marks exactly that one key (the hash no longer
+  matches).
+- **Provenance says where a value came from; only `human` means reviewed.**
+  `llm` (machine), `seed:<label>` (curated corpus — cheap, still machine-made)
+  and `imported` (already in the catalog, authorship unknown) are all
+  UNREVIEWED, and `--approve` is the only thing that clears the counter.
+  Seeding is meant to be the obvious path, so it must never double as review.
+  Two predicates, two questions: `is_reviewed(origin)` (did a human sign off →
+  the gate's W-counter) and `is_curated(origin)` (was it placed deliberately →
+  never silently re-derived, so a stale seed stays put and is reported stale).
+- **The output directory is resolved against the loader, not the shell.**
+  Catalogs are found by walking the *package* directories of INSTALLED_APPS, so
+  a relative `--out` against a service root wrote a file nothing would ever
+  read. The default is now the app package the command runs from; `--app LABEL`
+  names one; an explicit `--out` that is not `<app package>/translations` (or an
+  `EXTRA_CATALOG_DIRS` root) is refused, naming the places the loader looks.
+  `resolve_catalog_dir()` and `load_app_catalogs()` share `catalog_search_dirs()`
+  so writable and readable cannot drift apart.
 - The **first ru is not machine-translated**: `stapel-i18n-seed` (stapel-tools)
   exports the already-curated stapel-translate builtin fixtures (155 `error.*`
   × ru) into a seed the command applies — requirement "clients don't spend
@@ -450,8 +468,10 @@ write-time:
   (module pytest wraps `check_translation_catalogs(...)`, like `check_flows`):
   **E** on a missing key, a stale one (en changed, translation didn't), a
   `{param}` mismatch vs the canon, or a non-byte-stable file; **W** counts
-  unreviewed (`origin: llm`/unknown) values (`--strict` makes them fatal —
-  after the first review pass).
+  unreviewed values — everything no human approved (`llm`, `seed:<label>`,
+  `imported`, unknown) — with `--strict` making them fatal, after the first
+  review pass. It resolves `--out`/`--app` the same way `translate_catalogs`
+  does: gating a directory the loader cannot read is as useless as writing one.
 - `manage.py generate_error_docs [--lang ru]` writes the human-readable
   `docs/errors.<lang>.md` reference (i18n-shipping.md §4); README links both
   languages (lint rule `R100` in `stapel_tools.lint`).
@@ -952,8 +972,8 @@ delivery guarantees; cross-module facts still go through comm Actions.
 | `generate_flow_docs --out DIR [--lang X] [--llm] [--llm-cache FILE]` | Render flow markdown + `flows.json`; `--lang` resolves i18n keys, `--llm` machine-translates missing keys (content-hash cached) |
 | `generate_error_keys --out FILE` | Emit `errors.json` (the error-key registry: `{code, status, params, remediation, en}`) — the backend codegen artifact the frontend error bundle is generated from |
 | `generate_project_docs --out DIR [--languages …] [--llm]` | Bilingual flow doc trees, one per project language (`STAPEL_I18N["LOCALES"]`) |
-| `translate_catalogs --domain D --lang X [--seed F] [--llm] [--approve … \| --approve-all]` | Generate/refresh `translations/D.X.json` + `.state.json` provenance (seed → translator seam, byte-stable, content-hash cached) |
-| `check_translation_catalogs --domain D [--languages …] [--strict]` | CI gate: catalogs cover the canon, are fresh, preserve `{params}` (E); counts unreviewed (W) |
+| `translate_catalogs --domain D --lang X [--seed F] [--llm] [--app L \| --out DIR] [--approve … \| --approve-all]` | Generate/refresh `translations/D.X.json` + `.state.json` provenance (seed → translator seam, byte-stable, content-hash cached); the target dir must be one the catalog loader reads, else refused |
+| `check_translation_catalogs --domain D [--languages …] [--app L \| --out DIR] [--strict]` | CI gate: catalogs cover the canon, are fresh, preserve `{params}` (E); counts unreviewed — anything no human approved (W) |
 | `generate_error_docs [--lang X] [--out docs]` | Human-readable `docs/errors.<lang>.md` reference (i18n-shipping.md §4) |
 | `check_flows [--allow SUBSTRING]` | CI gate: flow documentation completeness |
 | `staff_group`, `reset_sequences` | Staff group fixture management; DB sequence reset |

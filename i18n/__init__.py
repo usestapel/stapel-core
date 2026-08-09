@@ -8,9 +8,10 @@ override texts **without a fork**, and gates the result:
 * **catalogs** — per-app ``translations/<domain>.<lang>.json`` (flat
   ``{key: text}``), discovered over INSTALLED_APPS, merged later-wins
   (:func:`load_app_catalogs`);
-* **provenance** — a ``.state.json`` sidecar records per key whether a value
-  was seeded from a curated corpus, machine-translated (unreviewed) or human
-  (:class:`StateSidecar`);
+* **provenance** — a ``.state.json`` sidecar records per key where a value came
+  from: ``llm`` / ``seed:<label>`` / ``imported`` / ``human``
+  (:class:`StateSidecar`). Only ``human`` counts as reviewed
+  (:func:`is_reviewed`) — a curated corpus is still machine-made;
 * **write-time generation** — :func:`translate_catalog` (the
   ``translate_catalogs`` command) fills a locale from a seed → the translator
   seam, content-hash cached and byte-stable;
@@ -26,18 +27,26 @@ source-text resolver in :mod:`stapel_core.i18n.domains`.
 from .catalogs import (
     CATALOG_DIRNAME,
     ORIGIN_HUMAN,
+    ORIGIN_IMPORTED,
     ORIGIN_LLM,
+    ORIGIN_SEED_PREFIX,
     STATE_FILENAME,
+    CatalogDirError,
     CommDocTranslator,
     DocTranslationCache,
     StateSidecar,
     catalog_filename,
     catalog_relpath,
+    catalog_search_dirs,
     content_hash,
     dump_catalog,
+    is_curated,
     is_reviewed,
+    is_seeded,
     load_app_catalogs,
     load_catalog_file,
+    resolve_catalog_dir,
+    seed_origin,
 )
 from .check import CatalogIssue, check_translation_catalogs, summarize
 from .conf import i18n_settings, project_languages
@@ -48,7 +57,10 @@ __all__ = [
     "CATALOG_DIRNAME",
     "STATE_FILENAME",
     "ORIGIN_HUMAN",
+    "ORIGIN_IMPORTED",
     "ORIGIN_LLM",
+    "ORIGIN_SEED_PREFIX",
+    "CatalogDirError",
     "CatalogIssue",
     "CommDocTranslator",
     "DOMAIN_SOURCES",
@@ -57,15 +69,20 @@ __all__ = [
     "TranslateResult",
     "catalog_filename",
     "catalog_relpath",
+    "catalog_search_dirs",
     "check_translation_catalogs",
     "content_hash",
     "dump_catalog",
     "i18n_settings",
+    "is_curated",
     "is_reviewed",
+    "is_seeded",
     "load_app_catalogs",
     "load_catalog_file",
     "params_of",
     "project_languages",
+    "resolve_catalog_dir",
+    "seed_origin",
     "source_texts",
     "summarize",
     "translate_catalog",

@@ -7,14 +7,17 @@ domain's canonical ``{key: source_en}``, recording provenance in
 1. **keep** — the catalog already has a value and the source hash in
    ``.state.json`` matches ``h(source_en)`` → untouched (idempotent, zero diff);
 2. **seed** — a curated corpus (``--seed``: the stapel-translate builtin
-   fixtures, already paid for) supplies the value → ``origin: seed:<label>``;
+   fixtures, already paid for) supplies the value → ``origin: seed:<label>``
+   (machine-made though curated: **unreviewed**, the gate's W-counter);
 3. **llm** — with ``--llm``, the translator seam fills the remainder, through a
    content-hash cache (unchanged sources ⇒ zero LLM calls, zero diff) →
    ``origin: llm`` (machine, unreviewed — the gate's W-counter);
 4. **leave unset** — otherwise the key stays missing and the gate fails loudly.
 
 ``--approve`` flips reviewed keys to ``origin: human`` without retranslating —
-review is a state transition, not hand-editing JSON.
+review is a state transition, not hand-editing JSON. It is the ONLY thing that
+clears the unreviewed counter: seeding through the curated corpus is the cheap,
+obvious path and must stay cheap without ever passing for review.
 
 Pure over its inputs (a directory + ``source_texts``) so it is unit-testable
 without a management-command harness or a real LLM.
@@ -26,6 +29,7 @@ from pathlib import Path
 
 from .catalogs import (
     ORIGIN_HUMAN,
+    ORIGIN_IMPORTED,
     ORIGIN_LLM,
     STATE_FILENAME,
     DocTranslationCache,
@@ -33,8 +37,9 @@ from .catalogs import (
     catalog_filename,
     content_hash,
     dump_catalog,
-    is_reviewed,
+    is_curated,
     load_catalog_file,
+    seed_origin,
 )
 
 
@@ -44,13 +49,18 @@ class TranslateResult:
     seeded: int = 0
     translated: int = 0
     approved: int = 0
+    imported: int = 0  # already in the catalog, provenance unknown
     missing: list[str] = field(default_factory=list)
     written: bool = False
     catalog_path: Path | None = None
 
     @property
-    def unreviewed(self) -> int:  # machine-translated this run
-        return self.translated
+    def unreviewed(self) -> int:
+        """Values this run produced that no human has read — seeded included.
+
+        A curated corpus is cheaper than an LLM, not more reviewed than one.
+        """
+        return self.translated + self.seeded + self.imported
 
 
 def translate_catalog(
@@ -69,7 +79,10 @@ def translate_catalog(
 ) -> TranslateResult:
     """Generate/refresh one ``<domain>.<lang>.json`` catalog under *out_dir*.
 
-    *out_dir* is the ``translations`` directory. *seed* is a flat
+    *out_dir* is the ``translations`` directory — an explicit path, kept pure
+    for tests. Callers that take it from a user (the management command) must
+    run it through :func:`stapel_core.i18n.resolve_catalog_dir` first, or they
+    will happily write where the loader never looks. *seed* is a flat
     ``{key: text}`` corpus (keys outside *source_texts* are ignored). *approve*
     is a list of keys to mark reviewed (``origin: human``); *approve_all* marks
     every present key reviewed. Approval never retranslates.
@@ -104,33 +117,44 @@ def translate_catalog(
             result.kept += 1
             continue
         # Value present with stale state (the en source changed after this
-        # translation): a reviewed value stays put and is left STALE for the
-        # gate to flag (never silently re-blessed) unless --llm retranslates it.
+        # translation): a deliberately placed value — approved, seeded from the
+        # corpus, or imported — stays put and is left STALE for the gate to
+        # flag (never silently re-blessed) unless --llm retranslates it. Note
+        # this asks is_curated, not is_reviewed: a seed is unreviewed but it is
+        # still not ours to overwrite, since the corpus was curated against the
+        # OLD en text and re-seeding would paper over exactly the drift the
+        # gate exists to show.
         if key in catalog and st is not None:
-            if is_reviewed(origin) and not llm:
+            if is_curated(origin) and not llm:
                 continue
-            # machine value, or --llm on a stale reviewed value → retranslate
+            # machine value, or --llm on a stale curated value → retranslate
             # (seed first if the corpus has it).
             if key in seed and seed[key]:
                 catalog[key] = seed[key]
                 state.set(domain, language, key,
-                          source_hash=src_hash, origin=f"seed:{seed_label}")
+                          source_hash=src_hash, origin=seed_origin(seed_label))
                 result.seeded += 1
                 continue
             if llm:
                 to_llm[key] = source_en
             continue
-        # Value present, NO sidecar (a hand-written catalog being onboarded):
-        # record its provenance against the current source (fresh by assumption).
+        # Value present, NO sidecar (a catalog file being onboarded): record
+        # its provenance against the current source (fresh by assumption) as
+        # ``imported`` — authorship is genuinely unknown here, and a
+        # hand-written catalog is indistinguishable on disk from a machine dump
+        # somebody committed. Calling it ``human`` would be the same laundering
+        # in a different place. It is protected from re-derivation, and it
+        # counts as unreviewed until someone approves it.
         if key in catalog and st is None:
-            state.set(domain, language, key, source_hash=src_hash, origin=ORIGIN_HUMAN)
-            result.kept += 1
+            state.set(domain, language, key,
+                      source_hash=src_hash, origin=ORIGIN_IMPORTED)
+            result.imported += 1
             continue
         # 2. seed a missing key from the curated corpus.
         if key in seed and seed[key]:
             catalog[key] = seed[key]
             state.set(domain, language, key,
-                      source_hash=src_hash, origin=f"seed:{seed_label}")
+                      source_hash=src_hash, origin=seed_origin(seed_label))
             result.seeded += 1
             continue
         # 3. queue a still-missing key for the LLM seam (opt-in).

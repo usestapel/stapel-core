@@ -1,5 +1,83 @@
 # Changelog
 
+## [0.20.0] — 2026-08-09
+
+### Fixed — i18n provenance stopped laundering machine output, and `translate_catalogs` stopped writing where nothing reads
+
+Two defects in `stapel_core.i18n`, found while preparing a Spanish wave across
+the libraries. Both had the same shape: a command reporting success for work
+that had not happened.
+
+**1. `is_reviewed()` counted a curated corpus as human review.** Any origin
+other than `llm` was "reviewed", so a translation routed through
+`translate_catalogs --seed` — the cheap, obvious path, and the one the fleet
+uses for the stapel-translate builtin fixtures — drove the gate's `unreviewed`
+counter to zero for text no human had ever read. It surfaced the hard way: an
+agent adding Spanish hand-populated the machinery's own `.llm-cache.json` to
+keep the provenance honest, i.e. the honest path was the non-obvious one.
+
+Provenance now records **where a value came from**, and a separate predicate
+answers **whether a human signed it off**:
+
+* `llm` — machine translation from the `TRANSLATOR` seam;
+* `seed:<label>` — lifted from a curated corpus: cheap, paid for, still
+  machine-made;
+* `imported` — already in the catalog with no sidecar row, authorship unknown
+  (this branch used to record `human`, which was the same laundering in another
+  place);
+* `human` — a person read it and ran `--approve`.
+
+`is_reviewed(origin)` is true for `human` alone and is what the gate's **W**
+counter reports. The other axis is `is_curated(origin)` — human, seed or
+imported — which answers a different question: may this value be silently
+re-derived? No. A stale seed still stays put and is still reported `stale`,
+because the corpus was curated against the OLD English and re-seeding would
+paper over exactly the drift the gate exists to show. `TranslateResult.unreviewed`
+now counts seeded and imported values alongside translated ones, and both
+commands print the count.
+
+*Existing catalogues:* `.state.json` files are read as written — no rewrite, no
+re-approval, no regeneration, and byte-identical on disk. What changes is the
+interpretation. Across `stapel-auth`, `stapel-billing`, `stapel-notifications`,
+`stapel-profiles` and `stapel-workspaces` (343 ru keys), the unreviewed count
+goes 33 → 339: 306 `seed:stapel-builtin` keys move from "reviewed" to
+"unreviewed", which is what they always were. This was chosen over bulk-blessing
+them to `human` — that is the laundering being removed — and it costs nothing:
+`unreviewed` is a non-blocking **W**, no library gates on warnings or runs
+`--strict`, and all five suites stay green. The number is now the honest size of
+the review backlog for the Spanish wave to work against.
+
+**2. `translate_catalogs --out` defaulted to a directory the loader never
+opens.** The default `translations` resolved against the working directory (a
+service root), while `load_app_catalogs` walks the *package* directories of
+INSTALLED_APPS. The command wrote the file, printed success, and the catalog was
+invisible forever after.
+
+The write target is now derived and checked against the read side:
+
+* default → the app package the command runs from (or the nearest one above the
+  working directory);
+* `--app LABEL` → that installed app's `translations/`;
+* explicit `--out` → accepted only when it is `<root>/translations` for a root
+  the loader walks; otherwise `CatalogDirError`, naming the directories the
+  loader does read.
+
+Outside any app package there is no defensible default, so it refuses instead of
+inventing one. `resolve_catalog_dir()` and `load_app_catalogs()` both go through
+the new `catalog_search_dirs()`, so "writable" and "readable" cannot drift
+apart. `check_translation_catalogs` resolves its directory the same way — gating
+a directory the loader cannot read is as useless as writing into one.
+
+New in `stapel_core.i18n`: `CatalogDirError`, `ORIGIN_IMPORTED`,
+`ORIGIN_SEED_PREFIX`, `catalog_search_dirs`, `is_curated`, `is_seeded`,
+`resolve_catalog_dir`, `seed_origin`.
+
+`tests/test_i18n_provenance_and_outdir.py` (20 tests) covers both fixes in both
+directions: each defect is reproduced by an assertion that fails on the old
+behaviour, and each legitimate look-alike — approval clearing the counter, a
+library repo regenerating its own catalog with a relative `--out`, a stale seed
+staying put — is asserted to stay silent.
+
 ## [0.19.0] — 2026-08-06
 
 ### Fixed — a Function call no longer dies silently on the transport's size cap

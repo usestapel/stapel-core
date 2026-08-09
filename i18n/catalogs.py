@@ -91,6 +91,17 @@ def _extra_catalog_dirs() -> list[Path]:
         return []
 
 
+def catalog_search_dirs() -> list[Path]:
+    """Every root the loader looks under: app packages + ``EXTRA_CATALOG_DIRS``.
+
+    The single source of truth for "where a catalog can live" — both
+    :func:`load_app_catalogs` (read side) and :func:`resolve_catalog_dir`
+    (write side) go through it, so the two can never disagree about where a
+    catalog is visible from.
+    """
+    return _installed_app_dirs() + _extra_catalog_dirs()
+
+
 def load_app_catalogs(
     domain: str,
     language: str,
@@ -107,10 +118,94 @@ def load_app_catalogs(
     if dirs is not None:
         app_dirs = [Path(d) for d in dirs]
     else:
-        app_dirs = _installed_app_dirs() + _extra_catalog_dirs()
+        app_dirs = catalog_search_dirs()
     for d in app_dirs:
         merged.update(load_catalog_file(Path(d) / catalog_relpath(domain, language)))
     return merged
+
+
+class CatalogDirError(ValueError):
+    """The requested catalog directory is not one the loader would ever read."""
+
+
+def _app_package_dir(app: str) -> Path:
+    """The package directory of the installed app *app* (label or dotted name)."""
+    from django.apps import apps
+
+    for ac in apps.get_app_configs():
+        if app in (ac.label, ac.name):
+            return Path(ac.path)
+    known = ", ".join(sorted(ac.label for ac in apps.get_app_configs()))
+    raise CatalogDirError(f"{app!r} is not an installed app — known labels: {known}")
+
+
+def _where_the_loader_looks(roots: list[Path]) -> str:
+    shown = [str(r / CATALOG_DIRNAME) for r in roots[:6]]
+    more = "" if len(roots) <= 6 else f" (+{len(roots) - 6} more)"
+    return "\n".join(f"  - {s}" for s in shown) + more
+
+
+def resolve_catalog_dir(
+    out: Path | str | None = None,
+    *,
+    app: str | None = None,
+    roots: Iterable[Path | str] | None = None,
+    cwd: Path | str | None = None,
+) -> Path:
+    """The ``translations`` directory to WRITE, checked against the read side.
+
+    Catalogs are found by walking the *package* directories of INSTALLED_APPS
+    (:func:`load_app_catalogs`), never the working directory. A relative
+    ``--out translations`` resolved against a service root therefore produced a
+    directory the loader would never open: the command reported success and the
+    catalog was invisible forever after.
+
+    So the write target is derived, not assumed:
+
+    * *app* given → that app package's ``translations/``;
+    * *out* given → accepted only when it IS ``<root>/translations`` for one of
+      the loader's roots; otherwise :class:`CatalogDirError`, loudly, naming
+      the places the loader does look;
+    * neither → the app package the command is run from (the working directory,
+      or the nearest app package above it). Outside any app package there is no
+      defensible default, so it raises rather than inventing one.
+    """
+    if roots is None:
+        search = catalog_search_dirs()
+    else:
+        search = [Path(r) for r in roots]
+    resolved_roots = [Path(r).resolve() for r in search]
+
+    if app is not None:
+        return _app_package_dir(app) / CATALOG_DIRNAME
+
+    here = Path(cwd).resolve() if cwd is not None else Path.cwd().resolve()
+
+    if out is None:
+        # The nearest enclosing app package (running from a subpackage is fine).
+        enclosing = [
+            r for r in resolved_roots if r == here or r in here.parents
+        ]
+        if enclosing:
+            return max(enclosing, key=lambda r: len(r.parts)) / CATALOG_DIRNAME
+        raise CatalogDirError(
+            f"cannot default the catalog directory: {here} is not an installed "
+            f"app package, and a catalog outside one is never loaded. Pass "
+            f"--app <label> (or --out <app package>/{CATALOG_DIRNAME}). The "
+            f"loader reads:\n{_where_the_loader_looks(resolved_roots)}"
+        )
+
+    target = Path(out)
+    if not target.is_absolute():
+        target = here / target
+    target = target.resolve()
+    if target.name == CATALOG_DIRNAME and target.parent in resolved_roots:
+        return target
+    raise CatalogDirError(
+        f"{target} is not a catalog directory the loader reads — a catalog "
+        f"written there would never be found. Pass --app <label>, or point "
+        f"--out at one of:\n{_where_the_loader_looks(resolved_roots)}"
+    )
 
 
 class CommDocTranslator:
@@ -206,17 +301,72 @@ class DocTranslationCache:
 # Provenance sidecar (.state.json) — i18n-shipping.md §5
 # ---------------------------------------------------------------------------
 
-#: Provenance origins. ``llm`` = machine-translated, NOT human-reviewed (the
-#: W-counter of ``check_translation_catalogs``); ``seed:<label>`` = lifted from
-#: a curated corpus (e.g. stapel-translate builtin fixtures); ``human`` =
-#: reviewed / hand-written (``translate_catalogs --approve``).
+# Provenance vocabulary — two independent facts about a value, not one.
+#
+# WHO PRODUCED IT (the ``origin`` string in the sidecar):
+#
+# * ``llm``          — machine translation from the ``TRANSLATOR`` seam;
+# * ``seed:<label>`` — lifted verbatim from a curated corpus (the
+#   stapel-translate builtin fixtures). Curated and paid for, but still
+#   machine-made: nobody read it on the way in;
+# * ``imported``     — the value was already in the catalog file with no
+#   sidecar row. Authorship unknown — a hand-written catalog and a machine
+#   dump look identical on disk;
+# * ``human``        — a person read the value and approved it
+#   (``translate_catalogs --approve`` / ``--approve-all``).
+#
+# WHETHER A HUMAN SIGNED OFF (:func:`is_reviewed`) — true for ``human`` only.
+# The two used to be conflated: everything that was not ``llm`` counted as
+# reviewed, so routing a machine translation through ``--seed`` (the obvious
+# path) drove the gate's unreviewed counter to zero for text no human had ever
+# read. A counter that reads zero for unread text is worse than no counter.
+#
+# WHETHER IT MAY BE SILENTLY RE-DERIVED (:func:`is_curated`) — this is the
+# other fact, and it is NOT the same one. A seeded value must not be quietly
+# overwritten when the en source moves (the corpus was curated against the OLD
+# English; re-seeding would hide the drift the gate exists to show), yet it is
+# still unreviewed. ``translate_catalog`` asks ``is_curated``; the gate asks
+# ``is_reviewed``.
 ORIGIN_LLM = "llm"
 ORIGIN_HUMAN = "human"
+ORIGIN_IMPORTED = "imported"
+
+#: ``seed:<label>`` — a value lifted from the curated corpus *<label>*.
+ORIGIN_SEED_PREFIX = "seed:"
+
+
+def seed_origin(label: str) -> str:
+    """The provenance string for a value taken from corpus *label*."""
+    return f"{ORIGIN_SEED_PREFIX}{label}"
+
+
+def is_seeded(origin: str | None) -> bool:
+    """True for ``seed:<label>`` — a curated corpus value (machine-made)."""
+    return bool(origin) and origin.startswith(ORIGIN_SEED_PREFIX)
 
 
 def is_reviewed(origin: str | None) -> bool:
-    """A value is reviewed unless it was machine-translated and untouched."""
-    return bool(origin) and origin != ORIGIN_LLM
+    """True only when a human signed the value off (``origin: human``).
+
+    Machine output — ``llm`` and every ``seed:<label>`` — is NOT reviewed, and
+    neither is an ``imported`` value of unknown authorship. This is what the
+    gate's ``unreviewed`` warning counts, so the count means "nobody has read
+    these", never "these came from somewhere respectable".
+    """
+    return bool(origin) and (
+        origin == ORIGIN_HUMAN or origin.startswith(f"{ORIGIN_HUMAN}:")
+    )
+
+
+def is_curated(origin: str | None) -> bool:
+    """True when the value was placed deliberately — never re-derive it silently.
+
+    Human approvals, curated-corpus seeds and imported hand-written catalogs
+    all qualify: when the en source moves under such a value, the value stays
+    put and the gate reports it stale. Only raw ``llm`` output (and a value
+    with no provenance at all) may be regenerated without asking.
+    """
+    return is_reviewed(origin) or is_seeded(origin) or origin == ORIGIN_IMPORTED
 
 
 class StateSidecar:
@@ -283,14 +433,22 @@ __all__ = [
     "STATE_FILENAME",
     "ORIGIN_LLM",
     "ORIGIN_HUMAN",
+    "ORIGIN_IMPORTED",
+    "ORIGIN_SEED_PREFIX",
+    "CatalogDirError",
     "CommDocTranslator",
     "DocTranslationCache",
     "StateSidecar",
     "catalog_filename",
     "catalog_relpath",
+    "catalog_search_dirs",
     "content_hash",
     "dump_catalog",
+    "is_curated",
     "is_reviewed",
+    "is_seeded",
     "load_app_catalogs",
     "load_catalog_file",
+    "resolve_catalog_dir",
+    "seed_origin",
 ]
