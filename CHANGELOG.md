@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.20.1] — 2026-08-09
+
+### Fixed — the error reference renders Spanish as a language, not as a tag
+
+`generate_error_docs --lang es` produced a page titled `# Errors — es` with
+English column headers: `LANGUAGE_NAMES` and the header table in
+`i18n/errordocs.py` knew `en` and `ru` and nothing else, and an unknown tag
+fell back to itself. The catalog machinery was already language-agnostic — the
+*document* was not, so the first library to ship a third language would have
+committed a reference page that reads as a machine artifact.
+
+`es` is now a first-class entry in both tables (`Español`; `Código / Estado /
+Parámetros / Acción / Texto`), which is what the five libraries shipping
+`translations/errors.es.json` in this wave generate against. The fallback for
+an unlisted tag is unchanged and still renders — a language simply reads
+better once it is named.
+
 ## [0.20.0] — 2026-08-09
 
 ### Fixed — i18n provenance stopped laundering machine output, and `translate_catalogs` stopped writing where nothing reads

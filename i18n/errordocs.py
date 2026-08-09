@@ -14,12 +14,18 @@ from pathlib import Path
 
 from .catalogs import load_app_catalogs, load_catalog_file
 
-LANGUAGE_NAMES = {"en": "English", "ru": "Русский"}
+#: Endonym of each language the reference renders a title for. A language
+#: absent here still renders — the raw tag is used as the title — but the page
+#: reads as a machine artifact rather than a document written for its reader,
+#: so a language the fleet ships catalogs in belongs in this table.
+LANGUAGE_NAMES = {"en": "English", "ru": "Русский", "es": "Español"}
 
 _HEADER_EN = ("Code", "Status", "Params", "Remediation", "Text")
+#: Table header per language; anything unlisted falls back to the en header.
 _HEADER = {
     "en": _HEADER_EN,
     "ru": ("Код", "Статус", "Параметры", "Действие", "Текст"),
+    "es": ("Código", "Estado", "Parámetros", "Acción", "Texto"),
 }
 
 
