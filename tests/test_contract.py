@@ -162,3 +162,43 @@ def test_load_configured_factors_is_surface_not_an_extension_point(emitted):
     assert "load_configured_factors" in surface
     assert "STAPEL_VERIFICATION[\"EXTRA_FACTORS\"]" in eps
     assert "load_configured_factors" not in eps
+
+
+# --- README.md — the sixth artifact ------------------------------------------
+#
+# README.md is assembled by ``stapel_tools.readme`` from docs/readme.md (the
+# human half: what the core is and how to think about it) plus the contract
+# documents above. Everything a hand-written README used to restate is
+# generated: the hand-written page this replaced was titled ``stapel_core``,
+# quoted no version at all, and told a reader to install the package by the
+# name it had before it was published.
+
+def test_readme_is_assembled_and_has_no_drift():
+    from stapel_tools.readme import load_inputs as readme_inputs
+    from stapel_tools.readme import render as render_readme
+    from stapel_tools.readme import static_languages
+
+    languages = static_languages(REPO)
+    assert languages == ["en"], "expected exactly the English static body docs/readme.md"
+    committed = (REPO / "README.md").read_text()
+    assert committed == render_readme(REPO, readme_inputs(REPO), "en", languages), (
+        "README.md drifted — run `make contract` and commit README.md "
+        "(edit prose in docs/readme.md, never README.md itself)"
+    )
+
+
+def test_readme_version_matches_the_package():
+    """The #226 gate, at the point where the number is published.
+
+    A capabilities.json whose version lags pyproject.toml is exactly the
+    defect tracked as #226; the generator refuses to render around it, so
+    this test fails loudly rather than shipping a README stating a version
+    the wheel does not have.
+    """
+    import tomllib
+
+    from stapel_tools.readme import load_inputs as readme_inputs
+    from stapel_tools.readme import resolve_version
+
+    pyproject = tomllib.loads((REPO / "pyproject.toml").read_text())
+    assert resolve_version(readme_inputs(REPO)) == pyproject["project"]["version"]

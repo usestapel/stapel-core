@@ -25,11 +25,21 @@ migration-lint:
 # docs/llms.txt — the fifth contract artifact (badge-canon §3), an agent-sized
 # slice of docs/capabilities.json (stapel_tools.llms_txt). Regenerated in the
 # same target so it can never drift a release behind capabilities.json.
+# README.md — the sixth artifact (stapel_tools.readme). The page is ASSEMBLED,
+# not written: docs/readme.md carries the human half (what the core is, how to
+# think about it) and everything a hand-written README used to restate — title,
+# badge row, install line, version, surface counts, doc links, licence footer —
+# is generated from pyproject.toml plus the artifacts above. That is not
+# theoretical here: the hand-written page this replaced still told a reader to
+# `pip install -e ../iron-common-python`, the name this package had before it
+# was published. Edit docs/readme.md; never README.md.
 contract:
 	$(PYTHON) -m stapel_tools.surface .
 	$(PYTHON) -m stapel_tools.llms_txt .
+	$(PYTHON) -m stapel_tools.readme .
 
 # Drift gate — the authoritative CI form is tests/test_contract.py.
 contract-check:
 	$(PYTHON) -m stapel_tools.surface . --check
 	$(PYTHON) -m stapel_tools.llms_txt . --check
+	$(PYTHON) -m stapel_tools.readme . --check
