@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.20.1] — 2026-08-09
+## [0.20.2] — 2026-08-09
 
 ### Fixed — the error reference renders Spanish as a language, not as a tag
 
