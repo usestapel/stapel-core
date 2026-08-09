@@ -27,6 +27,13 @@ i18n_settings = AppSettings(
         # The language of the in-code canonical literals / registry texts
         # passed to the translator as the source language.
         "SOURCE_LANGUAGE": "en",
+        # How `check_translation_catalogs` treats a catalog entry for a key
+        # another package owns and already ships in that language, with no
+        # `override` declaration in `.state.json`: "error" (the default — a
+        # silent re-translation is the defect this whole contour exists to
+        # prevent) or "warn". The escape hatch is for a host onboarding a
+        # legacy catalog it did not write; fleet libraries run the default.
+        "UNDECLARED_OVERRIDES": "error",
         # The machine-translation seam (i18n-shipping.md §5), reused by
         # ``translate_catalogs`` for every domain — the same dotted-path seam
         # flow docs use, defaulting to the ``llm.translate`` comm Function by

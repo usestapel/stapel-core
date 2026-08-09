@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.22.0] — 2026-08-10
+
+### Added — core ships its own error catalogs, and a module translates only what it owns
+
+Core registers **41** cross-cutting error keys — `COMMON_ERRORS` (the
+HTTP-status generics plus the eleven `error.400.field.*` DRF validation keys),
+the six verification step-up keys, the three captcha/network keys — and shipped
+**no** `translations/` directory at all, while `CommonDjangoConfig` sat in
+every project's INSTALLED_APPS. The loader had a slot for a core catalog and
+nothing to put in it.
+
+That absence was not passive. `check_translation_catalogs` took its canon from
+`source_texts("errors")` — the *whole* in-process registry — and raised
+`missing` for every canonical key absent from the module's own `translations/`
+directory. Going green therefore **required** each module to re-translate all
+41. Measured across the five libraries that ship catalogs today: 687 entries,
+of which **410 are core's keys copied verbatim** (auth 41+41 of 128/127,
+workspaces 41+41 of 67/67, profiles and billing 41+41 of 53/53,
+notifications 41+41 of 43/43). Divergence across all five, both languages:
+**zero**. Not one library ever meant to reword anything — the gate made them
+all copy. Seventeen more libraries are queued.
+
+`django/translations/errors.{ru,es}.json` now carries those 41 keys, generated
+the same way a module's are (seeded from the curated stapel-translate corpus,
+two keys machine-translated) and **byte-identical to what all five libraries
+already ship** — so deleting the duplicates is a no-op at runtime, verified:
+`load_app_catalogs` returns the same 53 keys for stapel-profiles with its
+copies removed. The catalogs live in the `stapel_core.django` app package
+because that is what `CommonDjangoConfig.path` is, and they are declared in
+`package-data` — verified by installing the built wheel into a clean venv and
+loading them back through `load_app_catalogs`, not by assumption.
+
+### Added — key ownership, and a gate that refuses a silent re-translation
+
+`register_service_errors(errors, remediation=None, owner=None)` records which
+package answers for a key. `owner` defaults to the caller's top-level package
+and is recorded only for a key nobody owns yet — **first registrant wins** — so
+re-registering somebody else's key still overrides its en text (the fork-free
+override seam of i18n-shipping.md §3 is untouched, and a test pins it) without
+taking over the duty of translating it. Core claims its own keys explicitly
+where import order would otherwise decide. `error_owners()` / `error_owner()`
+read it back; `docs/errors.json` is unchanged, so no downstream artifact moves.
+
+**The loader does not change.** `load_app_catalogs` stays a flat later-wins
+merge over INSTALLED_APPS. Pinning core-owned keys inside it would have meant
+either breaking the host-app-overrides seam or teaching a file merge about a
+registry. Precedence stays positional — core's catalog, then a module's
+declared override, then the host app last — and the invariant "nobody shadows
+core by accident" is enforced where the accident happens: at write and gate
+time.
+
+- `check_translation_catalogs` scopes coverage to the keys the gated app
+  **owns** (resolved from its directory against INSTALLED_APPS), and raises
+  **E `foreign`** for an entry belonging to another package *that already ships
+  that language for that key*. The carve-out is deliberate: covering a key its
+  owner does not translate — a host generating one language for the whole
+  fleet — is gap-filling, not shadowing, and stays silent until the owner ships
+  it, at which point the gate goes red and the copy is deleted or declared.
+- `translate_catalogs` will not emit a key the target package does not own. The
+  command that manufactured the 410 duplicates can no longer manufacture one.
+- A deliberate reword declares itself: `translate_catalogs --declare-override
+  KEY…` writes `override: <owner>` into the `.state.json` row — a state
+  transition by command, exactly like `--approve`, never a hand-edit. The
+  catalog file stays a flat `{key: text}` map, which the runtime merge,
+  `gen-errors.mjs` and human readers all depend on. `StateSidecar.set` now
+  round-trips fields it does not manage, so a declaration survives the next
+  retranslation instead of being silently dropped. A declaration that repeats
+  the owner's text verbatim is **W `vacuous_override`** — it protects nothing.
+- `STAPEL_I18N["UNDECLARED_OVERRIDES"]` (`"error"` default, `"warn"`) is the
+  single policy switch, an escape hatch for a host onboarding a legacy catalog
+  it did not write. Fleet libraries run the default.
+
+Ownership scoping engages only where ownership resolves; a domain with no owner
+resolver (`flows`) and a directory outside any installed app behave exactly as
+before.
+
+**For the five libraries already shipping catalogs**: delete the 41 core keys
+from `errors.{ru,es}.json`, prune the matching `.state.json` rows, and raise the
+`stapel-core` floor to `>=0.22` — the floor bump is what makes the deletion
+safe. The numeric gate for that sweep is 410 → 0. Verified against
+stapel-profiles: 82 `foreign` errors before, zero errors after deletion, and
+the merged runtime catalog identical either way.
+
 ## [0.21.0] — 2026-08-10
 
 ### Added — `stapel_core.templates`: a missing template variable stops being invisible

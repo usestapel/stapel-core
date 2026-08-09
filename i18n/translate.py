@@ -18,6 +18,13 @@ domain's canonical ``{key: source_en}``, recording provenance in
 review is a state transition, not hand-editing JSON. It is the ONLY thing that
 clears the unreviewed counter: seeding through the curated corpus is the cheap,
 obvious path and must stay cheap without ever passing for review.
+``--declare-override`` is the second such transition: it records, in the same
+sidecar, that a key another package owns is being reworded here on purpose.
+
+The canon is scoped to the keys the target package **owns** (plus whatever it
+has declared an override for). This is what makes re-translating a core key
+impossible rather than merely discouraged: the command that generated the
+fleet's 410 duplicated entries can no longer emit a key it does not answer for.
 
 Pure over its inputs (a directory + ``source_texts``) so it is unit-testable
 without a management-command harness or a real LLM.
@@ -39,8 +46,11 @@ from .catalogs import (
     dump_catalog,
     is_curated,
     load_catalog_file,
+    owner_of_dir,
     seed_origin,
 )
+from .check import owned_keys
+from .domains import source_owners
 
 
 @dataclass
@@ -49,6 +59,7 @@ class TranslateResult:
     seeded: int = 0
     translated: int = 0
     approved: int = 0
+    declared: int = 0  # override declarations recorded this run
     imported: int = 0  # already in the catalog, provenance unknown
     missing: list[str] = field(default_factory=list)
     written: bool = False
@@ -76,6 +87,9 @@ def translate_catalog(
     translator=None,
     approve: list[str] | None = None,
     approve_all: bool = False,
+    owner: str | None = None,
+    owners: dict[str, str] | None = None,
+    declare_override: list[str] | None = None,
 ) -> TranslateResult:
     """Generate/refresh one ``<domain>.<lang>.json`` catalog under *out_dir*.
 
@@ -86,12 +100,48 @@ def translate_catalog(
     ``{key: text}`` corpus (keys outside *source_texts* are ignored). *approve*
     is a list of keys to mark reviewed (``origin: human``); *approve_all* marks
     every present key reviewed. Approval never retranslates.
+
+    *owner* (defaulted from *out_dir* against INSTALLED_APPS) and *owners*
+    (defaulted from the domain's resolver) scope *source_texts* to what this
+    package answers for; *declare_override* names keys it deliberately rewords
+    from another package, which both records the declaration and re-admits
+    those keys to the canon so they can be translated here.
     """
     out = Path(out_dir)
     catalog = load_catalog_file(out / catalog_filename(domain, language))
     state = StateSidecar(out / STATE_FILENAME)
     seed = seed or {}
     result = TranslateResult(catalog_path=out / catalog_filename(domain, language))
+
+    if owner is None:
+        owner = owner_of_dir(out)
+    if owners is None:
+        owners = source_owners(domain)
+
+    # --- override declarations: the second pure state transition ------------
+    for key in declare_override or []:
+        claimed = owners.get(key)
+        if not claimed:
+            raise ValueError(
+                f"cannot declare an override of {key!r}: no package owns it, "
+                f"so there is nothing to override"
+            )
+        if owner and claimed == owner:
+            raise ValueError(
+                f"cannot declare an override of {key!r}: {owner!r} owns it "
+                f"already — an override is a reword of somebody else's text"
+            )
+        state.declare_override(domain, language, key, owner=claimed)
+        result.declared += 1
+
+    # The canon this package may write: what it owns, plus what it has declared
+    # a deliberate override for. Everything else belongs to its owner's catalog
+    # and the loader merges it in at runtime.
+    declared_here = set(state.overrides(domain, language))
+    mine = owned_keys(source_texts, owners, owner)
+    source_texts = {
+        k: v for k, v in source_texts.items() if k in mine or k in declared_here
+    }
 
     # --- approval pass: a pure state transition over already-present values ---
     # Approving blesses the value against the *current* source (clears any

@@ -131,8 +131,59 @@ REMEDIATION_VOCAB = frozenset(
 #: code -> remediation (explicit declarations only; heuristic fills the rest).
 _REMEDIATION_REGISTRY: Dict[str, str] = {}
 
+# =============================================================================
+# Ownership registry — who is responsible for a key's canonical text
+# =============================================================================
+#
+# The en text of a key is a merge (later `register_service_errors` wins — the
+# fork-free override seam, i18n-shipping.md §3). *Ownership* is the other
+# question, and it is not the same one: which package is responsible for
+# translating the key, i.e. which module's `translations/errors.<lang>.json`
+# must carry it. Without this the catalog gate cannot tell "my key" from "a key
+# I am shadowing", which is how the fleet ended up with core's 41 cross-cutting
+# keys re-translated in full inside every module that shipped a catalog.
+#
+# Resolution, deliberately NOT later-wins:
+#
+# * an explicit ``owner=`` is a deliberate claim and always wins — this is how
+#   core pins its own cross-cutting keys regardless of import order (a module
+#   re-registering `error.400.captcha_invalid` with its own wording must not
+#   become its owner);
+# * an inferred owner (the caller's top-level package) is recorded only for a
+#   key nobody owns yet — first registrant wins, so re-registering someone
+#   else's key overrides the TEXT without stealing the RESPONSIBILITY.
+_OWNER_REGISTRY: Dict[str, str] = {}
 
-def register_service_errors(errors: dict, remediation: Optional[dict] = None):
+#: The package that owns every key core itself registers.
+CORE_OWNER = "stapel_core"
+
+
+def _infer_owner() -> Optional[str]:
+    """Top-level package of the caller of ``register_service_errors``."""
+    import inspect
+
+    frame = inspect.currentframe()
+    try:
+        # 0 = here, 1 = register_service_errors, 2+ = the caller we want.
+        for _ in range(2):
+            if frame is None:
+                return None
+            frame = frame.f_back
+        while frame is not None:
+            name = frame.f_globals.get("__name__", "")
+            if name and name != __name__:
+                return name.split(".")[0]
+            frame = frame.f_back
+        return None
+    finally:
+        del frame
+
+
+def register_service_errors(
+    errors: dict,
+    remediation: Optional[dict] = None,
+    owner: Optional[str] = None,
+):
     """Register service-specific errors into the global registry.
 
     ``errors`` is a ``code -> en`` map (same map the runtime ``/error-keys/``
@@ -140,8 +191,19 @@ def register_service_errors(errors: dict, remediation: Optional[dict] = None):
     machine-readable recovery hint from :data:`REMEDIATION_VOCAB`. Every key in
     ``remediation`` must be present in ``errors`` and carry a value from the
     vocabulary; keys left undeclared fall back to :func:`default_remediation`.
+
+    ``owner`` names the package responsible for the keys' *translations* (see
+    :data:`_OWNER_REGISTRY`). Left unset it is inferred from the caller's
+    top-level package and recorded only for keys nobody owns yet, so
+    re-registering another package's key overrides its text without taking
+    over its catalog obligation. Pass it explicitly to claim a key outright.
     """
     _GLOBAL_REGISTRY.update(errors)
+    claimed = owner or _infer_owner()
+    if claimed:
+        for code in errors:
+            if owner is not None or code not in _OWNER_REGISTRY:
+                _OWNER_REGISTRY[code] = claimed
     if remediation:
         for code, hint in remediation.items():
             if code not in errors:
@@ -155,6 +217,22 @@ def register_service_errors(errors: dict, remediation: Optional[dict] = None):
                     f"must be one of {sorted(REMEDIATION_VOCAB)}"
                 )
         _REMEDIATION_REGISTRY.update(remediation)
+
+
+# COMMON_ERRORS seeds the registry at import time (above), which bypasses
+# `register_service_errors` — claim them for core explicitly so ownership does
+# not depend on which module happens to import first.
+_OWNER_REGISTRY.update({code: CORE_OWNER for code in COMMON_ERRORS})
+
+
+def error_owners() -> Dict[str, str]:
+    """``{code: owning package}`` for every key whose owner is known."""
+    return dict(_OWNER_REGISTRY)
+
+
+def error_owner(code: str) -> Optional[str]:
+    """The package responsible for translating *code*, if anyone claimed it."""
+    return _OWNER_REGISTRY.get(code)
 
 
 def _params_of(en: str) -> list:

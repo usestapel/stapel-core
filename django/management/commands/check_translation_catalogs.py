@@ -3,8 +3,11 @@
     python manage.py check_translation_catalogs --domain errors \
         [--app LABEL | --out DIR] [--languages ru,es] [--strict]
 
-i18n-shipping.md §5. Errors (missing / stale / params-mismatch / not
-byte-stable) fail the build. Unreviewed values — anything no human approved:
+i18n-shipping.md §5. Errors (missing / foreign / stale / params-mismatch / not
+byte-stable) fail the build. Coverage is scoped to the keys the gated app
+**owns**; a key another package owns and already ships in this language is a
+``foreign`` error unless the sidecar declares the override
+(``translate_catalogs --declare-override``). Unreviewed values — anything no human approved:
 ``origin: llm``, ``seed:<label>``, ``imported``, or no sidecar row — are a
 **counter**, printed but non-blocking, unless ``--strict`` (open question #3:
 when a locale pass is reviewed, flip the switch). The module pytest wraps this
@@ -69,6 +72,7 @@ class Command(BaseCommand):
             source_texts=source,
             languages=languages,
             source_language=i18n_settings.SOURCE_LANGUAGE,
+            undeclared_overrides=i18n_settings.UNDECLARED_OVERRIDES,
         )
         errors, warnings = summarize(issues)
         for issue in issues:

@@ -476,12 +476,53 @@ write-time:
   `docs/errors.<lang>.md` reference (i18n-shipping.md §4); README links both
   languages (lint rule `R100` in `stapel_tools.lint`).
 
+**Core ships its own catalogs, and a module translates only what it owns.**
+`django/translations/errors.{ru,es}.json` (the `stapel_core.django` app
+package — what `CommonDjangoConfig.path` is, so the loader already walks it)
+carries the 41 cross-cutting keys core registers: `COMMON_ERRORS`, the
+verification step-up keys, the captcha/network keys. Before it existed the
+canon `check_translation_catalogs` demanded was the **whole** in-process
+registry, so every module that localized its own errors had to re-translate
+core's 41 to go green: five libraries × two languages = 410 byte-identical
+duplicated entries, none of them an intentional reword, every one of them a
+future stale shadow of a text core owns.
+
+So keys carry an **owner** and the canon is scoped by it:
+
+- `register_service_errors(errors, remediation=None, owner=None)` records who
+  answers for a key. `owner` defaults to the caller's top-level package and is
+  recorded only for a key nobody owns yet — **first registrant wins**, so
+  re-registering somebody else's key still overrides its en text (the §3
+  fork-free seam is untouched) without taking over its catalog duty. Core
+  passes `owner="stapel_core"` explicitly where import order would otherwise
+  decide. `error_owners()` / `error_owner(code)` read it back.
+- The **loader does not change**: `load_app_catalogs` stays a flat later-wins
+  merge over INSTALLED_APPS, so precedence is still position — core's catalog,
+  then a module's declared override, then the host app last. Ownership is
+  enforced at write and gate time, never inside the merge.
+- `check_translation_catalogs` requires only the **owned** keys and raises
+  **E `foreign`** for a catalog entry belonging to another package that
+  already ships that language — with the gap-filling carve-out: covering a key
+  its owner does *not* translate in that language (a host generating Turkish
+  for the whole fleet) is legal and silent until the owner ships it.
+- A deliberate reword says so: `translate_catalogs --declare-override KEY…`
+  writes `override: <owner>` into the `.state.json` row. The catalog file
+  stays a flat `{key: text}` map — the runtime merge, `gen-errors.mjs` and
+  human readers all depend on that, so the declaration lives in the sidecar
+  that is already tooling-only and already per-key. A declaration that repeats
+  the owner's text verbatim is **W `vacuous_override`**.
+- `translate_catalogs` will not emit a key the target package does not own, so
+  the command that manufactured the 410 duplicates cannot manufacture more.
+
 `STAPEL_I18N` (`i18n/conf.py`): `LOCALES` (default `["en","ru"]`) — the single
 "project languages" knob; `STAPEL_FLOWS["DOC_LANGUAGES"]` delegates to it
 (`project_languages()`) unless a host sets it explicitly (doc languages may
 differ from product languages). `EXTRA_CATALOG_DIRS` adds catalog roots outside
 the apps. `TRANSLATOR` / `SOURCE_LANGUAGE` are the domain-agnostic
 machine-translation seam (the `llm.translate` comm Function by name, default).
+`UNDECLARED_OVERRIDES` (`"error"` default, `"warn"`) is the one policy switch:
+the escape hatch for a host onboarding a legacy catalog it did not write.
+Fleet libraries run the default.
 
 ### Error registry (`django/api/errors.py`)
 

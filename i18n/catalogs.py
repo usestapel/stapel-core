@@ -124,6 +124,59 @@ def load_app_catalogs(
     return merged
 
 
+def _owner_app_dirs() -> list[tuple[str, Path]]:
+    """``(owning package, app package dir)`` for every installed app.
+
+    The owner is the app's *top-level* package — the unit a key's owner is
+    named by in the error registry (``stapel_core``, ``stapel_profiles``), and
+    the unit that gets released. An app deeper in a distribution
+    (``stapel_core.django``) still belongs to its distribution's package.
+    """
+    from django.apps import apps
+
+    return [(ac.name.split(".")[0], Path(ac.path)) for ac in apps.get_app_configs()]
+
+
+def owner_of_dir(path: Path | str) -> str | None:
+    """Which package owns the catalogs in *path* (a ``translations`` dir).
+
+    Resolved against INSTALLED_APPS: a ``translations`` directory belongs to
+    the app package that contains it. ``None`` when *path* is not an installed
+    app's catalog directory (a tmp_path unit test, an ``EXTRA_CATALOG_DIRS``
+    root) — callers treat that as "ownership unknown" and fall back to the
+    unscoped behaviour rather than guessing.
+    """
+    target = Path(path).resolve()
+    if target.name == CATALOG_DIRNAME:
+        target = target.parent
+    try:
+        pairs = _owner_app_dirs()
+    except Exception:  # apps not ready — no ownership to resolve
+        return None
+    for owner, app_dir in pairs:
+        if app_dir.resolve() == target:
+            return owner
+    return None
+
+
+def owner_catalog(owner: str, domain: str, language: str) -> dict[str, str]:
+    """Merge every catalog *owner* ships for *domain* / *language*.
+
+    "What the owner actually publishes in this language" — the fact the gate
+    needs before calling a module's entry a shadow: covering a key its owner
+    does not translate is gap-filling, not shadowing.
+    """
+    merged: dict[str, str] = {}
+    try:
+        pairs = _owner_app_dirs()
+    except Exception:
+        return merged
+    for pkg, app_dir in pairs:
+        if pkg == owner:
+            merged.update(load_catalog_file(app_dir / catalog_relpath(domain, language)))
+    return merged
+
+
 class CatalogDirError(ValueError):
     """The requested catalog directory is not one the loader would ever read."""
 
@@ -402,8 +455,41 @@ class StateSidecar:
 
     def set(self, domain: str, language: str, key: str,
             *, source_hash: str, origin: str) -> None:
+        """Record hash + origin, preserving fields this call does not manage.
+
+        A wholesale overwrite here would silently drop an
+        :meth:`declare_override` declaration on the next retranslation — the
+        gate would then flag a deliberate override as stale copy-paste, which
+        is exactly the distinction the declaration exists to make.
+        """
         section = self._data.setdefault(self._section(domain, language), {})
-        section[key] = {"hash": source_hash, "origin": origin}
+        entry = dict(section.get(key) or {})
+        entry.update({"hash": source_hash, "origin": origin})
+        section[key] = entry
+
+    def declare_override(self, domain: str, language: str, key: str,
+                         *, owner: str) -> None:
+        """Mark *key* as a deliberate override of *owner*'s text (§3).
+
+        The declaration lives here rather than in the catalog because the
+        catalog must stay a flat ``{key: text}`` map — the runtime merge, the
+        frontend ``gen-errors.mjs`` and human readers all depend on that. The
+        owner is named in the value so the declaration is self-describing in a
+        review diff and so the gate can spot one that outlived its owner.
+        """
+        section = self._data.setdefault(self._section(domain, language), {})
+        entry = dict(section.get(key) or {})
+        entry["override"] = owner
+        section[key] = entry
+
+    def overrides(self, domain: str, language: str) -> dict[str, str]:
+        """``{key: declared owner}`` for the deliberate overrides in a locale."""
+        section = self._data.get(self._section(domain, language), {})
+        return {
+            k: v["override"]
+            for k, v in section.items()
+            if isinstance(v, dict) and isinstance(v.get("override"), str)
+        }
 
     def prune(self, domain: str, language: str, keep: Iterable[str]) -> None:
         """Drop provenance for keys no longer in the catalog / source."""
@@ -449,6 +535,8 @@ __all__ = [
     "is_seeded",
     "load_app_catalogs",
     "load_catalog_file",
+    "owner_catalog",
+    "owner_of_dir",
     "resolve_catalog_dir",
     "seed_origin",
 ]

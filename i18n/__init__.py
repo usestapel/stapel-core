@@ -45,12 +45,14 @@ from .catalogs import (
     is_seeded,
     load_app_catalogs,
     load_catalog_file,
+    owner_catalog,
+    owner_of_dir,
     resolve_catalog_dir,
     seed_origin,
 )
-from .check import CatalogIssue, check_translation_catalogs, summarize
+from .check import CatalogIssue, check_translation_catalogs, owned_keys, summarize
 from .conf import i18n_settings, project_languages
-from .domains import DOMAIN_SOURCES, params_of, source_texts
+from .domains import DOMAIN_OWNERS, DOMAIN_SOURCES, params_of, source_owners, source_texts
 from .translate import TranslateResult, translate_catalog
 
 __all__ = [
@@ -63,6 +65,7 @@ __all__ = [
     "CatalogDirError",
     "CatalogIssue",
     "CommDocTranslator",
+    "DOMAIN_OWNERS",
     "DOMAIN_SOURCES",
     "DocTranslationCache",
     "StateSidecar",
@@ -79,10 +82,14 @@ __all__ = [
     "is_seeded",
     "load_app_catalogs",
     "load_catalog_file",
+    "owned_keys",
+    "owner_catalog",
+    "owner_of_dir",
     "params_of",
     "project_languages",
     "resolve_catalog_dir",
     "seed_origin",
+    "source_owners",
     "source_texts",
     "summarize",
     "translate_catalog",

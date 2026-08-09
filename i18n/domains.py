@@ -59,10 +59,25 @@ def _flows_source() -> dict[str, str]:
     return flow_source_texts(flow_registry.all())
 
 
+def _errors_owners() -> dict[str, str]:
+    from stapel_core.django.api.errors import error_owners
+
+    _errors_source()  # force-import every error module so the registry is whole
+    return error_owners()
+
+
 #: domain → callable returning the canonical ``{key: source_text}`` map.
 DOMAIN_SOURCES: dict[str, Callable[[], dict[str, str]]] = {
     "errors": _errors_source,
     "flows": _flows_source,
+}
+
+#: domain → callable returning ``{key: owning package}``. A domain without a
+#: resolver reports no ownership, and the gate then behaves exactly as it did
+#: before ownership existed (every canonical key required, nothing foreign) —
+#: so adding ownership to one domain cannot disturb another.
+DOMAIN_OWNERS: dict[str, Callable[[], dict[str, str]]] = {
+    "errors": _errors_owners,
 }
 
 
@@ -76,4 +91,16 @@ def source_texts(domain: str) -> dict[str, str]:
     return resolver()
 
 
-__all__ = ["DOMAIN_SOURCES", "params_of", "source_texts"]
+def source_owners(domain: str) -> dict[str, str]:
+    """``{key: owning package}`` for *domain* — empty when it tracks no owners."""
+    resolver = DOMAIN_OWNERS.get(domain)
+    return resolver() if resolver else {}
+
+
+__all__ = [
+    "DOMAIN_OWNERS",
+    "DOMAIN_SOURCES",
+    "params_of",
+    "source_owners",
+    "source_texts",
+]

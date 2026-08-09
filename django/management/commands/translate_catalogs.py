@@ -2,7 +2,7 @@
 
     python manage.py translate_catalogs --domain errors --lang ru [--llm] \
         [--seed FILE] [--seed-label LABEL] [--app LABEL | --out DIR] \
-        [--approve KEY … | --approve-all]
+        [--approve KEY … | --approve-all] [--declare-override KEY …]
 
 The write-time sister of ``generate_flow_docs``. Materializes
 ``<out>/<domain>.<lang>.json`` (flat ``{code|key: text}``, byte-stable) from
@@ -17,7 +17,15 @@ the domain's canonical en source, recording provenance in ``<out>/.state.json``:
   ``origin: llm`` (machine, unreviewed — the gate's W-counter);
 * ``--approve KEY …`` / ``--approve-all`` flips reviewed keys to
   ``origin: human`` — review is a state transition, not hand-editing JSON, and
-  it is the only thing that clears the unreviewed counter.
+  it is the only thing that clears the unreviewed counter;
+* ``--declare-override KEY …`` records that a key another package owns is
+  reworded here on purpose (``override: <owner>`` in the sidecar), which is
+  also what admits it to this catalog at all.
+
+The canon is scoped to the keys the target app **owns**. A key belonging to
+another package — core's cross-cutting error keys, above all — is not written
+here: the loader merges the owner's catalog at runtime, so a copy is at best
+noise and at worst a stale shadow of a text the owner later fixes.
 
 Keys nothing filled stay absent and fail ``check_translation_catalogs``.
 
@@ -80,6 +88,12 @@ class Command(BaseCommand):
             "--approve-all", action="store_true",
             help="Mark every present key reviewed (origin: human).",
         )
+        parser.add_argument(
+            "--declare-override", nargs="*", default=None, metavar="KEY",
+            help="Declare these keys deliberate rewords of another package's "
+                 "text (override: <owner> in .state.json). Without it, a "
+                 "foreign key is a gate error, not a decision.",
+        )
 
     def handle(self, *args, **options):
         domain = options["domain"]
@@ -104,7 +118,25 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(
                     f"seed file {options['seed']} empty or unreadable — ignored"))
 
-        result = translate_catalog(
+        try:
+            result = self._translate(domain, lang, out_dir, source, seed, options)
+        except ValueError as exc:  # an undeclarable override
+            raise CommandError(str(exc))
+
+        style = self.style.SUCCESS if not result.missing else self.style.WARNING
+        self.stdout.write(style(
+            f"{domain}/{lang} → {out_dir}: kept {result.kept}, "
+            f"seeded {result.seeded}, translated {result.translated}, "
+            f"imported {result.imported}, approved {result.approved}, "
+            f"declared {result.declared}, "
+            f"missing {len(result.missing)}"
+            + ("" if result.written else " (no change)")
+        ))
+        self._report(result)
+
+    @staticmethod
+    def _translate(domain, lang, out_dir, source, seed, options):
+        return translate_catalog(
             domain, lang, out_dir,
             source_texts=source,
             source_language=i18n_settings.SOURCE_LANGUAGE,
@@ -113,16 +145,11 @@ class Command(BaseCommand):
             llm=options["llm"],
             approve=options["approve"],
             approve_all=options["approve_all"],
+            # .get, like --out/--app above: the handler is also driven directly.
+            declare_override=options.get("declare_override"),
         )
 
-        style = self.style.SUCCESS if not result.missing else self.style.WARNING
-        self.stdout.write(style(
-            f"{domain}/{lang} → {out_dir}: kept {result.kept}, "
-            f"seeded {result.seeded}, translated {result.translated}, "
-            f"imported {result.imported}, approved {result.approved}, "
-            f"missing {len(result.missing)}"
-            + ("" if result.written else " (no change)")
-        ))
+    def _report(self, result):
         if result.unreviewed:
             self.stdout.write(self.style.WARNING(
                 f"  {result.unreviewed} value(s) written unreviewed "

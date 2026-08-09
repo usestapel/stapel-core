@@ -45,7 +45,7 @@ ERR_403_NETWORK_BLOCKED = 'error.403.network_blocked'
 
 
 def _register_errors() -> None:
-    from stapel_core.django.api.errors import register_service_errors
+    from stapel_core.django.api.errors import CORE_OWNER, register_service_errors
 
     # en text is the canonical backend copy (matches the consumer wording so the
     # errors.json artifact is order-independent when a service also re-declares
@@ -62,6 +62,9 @@ def _register_errors() -> None:
             ERR_400_CAPTCHA_REQUIRED: 'retry',
             ERR_403_NETWORK_BLOCKED: 'contact_support',
         },
+        # owner pinned: this module force-imports last, and services do
+        # re-declare these keys — the text may move, the catalog duty may not.
+        owner=CORE_OWNER,
     )
 
 

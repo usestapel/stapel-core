@@ -1,5 +1,5 @@
 """i18n error keys of the verification mechanism."""
-from stapel_core.django.api.errors import register_service_errors
+from stapel_core.django.api.errors import CORE_OWNER, register_service_errors
 
 from .grants import (
     ERR_400_VERIFICATION_FACTOR,
@@ -33,6 +33,10 @@ VERIFICATION_REMEDIATION = {
     ERR_423_VERIFICATION_LOCKED: "wait_and_retry",
 }
 
-register_service_errors(VERIFICATION_ERRORS, remediation=VERIFICATION_REMEDIATION)
+# owner pinned: these force-import last (see `_errors_source`), so an inferred
+# owner would hand the key to whichever module re-registered it first.
+register_service_errors(
+    VERIFICATION_ERRORS, remediation=VERIFICATION_REMEDIATION, owner=CORE_OWNER
+)
 
 __all__ = ["VERIFICATION_ERRORS", "VERIFICATION_REMEDIATION"]
