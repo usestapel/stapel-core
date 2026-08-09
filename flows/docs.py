@@ -334,17 +334,35 @@ class DefaultFlowDocRenderer:
         texts: dict[str, str] | None = None,
         language: str | None = None,
     ) -> str:
+        """The flow list, with each flow's description ON the list.
+
+        This used to be an ``ID | Name | Steps`` table, which meant a reader
+        looking for "the flow that handles a provisioned account's first
+        login" had to open flows one by one to find out what each one was:
+        the list was a menu and the content sat one level below it — two
+        levels, counting the language picker that used to sit above. Owner
+        complaint, and a fair one: a table of names is an index of an index.
+
+        So the description travels with the name. The per-flow page keeps
+        what only it can hold — the diagram, the numbered steps, the endpoint
+        table with serializers and the step-up contract — and the list holds
+        enough to choose without clicking. Language stays a switch at the top
+        of this page, written by ``generate_project_docs``, which is what
+        knows the sibling trees exist.
+        """
         _t = (texts or {}).get
         c = chrome(language)
-        lines = [f"# {c['index_title']}", "",
-                 f"| {c['col_id']} | {c['col_name']} | {c['col_steps']} |",
-                 "|---|---|---|"]
+        lines = [f"# {c['index_title']}", ""]
         for f in flows:
-            lines.append(
-                f"| [`{f.id}`]({f.id}.md) | {_t(f.title_key, f.title)} | "
-                f"{len(f.steps)} |"
-            )
-        lines += ["", f"## {c['endpoint_to_flow']}", ""]
+            title = _t(f.title_key, f.title)
+            meta = [f"`{f.id}`", f"{len(f.steps)} {c['col_steps'].lower()}"]
+            if f.actors:
+                meta.append(f"{c['actors']}: " + ", ".join(f.actors))
+            description = " ".join(_t(f.description_key, f.description).split())
+            lines += [f"### [{title}]({f.id}.md)", "", " · ".join(meta), ""]
+            if description:
+                lines += [description, ""]
+        lines += [f"## {c['endpoint_to_flow']}", ""]
         reverse: dict[str, set[str]] = {}
         for f in flows:
             for step in f.steps:

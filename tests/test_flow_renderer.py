@@ -194,6 +194,11 @@ def test_index_chrome_localizes():
     ru = render_index_markdown([flow], {}, language="ru")
     assert "# Flows" in en and "Endpoint → flow" in en
     assert "# Флоу" in ru and "Эндпоинт → флоу" in ru
+    # the index is flat: the name links straight to the flow page, and the
+    # description sits on the list rather than one click below it
+    assert "### [Rendered scenario](test.render.md)" in en
+    assert "A scenario description long enough" in en
+    assert "A scenario description long enough" in ru  # untranslated → source
 
 
 # ---------------------------------------------------------------------------
@@ -251,9 +256,16 @@ def test_generate_project_docs_writes_bilingual_byte_stable_trees(tmp_path, monk
     for lang in ("en", "ru"):
         assert (out / lang / "test.project.md").is_file()
         assert (out / lang / "README.md").is_file()
-    # top-level index links both trees
-    root_readme = (out / "README.md").read_text()
-    assert "en/README.md" in root_readme and "ru/README.md" in root_readme
+    # No language-picker page: language is a switch inside each index, not a
+    # level a reader has to pass through to reach a sentence about a flow.
+    assert not (out / "README.md").exists()
+    en_index = (out / "en" / "README.md").read_text()
+    ru_index = (out / "ru" / "README.md").read_text()
+    assert en_index.startswith("**English** · [Русский](../ru/README.md)")
+    assert ru_index.startswith("[English](../en/README.md) · **Русский**")
+    # the list IS the content: the flow's description is inline on the index,
+    # so choosing a flow costs no click at all
+    assert "A scenario description long enough" in en_index
     # chrome differs per language
     assert "## Steps" in (out / "en" / "test.project.md").read_text()
     assert "## Шаги" in (out / "ru" / "test.project.md").read_text()

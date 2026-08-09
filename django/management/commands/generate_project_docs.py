@@ -8,9 +8,18 @@ generated from the single language-agnostic ``flows.json``. Layout::
 
     docs/flows/
       flows.json            # language-agnostic machine artifact (once)
-      README.md             # links every language tree
       en/  README.md + <flow_id>.md …
       ru/  README.md + <flow_id>.md …
+
+There is deliberately **no** ``docs/flows/README.md`` language picker. It used
+to exist, and it made the shortest path from "I want to read the flows" to an
+actual sentence about a flow three clicks long: pick a language, read a table
+of bare names, open a flow. Two of those three levels carried no information.
+Language is now a one-line switch at the top of each index (written here —
+this command is what knows which sibling trees exist), and the index itself
+carries every flow's description inline (``DefaultFlowDocRenderer.
+render_index``). A reader lands on content, and changes language without
+leaving it.
 
 The output is byte-stable (deterministic sorts, no timestamps), so the
 release-gate drift check (`generate_project_docs` + `git diff --exit-code`)
@@ -81,19 +90,36 @@ class Command(BaseCommand):
                     renderer.render_flow(flow, index, texts, lang)
                 )
             (tree / "README.md").write_text(
-                renderer.render_index(flows, index, texts, lang)
+                self._language_switch(lang, languages)
+                + renderer.render_index(flows, index, texts, lang)
             )
 
-        (out / "README.md").write_text(self._language_index(languages))
+        # The picker page is gone (see the module docstring). Delete a stale
+        # one left by an older run rather than leaving a file that still
+        # renders as this directory's landing page on GitHub and still sends
+        # readers through a level that no longer exists.
+        legacy_picker = out / "README.md"
+        if legacy_picker.is_file():
+            legacy_picker.unlink()
+
         self.stdout.write(self.style.SUCCESS(
             f"wrote {len(flows)} flow(s) × {len(languages)} language(s) "
             f"({', '.join(languages)}) to {out}/"
         ))
 
     @staticmethod
-    def _language_index(languages: list[str]) -> str:
-        lines = ["# Flows", ""]
+    def _language_switch(current: str, languages: list[str]) -> str:
+        """One line above the index: the language you are in, plus the others.
+
+        Emitted only when there is more than one tree — a switch with a single
+        position is a decoration that costs a line on every page.
+        """
+        if len(languages) < 2:
+            return ""
+        parts = []
         for lang in languages:
             name = LANGUAGE_NAMES.get(lang, lang)
-            lines.append(f"- [{name}]({lang}/README.md)")
-        return "\n".join(lines) + "\n"
+            parts.append(
+                f"**{name}**" if lang == current else f"[{name}](../{lang}/README.md)"
+            )
+        return " · ".join(parts) + "\n\n"
