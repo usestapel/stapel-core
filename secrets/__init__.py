@@ -7,8 +7,8 @@ a database password, an LLM pool key, …). It resolves the value through a
 instance) of signature ``get(name) -> str | None`` — exactly like
 ``AUDIT_SINK`` / ``ROLE_SOURCES`` elsewhere in core.
 
-Design rules (arch-stapel-vault skeleton, decision 2026-07-06 "env для
-секретов в проде НЕПРИЕМЛЕМ"):
+Design rules (arch-stapel-vault skeleton, decision 2026-07-06 "env for
+secrets in prod is UNACCEPTABLE"):
 
 - **The mechanism lives in core; the backends do not.** The default provider
   is :class:`EnvSecretProvider` — ``os.environ.get``. A bare stapel-core

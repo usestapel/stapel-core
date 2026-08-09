@@ -26,7 +26,7 @@ that app_label (it may lower it as well as raise it); everywhere else the
 base clearance applies. A user's effective clearance for an app is the
 maximum across their roles.
 
-MINI-DESIGN (в.1, reserved — NOT implemented here; UI is AS-3+ scope):
+MINI-DESIGN (c.1, reserved — NOT implemented here; UI is AS-3+ scope):
 runtime-editable role definitions behind an explicit flag.
 
 - Flag: ``STAPEL_ACCESS["RUNTIME_ROLE_DEFINITIONS"] = True`` (no_env — it
@@ -41,7 +41,7 @@ runtime-editable role definitions behind an explicit flag.
   discipline); consumer services keep a read-only cache (Redis or local
   table) keyed by role name. Sync-down is **replace** per role name — the
   event payload is the full definition, consumers overwrite (same semantics
-  as the AS-2 ``staff_roles`` claim sync; в.3).
+  as the AS-2 ``staff_roles`` claim sync; c.3).
 - Merge order with this flag on: builtins → settings ``ROLES`` → runtime
   overlay. Runtime entries may only *add* roles or patch runtime-created
   ones; a runtime entry that shadows a settings-defined role is ignored

@@ -15,7 +15,7 @@ nothing catches the mismatch" finding):
   viewsets skip.
 * **E002** — *any* CDN field is declared at all, but no ``cdn.*`` comm
   route is configured — i.e. the cdn module/service was never wired up.
-  This is the literal miттudei incident (cdn-modularity.md §0.5): a model
+  This is the literal meettoday incident (cdn-modularity.md §0.5): a model
   field frozen to CDN format with no CDN service behind it, caught only
   when a user clicks "Change avatar" in production.
 """
@@ -51,13 +51,12 @@ def check_cdn_field_types_configured(app_configs=None, **kwargs):
         findings.append(
             checks.Error(
                 f"{model._meta.label}.{field.name}: CdnImageField(image_type="
-                f"{field.image_type!r}) объявлен, но {field.image_type!r} "
-                f"отсутствует в STAPEL_CDN['ASSET_TYPES'] ({sorted(allowed)}) "
-                "— validate()/full_clean() будет падать на каждой попытке "
-                "сохранить непустое значение этого поля.",
-                hint="Добавьте тип в STAPEL_CDN['ASSET_TYPES'] этого "
-                     "проекта (дефолт ('avatar',)) или смените image_type "
-                     "поля.",
+                f"{field.image_type!r}) is declared, but {field.image_type!r} "
+                f"is missing from STAPEL_CDN['ASSET_TYPES'] ({sorted(allowed)}) "
+                "— validate()/full_clean() will fail on every attempt to "
+                "save a non-empty value for this field.",
+                hint="Add the type to this project's STAPEL_CDN['ASSET_TYPES'] "
+                     "(default ('avatar',)) or change the field's image_type.",
                 id=E001_TYPE_NOT_CONFIGURED,
                 obj=field,
             )
@@ -81,14 +80,14 @@ def check_cdn_module_wired(app_configs=None, **kwargs):
         labels = sorted({f"{model._meta.label}.{field.name}" for model, field in fields})
         return [
             checks.Error(
-                "CdnImageField/CdnImageListField объявлены (" + ", ".join(labels) +
-                "), но cdn.media_exists не имеет настроенного маршрута — "
-                "cdn-модуль не подключён, и любая проверка/загрузка через "
-                "эти поля упадёт в рантайме на каждой попытке.",
-                hint="Подключите stapel-cdn (маршрут STAPEL_COMM для "
-                     "cdn.*) или уберите CdnImageField из моделей проекта в "
-                     "пользу источника без CDN (например "
-                     "stapel_core.media / отдельного source-поля).",
+                "CdnImageField/CdnImageListField are declared (" + ", ".join(labels) +
+                "), but cdn.media_exists has no configured route — "
+                "the cdn module is not wired up, and any check/upload through "
+                "these fields will fail at runtime on every attempt.",
+                hint="Wire up stapel-cdn (a STAPEL_COMM route for "
+                     "cdn.*) or remove CdnImageField from the project's models "
+                     "in favor of a source without CDN (e.g. "
+                     "stapel_core.media / a separate source field).",
                 id=E002_CDN_ROUTE_MISSING,
             )
         ]

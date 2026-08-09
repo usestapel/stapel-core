@@ -641,7 +641,7 @@ the server (`stapel-cdn` 0.7.0+) already accepted any configured type —
   `STAPEL_CDN["ASSET_TYPES"]` (would fail `validate()`/`full_clean()` on
   every save attempt). `stapel_core.cdn.E002`: any CDN field is declared
   but no `cdn.*` comm route is configured at all — the class of "design
-  shouldn't allow this" bug from the miттudei incident (a `CdnImageField`
+  shouldn't allow this" bug from the meettoday incident (a `CdnImageField`
   frozen to CDN format with no CDN service behind it, caught only when a
   user clicks "Change avatar" in production).
 - Removed `CDN_ASSET_TYPES`/`CDN_IMAGE_TYPES`/`CDN_ALL_TYPES` module
@@ -766,9 +766,9 @@ machine-checked it, and nothing published it for generators/KB to read.
 
 ## [0.12.0] - 2026-07-17
 
-Legacy sweep (владельческая директива: only current code, no backward-compat
+Legacy sweep (owner directive: only current code, no backward-compat
 shims). **Breaking** — house law: minor bump, no deprecation cycle (alpha
-policy: миграций нет, всё с чистого листа).
+policy: no migrations, clean slate every time).
 
 ### Removed
 
@@ -813,9 +813,9 @@ policy: миграций нет, всё с чистого листа).
 - **`RevisionSyncMixin.revision_parameters`** compat alias — use
   `REVISION_PARAMETERS`.
 
-Kept (флаги «legacy» в коде, но это живой рантайм, не совместимость):
-DAC-поведение при незадействованном мандате (`access/backend.py`),
-`ConfigKeyUnknown`-путь `get_config` без `required=`, nav prefix-fallback.
+Kept ("legacy"-flagged in the code, but this is live runtime behavior, not
+back-compat): DAC behavior when no mandate is engaged (`access/backend.py`),
+the `ConfigKeyUnknown` path of `get_config` without `required=`, nav prefix-fallback.
 
 ## [0.11.2] - 2026-07-17
 
@@ -898,7 +898,7 @@ release too).
 - **New system check** `stapel_core.config.checks` (tag `stapel_config`,
   E001): walks every key marked `required` — CONFIG.MD rows **and**
   call-site declarations (below) — and fails `manage.py check` /
-  boot-smoke with `config 'X' обязателен — нужен для: <purpose> — см.
+  boot-smoke with `config 'X' is required — needed for: <purpose> — see
   CONFIG.MD` when it has no value and no default. A required key with a
   default never fails (the default is deliberately how "required, but the
   default is safe" is expressed) — only a required key with *nothing* to
@@ -934,7 +934,7 @@ release too).
 
 ### Changed — BREAKING: bus default backend kafka → memory (in-process)
 
-Live run finding (miттудей): `request_notification` (OTP emails) silently
+Live run finding (meettoday): `request_notification` (OTP emails) silently
 never left the process — `STAPEL_BUS_BACKEND` defaulted to
 `stapel_core.bus.backends.kafka.KafkaBus`, `confluent-kafka` was not
 installed, and every `publish()` raised `ModuleNotFoundError` deep inside
@@ -978,7 +978,7 @@ A monolith was blind to its own installed apps in the admin: no in-app way
 to jump from one Stapel module's admin section to another's, or to a
 module's Swagger/schema — only the pre-existing cross-*service* "Services"
 menu (STAPEL_SERVICES, admin-suite AS-4), which a monolith doesn't seed
-(§37-уточнение: "монолит не сеет env — он видит свои аппки сам").
+(§37 clarification: "a monolith doesn't seed env — it sees its own apps directly").
 
 - **`stapel_core.django.nav.discover_modules()` / `build_modules()`**: pure
   `INSTALLED_APPS` introspection, no deploy-config seed required. An
@@ -1446,7 +1446,7 @@ so a direct `/admin/app/model/` URL is closed exactly like the index entry
 Consumer half of the staff-role transport (producer lives in stapel-auth
 [Unreleased], AS-2 — wording aligned). Auth is the single source of truth for
 staff status; the sync-down in `get_or_create_user_from_jwt` switches from
-**upgrade-only** to **REPLACE from the claim** (в.3).
+**upgrade-only** to **REPLACE from the claim** (c.3).
 
 - **`staff_roles` field on `AbstractStapelUser`** (`JSONField(default=list)`,
   migration `users/0006`): the shadow copy of the `staff_roles` JWT claim.
@@ -1455,7 +1455,7 @@ staff status; the sync-down in `get_or_create_user_from_jwt` switches from
   staff/superuser tokens only, sorted for a stable ordering. Present-but-empty
   is authoritative "zero roles"; absence means the model has no field (pre-AS-2)
   and consumers must not touch local state.
-- **`get_or_create_user_from_jwt` sync-down REPLACE (в.3, breaking on the
+- **`get_or_create_user_from_jwt` sync-down REPLACE (c.3, breaking on the
   consumer side):** `is_staff` / `is_superuser` are now REPLACED from the token
   (a cleared flag DOWNGRADES a local staff/superuser — revocation finally
   lands, A3). `staff_roles` is REPLACED **only when the claim is present**;
@@ -2026,7 +2026,7 @@ README links and the release gate are flow-system.md §4 (next step).
 
 ## [0.3.3] - 2026-07-05
 
-### Added — outbox atomicity as a seam (docs/module-extension-gaps.md §"Системный паттерн")
+### Added — outbox atomicity as a seam (docs/module-extension-gaps.md §"Systemic pattern")
 
 Two module repos independently broke the outbox guarantee ("the event
 leaves iff the surrounding transaction commits") the same two ways

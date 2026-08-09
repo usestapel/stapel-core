@@ -23,7 +23,7 @@ yes` row with no value and no default used to only raise
 — possibly never, for a key nothing reads through the config seam yet. The
 `stapel_config` system check (`stapel_core.config.checks`) now walks every
 required key at `manage.py check` / boot-smoke time and fails loud
-(`E001: config 'X' обязателен — нужен для: ...`) before the service is
+(`E001: config 'X' is required — needed for: ...`) before the service is
 allowed to start.
 
 **Metadata can come from code, not just this hand-written table**:

@@ -1,7 +1,7 @@
 """Mandate enforcement — runtime auth backends, no Permission-string generation.
 
 ``MandateBackend`` computes ``has_perm`` from (model declaration × role
-clearance) at call time (design choice (б) of admin-suite §3.4): a decorator
+clearance) at call time (design choice (b) of admin-suite §3.4): a decorator
 change takes effect on deploy, nothing is materialized per service, drift is
 impossible by construction (A1). Nothing here writes to the database.
 

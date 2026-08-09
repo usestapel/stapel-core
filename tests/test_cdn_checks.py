@@ -5,7 +5,7 @@ Covers the two owner-visible failure modes from cdn-modularity.md:
 1. A declared ``CdnImageField``'s ``image_type`` is missing from this
    deployment's ``STAPEL_CDN["ASSET_TYPES"]`` (E001).
 2. Any ``CdnImageField``/``CdnImageListField`` is declared, but no
-   ``cdn.*`` comm route is configured at all — the miттudei incident (E002).
+   ``cdn.*`` comm route is configured at all — the meettoday incident (E002).
 """
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ def test_e002_noop_when_no_cdn_fields_declared(monkeypatch):
 
 def test_e002_flags_missing_route_when_fields_exist():
     # No STAPEL_COMM route configured for cdn.* anywhere in the test settings
-    # (tests/conftest.py doesn't wire one) — this is the miттudei scenario.
+    # (tests/conftest.py doesn't wire one) — this is the meettoday scenario.
     errors = check_cdn_module_wired()
     assert len(errors) == 1
     assert errors[0].id == E002_CDN_ROUTE_MISSING

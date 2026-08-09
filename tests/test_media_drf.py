@@ -60,7 +60,7 @@ class TestImageBuilder:
         assert image("link", "") is None
 
     def test_cdn_routes_to_cdn_provider_regardless_of_backend(self, monkeypatch):
-        # libgaps Н3: a cdn-sourced ref must be described by the CDN provider
+        # libgaps H3: a cdn-sourced ref must be described by the CDN provider
         # (its own naming), NOT the global backend (which may be pil and would
         # find zero variants). Patch the CDN provider's describe.
         import stapel_core.media.descriptor as mod

@@ -59,7 +59,7 @@ class AbstractStapelUser(AbstractUser):
 
     # Staff roles (admin-suite AS-2): materialized role names for the JWT
     # claim. Auth service is the single writer (A2); shadow copies in
-    # consumer services are REPLACED from the staff_roles claim (в.3).
+    # consumer services are REPLACED from the staff_roles claim (c.3).
     staff_roles = models.JSONField(default=list, blank=True)
 
     # User status fields

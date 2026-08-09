@@ -26,13 +26,12 @@ classifiers = [
 ]
 
 dependencies = [
-    # Верхняя граница, а не каприз: Django 6.1 убрал приватный
-    # `django.utils.cache.cc_delim_re`, а `rest_framework/views.py` его
-    # импортирует — включая свежайшую DRF 3.17.2 (проверено 07.08.2026).
-    # С Django 6.1 любой импорт DRF падает с ImportError ещё на сборе
-    # тестов, и это уронило публикацию stapel-tools 0.29.1: локально
-    # зелено на Django 6.0, в CI ставится последняя.
-    # СНЯТЬ, как только выйдет DRF без этого импорта.
+    # Upper bound, not a whim: Django 6.1 removed the private
+    # `django.utils.cache.cc_delim_re` that `rest_framework/views.py` still
+    # imports (checked against DRF 3.17.2 on 2026-08-07). Any DRF import
+    # breaks at collection time on Django 6.1 — this is what broke the
+    # stapel-tools 0.29.1 publish (green locally on 6.0, CI installs latest).
+    # REMOVE once DRF drops this import.
     "Django>=5.1,<6.1",
     "djangorestframework>=3.14",
     "djangorestframework-dataclasses>=1.2",

@@ -2,7 +2,7 @@
 
     python manage.py generate_project_docs --out docs/flows
 
-flow-system.md §4 / attributes-admin-ui.md решение 5: one command, one tree
+flow-system.md §4 / attributes-admin-ui.md decision 5: one command, one tree
 per ``STAPEL_FLOWS["DOC_LANGUAGES"]`` language (``["en", "ru"]`` by default),
 generated from the single language-agnostic ``flows.json``. Layout::
 

@@ -230,7 +230,7 @@ class MetaDocSerializer(StapelDataclassSerializer):
 
 @dataclass
 class BlankDoc:
-    """A DTO with an empty-string-default field (libgaps Н4 pattern).
+    """A DTO with an empty-string-default field (libgaps H4 pattern).
 
     Attributes:
         title: Required title.
@@ -251,7 +251,7 @@ class BlankDocSerializer(StapelDataclassSerializer):
 
 
 class TestEmptyStringDefaultAllowsBlank:
-    """A str field defaulting to "" must accept "" (libgaps Н4)."""
+    """A str field defaulting to "" must accept "" (libgaps H4)."""
 
     def test_empty_default_field_allows_blank(self):
         f = BlankDocSerializer().fields["description"]

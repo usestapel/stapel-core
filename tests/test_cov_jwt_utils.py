@@ -224,7 +224,7 @@ class TestGetOrCreateUserFromJWT:
 
     def test_existing_user_permissions_replaced_downgraded(self):
         # Consumer mode (JWT_CREATE_USERS_FROM_TOKEN default True): auth is the
-        # source of truth (в.3) — is_staff/is_superuser are REPLACED, so a
+        # source of truth (c.3) — is_staff/is_superuser are REPLACED, so a
         # token with the flags cleared DOWNGRADES a local staff/superuser.
         User = get_user_model()
         user = User.objects.create_user(

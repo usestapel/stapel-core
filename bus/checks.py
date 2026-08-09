@@ -54,9 +54,9 @@ def check_bus_backend_library(app_configs=None, **kwargs):
     except ImportError:
         return [
             checks.Error(
-                f"bus backend {shorthand!r} сконфигурирован (STAPEL_BUS_BACKEND), "
-                f"но {module_name!r} не установлен — publish()/consume() будут "
-                "падать в рантайме (ModuleNotFoundError на каждый вызов).",
+                f"bus backend {shorthand!r} is configured (STAPEL_BUS_BACKEND), "
+                f"but {module_name!r} is not installed — publish()/consume() will "
+                "fail at runtime (ModuleNotFoundError on every call).",
                 hint=f"pip install 'stapel-core[{extra}]'",
                 id=E001_MISSING_TRANSPORT_LIBRARY,
             )

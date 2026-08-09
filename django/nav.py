@@ -459,12 +459,12 @@ def current_dashboard_url(user) -> Optional[str]:
 # right for a microservices topology, where a process cannot see its
 # siblings any other way. A monolith needs no such seed: it hosts every one
 # of its Stapel modules in the same INSTALLED_APPS list already, so it can
-# discover them directly by introspection (§37-уточнение, 2026-07-10).
+# discover them directly by introspection (§37 clarification, 2026-07-10).
 #
 # A module counts as a "Stapel module" when either:
 #   - its AppConfig carries ``stapel_module = True`` (a class or instance
 #     attribute — the explicit marker a project's own local app sets to opt
-#     in, e.g. ``apps/tools``: "скелет tools ставит маркер своим"), or
+#     in, e.g. ``apps/tools``: the tools skeleton sets its own marker), or
 #   - it is one of the published ``stapel_*`` pip packages (AppConfig.name
 #     starts with "stapel_", the PyPI/import-name convention every module in
 #     this repo follows) — auto-detected, no marker needed. ``stapel_core``

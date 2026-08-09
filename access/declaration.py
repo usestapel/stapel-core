@@ -31,7 +31,7 @@ DECLARATION_ATTR = "_stapel_access_declaration"
 ACTIONS = ("view", "add", "change", "delete")
 
 #: django.contrib service tables pinned to the ``ops`` category (Q9 /
-#: admin-suite §6.8 — the "закрепить списком в коре" option): infrastructure
+#: admin-suite §6.8 — the "pin via a list in core" option): infrastructure
 #: the host project did not author and staff should not casually browse
 #: (groups drive DAC grants, sessions carry live login state). Applies only
 #: while the model has no explicit ``@access`` declaration; the host can

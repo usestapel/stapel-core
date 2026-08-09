@@ -126,7 +126,7 @@ class StapelDataclassSerializer(DataclassSerializer):
         # That desyncs from the Django model (blank=True, default="") and,
         # worse, forces callers to omit the key instead of sending "", which
         # makes "clear this field" and "leave it unchanged" indistinguishable
-        # on a PATCH (meettoday libgaps Н4). If the declared default is "",
+        # on a PATCH (meettoday libgaps H4). If the declared default is "",
         # blank IS a valid value — say so. A field(metadata={'allow_blank':...})
         # override still wins (applied in step 2 below).
         for f in dataclasses.fields(dc):

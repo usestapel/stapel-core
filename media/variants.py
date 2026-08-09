@@ -1,4 +1,4 @@
-"""Reusable variant-ladder core (images-and-cdn.md §1а, §3).
+"""Reusable variant-ladder core (images-and-cdn.md §1a, §3).
 
 The tier semantics extracted from ``stapel_cdn.services`` as a library of
 functions, engine-agnostic where possible:
@@ -8,7 +8,7 @@ functions, engine-agnostic where possible:
   w/h preview branches (§3.2) and the square dedup (§3.3);
 - **PIL engine**: ``generate_variants`` renders that plan next to a Django
   ``FieldFile``/storage as ``<stem>__<tier><branch>.webp`` siblings — the
-  zero-infrastructure ``ImageField`` path (§1а). stapel-cdn keeps its own
+  zero-infrastructure ``ImageField`` path (§1a). stapel-cdn keeps its own
   pyvips engine over the same semantics (performance path).
 
 No upscaling anywhere: a tier whose target side exceeds the native side is
@@ -105,7 +105,7 @@ def plan_variants(
 
 
 def variant_name(original_name: str, tier: int, branch: Optional[str]) -> str:
-    """Storage name of a variant file next to its original (§1а):
+    """Storage name of a variant file next to its original (§1a):
     ``<stem>__<tier><branch>.webp`` — e.g. ``photos/cat__560w.webp``."""
     stem, _dot, _ext = original_name.rpartition(".")
     if not stem:  # no extension in the original name
@@ -114,7 +114,7 @@ def variant_name(original_name: str, tier: int, branch: Optional[str]) -> str:
 
 
 def generate_variants(field_file, watermark=None) -> List[VariantMeta]:
-    """Render the ladder for a Django ``FieldFile`` with Pillow (§1а).
+    """Render the ladder for a Django ``FieldFile`` with Pillow (§1a).
 
     Variants are written through the field's own storage as sibling files
     (``variant_name``). Returns the ``VariantMeta`` list (persisting it —

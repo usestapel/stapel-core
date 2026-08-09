@@ -293,7 +293,7 @@ def test_field_source_authoritative_even_when_empty(db):
     group, _ = Group.objects.get_or_create(name="role:editor")
     user.groups.add(group)
     # staff_roles=[] terminates the chain: stale role:* groups must not
-    # resurrect a revoked role (sync-down replace semantics, в.3/A3).
+    # resurrect a revoked role (sync-down replace semantics, c.3/A3).
     assert user_roles(user) == frozenset()
 
 

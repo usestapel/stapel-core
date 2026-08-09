@@ -48,11 +48,11 @@ def check_required_config(app_configs=None, **kwargs):
         try:
             get_config(key, **kwargs)
         except (ConfigUnavailable, ConfigNotDeclared):
-            purpose = f" — нужен для: {entry.purpose}" if entry.purpose else ""
+            purpose = f" — needed for: {entry.purpose}" if entry.purpose else ""
             errors.append(
                 checks.Error(
-                    f"config {key!r} обязателен{purpose}, но не задан и не "
-                    f"имеет дефолта — см. CONFIG.MD.",
+                    f"config {key!r} is required{purpose}, but is not set and "
+                    f"has no default — see CONFIG.MD.",
                     hint=(
                         "Set the environment variable"
                         + (" or vault secret" if entry.source == "vault" else "")

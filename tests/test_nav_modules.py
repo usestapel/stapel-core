@@ -1,7 +1,7 @@
 """Module discovery for the admin/API navigation (BACKLOG §37).
 
 A monolith is not seeded with STAPEL_SERVICES to see its own apps — it
-introspects INSTALLED_APPS directly (§37-уточнение, 2026-07-10). Covers:
+introspects INSTALLED_APPS directly (§37 clarification, 2026-07-10). Covers:
 ``_is_stapel_app`` filtering (marker + the ``stapel_*`` pip-package
 convention + core exclusion), ``discover_modules``/``build_modules`` with
 2-3 mocked modules (admin/Swagger/schema links, per-module mount preferred

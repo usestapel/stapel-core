@@ -40,7 +40,7 @@ class RenderMetadataProvider(Protocol):
 
 
 class PilRenderMetadataProvider:
-    """Snapshot over ImageField-style storage (§1а).
+    """Snapshot over ImageField-style storage (§1a).
 
     Geometry of the variants is recomputed from the same pure plan math the
     generator used (``plan_variants``) — deterministic, no need to decode
@@ -117,7 +117,7 @@ class PilRenderMetadataProvider:
 
 
 class CdnRenderMetadataProvider:
-    """Delegates to the stapel-cdn service over comm (§1б)."""
+    """Delegates to the stapel-cdn service over comm (§1b)."""
 
     def describe(self, ref: str) -> RenderMetadata:
         from stapel_core.comm import call

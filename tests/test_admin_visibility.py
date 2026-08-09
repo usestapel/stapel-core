@@ -332,7 +332,7 @@ def test_admin_category_override_rebasess_on_preset():
     with override_settings(
         STAPEL_ADMIN={"MODELS": {"stapel_outbox.OutboxEvent": {"category": "business"}}}
     ):
-        # "показать всем стаффам": the category flip re-bases levels on the
+        # "show to all staff": the category flip re-bases levels on the
         # business preset — view becomes LOW, not the ops HIGH.
         assert effective_access(OutboxEvent) == STANDARD
     assert effective_access(OutboxEvent) == OPS  # settings gone

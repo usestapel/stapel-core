@@ -31,7 +31,7 @@ access_settings = AppSettings(
         # access_report line). True: the mandate is a ceiling — grants above
         # clearance are denied for staff (enforced by AuditedModelBackend).
         "STRICT": False,
-        # Reserved (в.1): runtime-editable role *definitions* behind an
+        # Reserved (c.1): runtime-editable role *definitions* behind an
         # explicit flag. NOT implemented in this version — the settings
         # registry stays the source of truth; see the mini-design in
         # stapel_core.access.roles. Setting True today only triggers a

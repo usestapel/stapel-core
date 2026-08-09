@@ -252,12 +252,12 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         # Try to get existing user by PK
         user = User.objects.get(pk=pk)
 
-        # Staff status sync-down (admin-suite AS-2, в.3).
+        # Staff status sync-down (admin-suite AS-2, c.3).
         updated = False
         create_from_jwt = getattr(settings, "JWT_CREATE_USERS_FROM_TOKEN", True)
 
         if create_from_jwt:
-            # Consumer (shadow-copy) mode — REPLACE from the claim (в.3):
+            # Consumer (shadow-copy) mode — REPLACE from the claim (c.3):
             # auth is the source of truth for staff status. The old
             # "upgrade-only" rule is gone: it made revocation impossible (A3)
             # AND let a replayed stale token re-elevate a demoted admin.

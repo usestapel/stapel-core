@@ -273,7 +273,7 @@ class TestGetOrCreateUserFromJwt:
         assert user.is_staff
 
     def test_replaces_is_staff_downgrade(self):
-        # AS-2 (в.3): consumer sync-down REPLACES from the token — auth is the
+        # AS-2 (c.3): consumer sync-down REPLACES from the token — auth is the
         # source of truth, so a cleared flag DOWNGRADES a local staff.
         data = self._data(is_staff=True)
         user = get_or_create_user_from_jwt(data)
@@ -293,7 +293,7 @@ class TestGetOrCreateUserFromJwt:
         assert user.is_superuser
 
     def test_replaces_is_superuser_downgrade(self):
-        # AS-2 (в.3): superuser flag is REPLACED from the token, same as
+        # AS-2 (c.3): superuser flag is REPLACED from the token, same as
         # is_staff — a cleared flag downgrades a local superuser.
         data = self._data(is_superuser=True)
         user = get_or_create_user_from_jwt(data)

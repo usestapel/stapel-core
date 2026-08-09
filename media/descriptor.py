@@ -9,7 +9,7 @@ global ``STAPEL_MEDIA_BACKEND``:
 
 - ``source="cdn"`` — resolved through the **CDN** provider (`cdn.describe`
   comm), which reads stapel-cdn's OWN flat ``<hash>/{tier}{branch}.webp``
-  variant naming. This is the fix for the live gap meettoday hit (libgaps Н3):
+  variant naming. This is the fix for the live gap meettoday hit (libgaps H3):
   a deployment whose default backend is ``"pil"`` was describing cdn-uploaded
   avatars with the PIL provider, which looks for a DIFFERENT naming
   (``<stem>__{tier}{branch}.webp``) and therefore found ZERO variants — the

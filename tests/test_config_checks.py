@@ -62,7 +62,7 @@ def test_required_key_missing_fails_check(monkeypatch):
     messages = " ".join(e.msg for e in errors)
     assert "DATA_DIR" in messages
     assert "API_TOKEN" in messages
-    # purpose surfaces in the message ("нужен для: ...")
+    # purpose surfaces in the message ("needed for: ...")
     assert "Where data lives" in messages
 
 
