@@ -194,6 +194,27 @@ class TestPilDescribe:
         with pytest.raises(LookupError):
             PilRenderMetadataProvider(storage=storage).describe("nope.jpg")
 
+    def test_directory_ref_is_an_unknown_ref_not_an_oserror(self, storage, tmp_path):
+        """`storage.exists()` answers True for a DIRECTORY, so it was never a
+        guard that the ref names a readable image. Live on the meettoday
+        sandbox: a stapel-cdn ref (`avatar/<64-hex>/` holding the ladder)
+        mis-tagged `file` reached this provider, passed `exists()`, and
+        `open()` raised IsADirectoryError — an OSError, outside the descriptor
+        guard's tuple, which 500'd the whole profile endpoint."""
+        ladder = tmp_path / "avatar" / ("c" * 64)
+        ladder.mkdir(parents=True)
+        (ladder / "64.webp").write_bytes(b"not-read-here")
+        ref = "avatar/" + "c" * 64
+        assert storage.exists(ref)  # the dishonest part, still true
+
+        with pytest.raises(LookupError):
+            PilRenderMetadataProvider(storage=storage).describe(ref)
+
+    def test_undecodable_file_is_an_unknown_ref(self, storage):
+        name = storage.save("junk.jpg", ContentFile(b"this is not an image"))
+        with pytest.raises(LookupError):
+            PilRenderMetadataProvider(storage=storage).describe(name)
+
 
 # ---------------------------------------------------------------------------
 # Backend swap (§1: config, not a code branch)

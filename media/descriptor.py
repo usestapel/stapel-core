@@ -25,6 +25,7 @@ rendering must travel as a `StapelImage`, never a bare ref string.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from .providers import CdnRenderMetadataProvider, PilRenderMetadataProvider
@@ -32,19 +33,65 @@ from .types import ImageSource, StapelImage, VariantMeta
 
 __all__ = ["image", "from_render_metadata"]
 
+logger = logging.getLogger(__name__)
+
 
 def _describe_by_source(source: ImageSource, value: str) -> Optional[dict]:
     """Route to the provider that OWNS ``source``'s variant naming, ignoring
-    the global backend. ``None`` when the ref does not resolve."""
+    the global backend. ``None`` when the ref does not resolve.
+
+    THE GUARD IS BY CLASS, NOT BY EXCEPTION NAME. It used to catch
+    ``(LookupError, ValueError)`` — the two types the providers were known to
+    raise — and that is not the promise :func:`image` makes. Live on the
+    meettoday sandbox a profile carried a stapel-cdn ref (a DIRECTORY holding
+    the variant ladder) mis-tagged ``file``, so the PIL provider opened it as
+    a plain file and raised ``IsADirectoryError`` — an ``OSError``, outside
+    the tuple, straight past the guard. A cosmetic avatar 500'd
+    ``GET /profiles/api/v1/me`` in full: the frontend then read no
+    ``display_name``, concluded the account was unnamed, blocked the meeting
+    door with an "enter your name" dialog, whose PATCH re-serialized the same
+    avatar and 500'd again. Two people locked out of the product by a dangling
+    ref that this function exists to absorb.
+
+    So: ANY failure to resolve a ref degrades to ``None`` — but never
+    silently. Silent ``None`` is how "no result" becomes indistinguishable
+    from "a result", which is this fleet's recurring root class; every
+    degrade below carries the source, the ref and the traceback at WARNING so
+    the broken row is findable by grep instead of by outage.
+    """
     if source == "cdn":
         provider = CdnRenderMetadataProvider()
     elif source == "file":
         provider = PilRenderMetadataProvider()
     else:
+        logger.warning(
+            "media.image: no provider owns source %r (ref %r) — no image", source, value
+        )
         return None
     try:
         return provider.describe(value)
     except (LookupError, ValueError):
+        # The expected dangling-ref shape: the provider looked and did not
+        # find. Still logged — a ref stored on a row that no longer resolves
+        # is a data defect, not a normal state.
+        logger.warning(
+            "media.image: %s ref %r does not resolve — rendering no image",
+            source,
+            value,
+            exc_info=True,
+        )
+        return None
+    except Exception:
+        # Storage/transport/decoder faults (IsADirectoryError and the rest of
+        # OSError, a comm failure to the CDN service, a codec blowing up on a
+        # truncated file). Louder, because unlike a dangling ref these are not
+        # supposed to happen at all — but still degraded, because `image()`
+        # promises one bad ref never takes down the payload around it.
+        logger.exception(
+            "media.image: failed to describe %s ref %r — degrading to no image",
+            source,
+            value,
+        )
         return None
 
 
@@ -85,8 +132,11 @@ def image(
     """Build a `StapelImage` for a stored image ``value`` tagged ``source``.
 
     Returns ``None`` when there is nothing to render (empty value, or a
-    ``cdn``/``file`` ref that no longer resolves) — the caller's placeholder
-    case, never a raised error, so one dangling ref never 500s a whole payload.
+    ``cdn``/``file`` ref that does not resolve — missing, unreadable, or of a
+    shape its provider cannot describe) — the caller's placeholder case,
+    NEVER a raised error, so one dangling ref never 500s a whole payload.
+    That sentence is a contract, not a hope: see `_describe_by_source`, which
+    absorbs the whole class of resolution failures and logs each one.
 
     ``aspect`` is an optional caller-known aspect ratio for a ``"link"`` image
     (external URLs can't be decoded server-side); ignored for cdn/file, whose

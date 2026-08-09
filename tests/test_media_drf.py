@@ -93,6 +93,47 @@ class TestImageBuilder:
         monkeypatch.setattr(mod.CdnRenderMetadataProvider, "describe", _raise)
         assert image("cdn", "avatar/gone") is None
 
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            # The live meettoday failure: a stapel-cdn ref (a DIRECTORY of the
+            # variant ladder) mis-tagged `file`, opened as a plain file.
+            IsADirectoryError(21, "Is a directory"),
+            PermissionError(13, "Permission denied"),
+            OSError("storage backend unreachable"),
+            RuntimeError("comm transport exploded"),
+            KeyError("variants"),
+        ],
+    )
+    def test_any_resolution_failure_degrades_to_none(self, monkeypatch, exc):
+        """`image()` promises "never a raised error" — for the CLASS, not for
+        the two exception types the providers happened to raise in 2026-07."""
+        import stapel_core.media.descriptor as mod
+
+        def _raise(self, ref):
+            raise exc
+
+        monkeypatch.setattr(mod.PilRenderMetadataProvider, "describe", _raise)
+        monkeypatch.setattr(mod.CdnRenderMetadataProvider, "describe", _raise)
+        assert image("file", "avatar/" + "a" * 64) is None
+        assert image("cdn", "avatar/" + "a" * 64) is None
+
+    def test_degrade_is_logged_not_silent(self, monkeypatch, caplog):
+        """A degrade must be findable by grep. Silent `None` is how "no result"
+        becomes indistinguishable from "a result" (the fleet's root class)."""
+        import stapel_core.media.descriptor as mod
+
+        def _raise(self, ref):
+            raise IsADirectoryError(21, "Is a directory", ref)
+
+        monkeypatch.setattr(mod.PilRenderMetadataProvider, "describe", _raise)
+        with caplog.at_level("WARNING", logger="stapel_core.media.descriptor"):
+            assert image("file", "avatar/deadbeef") is None
+        assert any(
+            "avatar/deadbeef" in rec.getMessage() and rec.levelname in ("WARNING", "ERROR")
+            for rec in caplog.records
+        ), caplog.text
+
     def test_from_render_metadata_picks_original_url(self):
         img = from_render_metadata("file", _RM)
         assert img["source"] == "file" and img["url"] == "/m/a.webp"
