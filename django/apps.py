@@ -56,6 +56,11 @@ class CommonDjangoConfig(AppConfig):
         # IsAuthenticated without saying whether guests are meant to pass —
         # the finding is "declare a stance", never "close the view".
         from stapel_core.django import adoption_checks as _adoption_checks  # noqa: F401
+        # Template-strictness check (stapel_core.templates):
+        # W-level under DEBUG when an engine renders a missing variable as the
+        # empty string — the default that turns a renamed context variable
+        # into an email with a hole in it instead of an error.
+        from stapel_core import templates as _template_strictness  # noqa: F401
         # Bus-backend checks (stapel_core.bus.checks): E-level when the
         # configured STAPEL_BUS_BACKEND names a transport (kafka/nats) whose
         # client library is not installed — catches the "publish() raises

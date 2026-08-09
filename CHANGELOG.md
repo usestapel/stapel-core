@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.21.0] — 2026-08-10
+
+### Added — `stapel_core.templates`: a missing template variable stops being invisible
+
+Django's default is `string_if_invalid = ''`: a template that reads a variable
+nobody passed renders an empty string and carries on. Fine for a page, silent
+data loss for anything generated once and sent away. The measured case is
+email — a library renames the context variable behind `{{ code }}`, its own
+tests stay green because they render with its own context, and the OTP mail
+ships with a blank where the code was. 200 OK, no exception, no log line,
+nobody can log in.
+
+The shape is a **sentinel plus an assertion**, not a crash:
+`strict_template_variables(TEMPLATES)` substitutes a recognisable marker for an
+unresolved variable, and `assert_no_missing_variables(rendered)` fails a test
+naming every variable that went missing. `stapel_core.templates.W001` warns
+under `DEBUG` when an engine is still silent.
+
+Making the engine *raise* was built first and rejected. Not for the reason
+usually given — `{% if var %}` is safe, because `IfNode` catches
+`VariableDoesNotExist` itself and never consults `string_if_invalid`, and a
+test pins that. What raising actually breaks is `{{ x|default:"y" }}`: with a
+non-empty `string_if_invalid` Django returns it *before* the filter chain runs,
+so `default` never fires — an exception where nothing is wrong, on stock Django
+templates (the admin above all), from an engine-wide setting. A string marker
+leaves that call to an assertion instead.
+
+Test settings are the home. Production is deliberately untouched: this package
+must not change how a host's mail renders as a side effect of an upgrade. And
+the marker is the net, not the closure — it catches the variable a test
+happened to exercise. The closure is a template contract asserted in CI
+(`docs/templates.json`, `stapel_tools.template_contract` 0.35.0).
+
 ## [0.20.2] — 2026-08-09
 
 ### Fixed — the error reference renders Spanish as a language, not as a tag
