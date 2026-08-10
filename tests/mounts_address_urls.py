@@ -79,6 +79,29 @@ BROKEN_WORKSPACES = [
     ])),
 ]
 
+# --- green: canon served, legacy address ALSO served as a deprecation shim -
+# How ironmemo actually had to bridge this incident. stapel-core's own
+# workspaces client probes only the doubled-segment path, and sibling
+# services call the pod directly, so nginx could not rewrite it for them —
+# the compatibility had to live in the URLconf until every peer's client
+# knows the canon. Every caller built against the canon is served, so this
+# is not the defect and must not be reported as one.
+CANON_PLUS_LEGACY_SHIM = [
+    path("workspaces/api/", include([
+        path("v1/roles", workspaces_view, name="ws-roles"),
+    ])),
+    path("workspaces/api/workspaces/", include([
+        path("v1/roles", workspaces_view, name="ws-roles-legacy"),
+    ])),
+]
+
+# --- E005: a second wrong address, for the "list them all" case ------------
+BROKEN_MISSING_API_WORKSPACES = [
+    path("workspaces/", include([
+        path("v1/roles", workspaces_view, name="ws-roles-noapi"),
+    ])),
+]
+
 # --- E005: mounted at the site root, module prefix missing entirely --------
 BROKEN_TRANSLATE_AT_ROOT = [
     path("", include([

@@ -445,20 +445,33 @@ def check_module_api_address(app_configs=None, **kwargs):
         if not found[label]:
             continue  # mounted, but publishes no versioned API — E004's business
 
+        # One finding per VERSION, not per mount. The obligation is that the
+        # canonical address answers — not that nothing else does. A module
+        # deliberately served at a second, legacy address as well (a
+        # deprecation shim for peers pinned to an older client, which is how
+        # ironmemo had to bridge this very incident) still satisfies every
+        # caller built against the canon, so it is green. The red state is
+        # the canonical address being ABSENT from the addresses served, which
+        # is exactly what a caller experiences as a 404.
+        versions: dict = {}
         for actual, example in sorted(found[label].items()):
-            actual_segments = path_segments(actual)
-            version = actual_segments[-1]
+            versions.setdefault(path_segments(actual)[-1], []).append((actual, example))
+
+        for version, mounts in sorted(versions.items()):
             expected = f"{expected_api}{version}/"
-            if actual == expected:
+            if any(actual == expected for actual, _ in mounts):
                 continue
+            actual, example = mounts[0]
+            actual_segments = path_segments(actual)
+            served = ", ".join(f"/{addr}" for addr, _ in mounts)
             findings.append(checks.Error(
                 f"Stapel module {label!r} serves its {version} API at "
-                f"/{actual} — canon is /{expected} "
+                f"{served} — none of which is the canon /{expected} "
                 f"(api-versioning.md §2). Callers built against the canon get "
                 f"a 404 from a service that is otherwise healthy "
                 f"(example route: /{example}).",
                 hint=(
-                    f"Found:    /{actual}\n"
+                    f"Found:    {served}\n"
                     f"Expected: /{expected}\n"
                     f"Fix the host mount so the two agree — remember the "
                     f"module contributes part of this path itself "

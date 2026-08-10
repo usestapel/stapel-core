@@ -40,9 +40,24 @@ SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "")
 # a peer's URL and treats any 404 as a verdict has two bugs, and this fixes
 # both: the path is discovered rather than assumed, and a routing 404 is
 # never a verdict (see `_service_answered`).
+# The 2026-07-26 fix added the SECOND entry below by copying the path a
+# particular deployment happened to serve, and that deployment's host mount
+# was itself wrong: it mounted `stapel_workspaces.urls` (which contributes
+# `v1/`) at `workspaces/api/workspaces/` instead of `workspaces/api/`, so
+# the doubled segment is that host's bug, not a canonical address this
+# client should know. Copying it here made the framework agree with the
+# defect and hid it for another six weeks — the canonical path was missing
+# from the list entirely, so a correctly-mounted workspaces service was the
+# one configuration this client could NOT talk to.
+#
+# The canon (api-versioning.md §2, MODULE.md "URL mounting") is
+# `/<mod>/api/v1/...`, so it goes first; the doubled-segment forms stay only
+# as fallbacks for stands not yet corrected, and should be deleted once the
+# fleet has moved.
 INTERNAL_API_PREFIXES = (
-    "/workspaces/api/workspaces/v1/internal",   # workspaces >= 0.4.2
-    "/workspaces/api/workspaces/internal",      # legacy
+    "/workspaces/api/v1/internal",              # canon (api-versioning §2)
+    "/workspaces/api/workspaces/v1/internal",   # mis-mounted hosts, pre-fix
+    "/workspaces/api/workspaces/internal",      # legacy, pre-v1
 )
 
 #: Prefix that last answered, so the probe cost is paid once per process.

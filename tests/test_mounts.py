@@ -520,6 +520,29 @@ class TestModuleApiAddress:
         assert "Found:    /workspaces/api/workspaces/v1" in finding.hint
         assert "Expected: /workspaces/api/v1" in finding.hint
 
+    def test_canon_plus_legacy_shim_is_green(self, surface):
+        """The obligation is that the canon ANSWERS, not that nothing else
+        does. ironmemo had to serve the legacy doubled-segment path as well,
+        because stapel-core's own workspaces client probes only that one and
+        sibling services call the pod directly (nginx cannot rewrite it for
+        them). Every caller built against the canon is served, so this is not
+        the defect — reporting it would push people to delete the shim and
+        re-break their peers."""
+        assert surface(
+            fixture.CANON_PLUS_LEGACY_SHIM, _app("stapel_workspaces", label="workspaces")
+        ) == []
+
+    def test_two_wrong_addresses_still_error_and_list_both(self, surface):
+        """...but two non-canonical mounts and no canonical one is still the
+        incident, and the finding names every address actually served."""
+        findings = surface(
+            fixture.BROKEN_WORKSPACES + fixture.BROKEN_MISSING_API_WORKSPACES,
+            _app("stapel_workspaces", label="workspaces"),
+        )
+        assert [f.id for f in findings] == [E005_MODULE_API_OFF_CANON]
+        assert "/workspaces/api/workspaces/v1/" in findings[0].msg
+        assert "/workspaces/v1/" in findings[0].msg
+
     def test_module_mounted_at_site_root_is_error(self, surface):
         """iron-translate's ``path('', include(...))`` — the module prefix is
         missing entirely, so the surface answers at /api/v1/."""
