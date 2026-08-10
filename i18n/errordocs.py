@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .catalogs import load_app_catalogs, load_catalog_file
+from .catalogs import load_app_catalogs, module_catalog
 
 #: Endonym of each language the reference renders a title for. A language
 #: absent here still renders — the raw tag is used as the title — but the page
@@ -83,19 +83,35 @@ def build_error_docs(
     catalog_dirs=None,
     translations_dir: Path | str | None = None,
     source_language: str = "en",
+    owners: dict[str, str] | None = None,
+    owner_catalogs=None,
 ) -> str:
     """Render the reference for *language* from the live registry + catalog.
 
     The catalog is loaded from *translations_dir* if given (single module),
     else discovered over INSTALLED_APPS via *catalog_dirs*.
+
+    A module's reference covers the whole registry, not just the module's own
+    keys — a reader hitting ``error.404.not_found`` against this module's API
+    looks it up here. So the single-module read goes through
+    :func:`module_catalog`, which resolves a key this module does not own from
+    the catalog of the package that does. Reading the directory literally would
+    make every core-owned row fall back to ``_(en)_`` the moment the module
+    stopped duplicating core's catalog — the reference would degrade from
+    Russian to English with nothing saying so.
     """
-    from stapel_core.django.api.errors import build_error_registry
+    from stapel_core.django.api.errors import build_error_registry, error_owners
 
     entries = build_error_registry()
     if language == source_language:
         catalog = {}
     elif translations_dir is not None:
-        catalog = load_catalog_file(Path(translations_dir) / f"errors.{language}.json")
+        catalog = module_catalog(
+            "errors", language, translations_dir,
+            keys=[e["code"] for e in entries],
+            owners=error_owners() if owners is None else owners,
+            owner_catalogs=owner_catalogs,
+        )
     else:
         catalog = load_app_catalogs("errors", language, dirs=catalog_dirs)
     return render_error_docs(entries, language, catalog, source_language)

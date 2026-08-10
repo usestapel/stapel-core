@@ -28,9 +28,11 @@ from stapel_core.i18n import (
     StateSidecar,
     check_translation_catalogs,
     dump_catalog,
+    module_catalog,
     owned_keys,
     translate_catalog,
 )
+from stapel_core.i18n.errordocs import build_error_docs
 
 SOURCE = {
     "error.404.not_found": "Requested resource not found",
@@ -263,6 +265,68 @@ def test_cannot_declare_an_override_of_an_unowned_key(tmp_path):
             source_texts=SOURCE, owner="stapel_profiles", owners=OWNERS,
             declare_override=["error.500.nobodys"],
         )
+
+
+# ---------------------------------------------------------------------------
+# the reader half — pruning must not degrade what a reader sees
+# ---------------------------------------------------------------------------
+#
+# Scoping the WRITE side without teaching the READ side is the same defect in a
+# new costume: `build_error_docs` read the module's own translations/ directory
+# and nothing else, so the moment a module dropped its copies of core's keys
+# its Russian error reference lost those rows to `_(en)_` fallbacks — a silent
+# downgrade to English with no gate to notice. Ownership resolves for readers
+# too: a key the module does not own is read from its owner's catalog.
+
+def test_module_catalog_reads_a_foreign_key_from_its_owner(tmp_path):
+    out = _write(tmp_path, {"error.409.profile_taken": "Профиль уже существует"})
+    resolved = module_catalog(
+        "errors", "ru", out, keys=SOURCE,
+        owner="stapel_profiles", owners=OWNERS, owner_catalogs=_upstream,
+    )
+    assert resolved["error.404.not_found"] == CORE_RU["error.404.not_found"]
+    assert resolved["error.409.profile_taken"] == "Профиль уже существует"
+
+
+def test_the_modules_own_text_wins_over_its_owners(tmp_path):
+    """A declared reword is what the module ships — the runtime merges it last."""
+    out = _write(tmp_path, {"error.404.not_found": "Такой страницы у нас нет"})
+    resolved = module_catalog(
+        "errors", "ru", out, keys=SOURCE,
+        owner="stapel_profiles", owners=OWNERS, owner_catalogs=_upstream,
+    )
+    assert resolved["error.404.not_found"] == "Такой страницы у нас нет"
+
+
+def test_a_key_the_module_owns_is_never_backfilled(tmp_path):
+    """An owner's own gap is a coverage error — filling it would hide it."""
+    out = _write(tmp_path, {})
+    resolved = module_catalog(
+        "errors", "ru", out, keys=SOURCE,
+        owner="stapel_core", owners=OWNERS,
+        owner_catalogs=lambda o, d, lg: CORE_RU,
+    )
+    assert "error.404.not_found" not in resolved
+
+
+def test_pruning_leaves_the_error_reference_byte_identical(tmp_path):
+    """The proof the sweep rests on, in Russian, not as an assertion of intent.
+
+    Same registry, same owner catalog: the reference a module renders while it
+    still duplicates core's keys and the one it renders after deleting them are
+    the same bytes.
+    """
+    (tmp_path / "before").mkdir()
+    (tmp_path / "after").mkdir()
+    duplicated = _write(tmp_path / "before", dict(CORE_RU))
+    pruned = _write(tmp_path / "after", {})
+    kw = dict(owners=OWNERS, owner_catalogs=_upstream, source_language="en")
+    before = build_error_docs("ru", translations_dir=duplicated, **kw)
+    after = build_error_docs("ru", translations_dir=pruned, **kw)
+    assert after == before
+    row = next(ln for ln in after.splitlines()
+               if ln.startswith("| `error.404.not_found`"))
+    assert CORE_RU["error.404.not_found"] in row and "_(en)_" not in row
 
 
 # ---------------------------------------------------------------------------

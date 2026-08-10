@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.23.1] — 2026-08-10
+
+### Fixed — the error reference resolves a key by its owner, not by its directory
+
+0.22.0 gave error keys an owner and stopped demanding that every module
+re-translate core's 41 cross-cutting keys. The write side was scoped; the read
+side was not. `generate_error_docs --translations <dir>` loaded that one
+directory and nothing else, while the reference it renders covers the **whole**
+registry — so a module that deleted its duplicates lost 41 Russian rows to
+`_(en)_` English fallbacks, with no gate saying so. Measured on stapel-profiles,
+the one library that had already pruned: regenerating its committed
+`docs/errors.ru.md` produced 41 of 53 rows in English.
+
+That is the same duplication defect wearing a documentation costume — the
+mechanism landed and one of its consumers, the doc renderer, never picked it
+up — and it made the fleet-wide sweep a choice between a red gate and a
+degraded reference.
+
+`module_catalog(domain, language, dir)` (`stapel_core.i18n`) is the read seam:
+
+- the module's own text wins — a declared override is exactly the module
+  shipping its own text, and the runtime merge orders it the same way;
+- a key the module does not own is read from the catalog of the package that
+  does (`owner_catalog()`, over INSTALLED_APPS);
+- a key the module **does** own is never back-filled from a same-named package
+  installed elsewhere: an owner's own gap is the `missing` coverage error, and
+  filling it would hide it;
+- a key nobody owns, or whose owner ships nothing in that language, stays
+  absent and the caller renders its honest `_(en)_` fallback, as before.
+
+`build_error_docs` goes through it, so pruning is byte-neutral for
+`docs/errors.<lang>.md`: the reference a module renders while it still
+duplicates core's keys and the one it renders after deleting them are the same
+bytes (pinned by `test_pruning_leaves_the_error_reference_byte_identical`, and
+verified end-to-end in every library the sweep touched).
+
+The `flows` domain tracks no ownership, so it resolves exactly as before.
+
 ## [0.23.0] — 2026-08-10
 
 ### Added — a module's surface must be reachable at its canonical address (E005/E006)
