@@ -18,7 +18,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,73 @@ def owner_catalog(owner: str, domain: str, language: str) -> dict[str, str]:
         if pkg == owner:
             merged.update(load_catalog_file(app_dir / catalog_relpath(domain, language)))
     return merged
+
+
+def module_catalog(
+    domain: str,
+    language: str,
+    translations_dir: Path | str,
+    *,
+    keys: Iterable[str] | None = None,
+    owner: str | None = None,
+    owners: dict[str, str] | None = None,
+    owner_catalogs: Callable[[str, str, str], dict[str, str]] | None = None,
+) -> dict[str, str]:
+    """One module's catalog as a READER resolves it — its texts, then the owner's.
+
+    The write side stopped duplicating: since ownership scoping a module ships
+    only the keys it owns, and the runtime is unaffected because
+    :func:`load_app_catalogs` merges every installed app's catalog, the owner's
+    included. Anything reading a *single* module's ``translations/`` directory
+    on its own, however, sees exactly what pruning removed — a reference doc
+    built that way silently drops the owner's keys back to their English
+    fallback, which is the same duplication defect wearing a documentation
+    costume: the reader was never taught what the writer now assumes.
+
+    So resolution follows ownership rather than the directory listing:
+
+    * a key the module ships wins (that is what a declared override IS — the
+      runtime merge puts the module after its dependency too);
+    * a key it does not own is read from the catalog of the package that does
+      (:func:`owner_catalog`, over INSTALLED_APPS);
+    * a key nobody owns, or whose owner ships no text in *language*, is absent
+      here exactly as before — the caller renders its own honest fallback.
+
+    A key the module *owns* is never back-filled from elsewhere: an owner's own
+    gap is the coverage error :func:`check_translation_catalogs` reports, and
+    filling it from a same-named package installed elsewhere would hide it.
+
+    *keys* limits resolution to the canon being rendered (default: every key
+    with a known owner). *owner* (defaulted from the directory, like the gate),
+    *owners* and *owner_catalogs* are injectable, so a caller that already knows
+    the answers does not pay for INSTALLED_APPS lookups twice.
+    """
+    directory = Path(translations_dir)
+    own = load_catalog_file(directory / catalog_filename(domain, language))
+    if owners is None:
+        from .domains import source_owners
+
+        owners = source_owners(domain)
+    if not owners:
+        return own
+    if owner_catalogs is None:
+        owner_catalogs = owner_catalog
+
+    this_owner = owner_of_dir(directory) if owner is None else owner
+    resolved = dict(own)
+    upstream: dict[str, dict[str, str]] = {}
+    for key in (owners if keys is None else keys):
+        if key in resolved:
+            continue
+        key_owner = owners.get(key)
+        if not key_owner or key_owner == this_owner:
+            continue
+        if key_owner not in upstream:
+            upstream[key_owner] = owner_catalogs(key_owner, domain, language)
+        text = upstream[key_owner].get(key)
+        if text:
+            resolved[key] = text
+    return resolved
 
 
 class CatalogDirError(ValueError):
@@ -535,6 +602,7 @@ __all__ = [
     "is_seeded",
     "load_app_catalogs",
     "load_catalog_file",
+    "module_catalog",
     "owner_catalog",
     "owner_of_dir",
     "resolve_catalog_dir",

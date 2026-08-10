@@ -513,6 +513,16 @@ So keys carry an **owner** and the canon is scoped by it:
   the owner's text verbatim is **W `vacuous_override`**.
 - `translate_catalogs` will not emit a key the target package does not own, so
   the command that manufactured the 410 duplicates cannot manufacture more.
+- **The reader follows ownership too.** `generate_error_docs --translations
+  <dir>` reads one module's catalog directory, and a module's reference covers
+  the whole registry — so the moment a module stopped duplicating core's keys,
+  those 41 rows fell back to `_(en)_` and the Russian reference silently became
+  English. `module_catalog(domain, lang, dir)` is the read seam that closes it:
+  the module's own text wins (that is what a declared override is), a key it
+  does not own is read from `owner_catalog()`, and a key it *does* own is never
+  back-filled — an owner's own gap must stay the coverage error it is. Pruning
+  is therefore byte-neutral for `docs/errors.<lang>.md`, which is what makes
+  the sweep safe to run across the fleet.
 
 `STAPEL_I18N` (`i18n/conf.py`): `LOCALES` (default `["en","ru"]`) — the single
 "project languages" knob; `STAPEL_FLOWS["DOC_LANGUAGES"]` delegates to it
