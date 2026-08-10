@@ -18,8 +18,83 @@ a Stapel module may only mount inside ``/<mod>/api/``, ``/<mod>/swagger/``,
 own prefix (a bare ``/<mod>`` root, a hand-rolled dashboard route, …) is
 frontend territory — a reverse proxy that reserves the bare module prefix
 for the backend silently 404s the SPA page living there.
+
+E005/E006 are the *address* half of the same question, and they exist
+because E004 could not see the failure that took app.ironmemo.com's
+workspace list down for the whole life of the deployment. The host mounted
+``include("stapel_workspaces.urls")`` at ``workspaces/api/workspaces/``
+instead of ``workspaces/api/``, so the module's entire API answered at
+``/workspaces/api/workspaces/v1/`` while every caller asked for
+``/workspaces/api/v1/`` and got a 404. E004 was green throughout: it tests
+for the *presence* of an ``api`` segment somewhere in the path, and that
+segment was present — in the wrong place.
+
+The obligation these two express is not "the mount literal matches a
+settings constant" (that is a string guarding a string — the very shape of
+the ``assert url_prefix == 'workspaces/'`` that sat directly above the
+broken line and stayed green, because it compared the constant to itself
+and never looked at the literal). It is:
+
+    **a module's declared HTTP surface must be reachable at its canonical
+    address**, ``/<mod>/api/v<N>/``.
+
+A wrong mount is a wrong *connection*: the library's surface was not
+unreachable by a typo, it was not plugged in — the same defect class as a
+subscriber nobody starts or a registry nobody reads. Stated that way the
+check covers both ends of the same axis:
+
+* **E005** — the surface is mounted, at the wrong address (segment count
+  too high, too low, or the right count in the wrong order);
+* **E006** — the surface is not mounted at all, which is the same defect
+  with the segment count zero, and which no literal comparison can see
+  because there is no literal to compare.
+
+Both report the address they **found** next to the address they
+**expected**. A check that says only "wrong" repeats the failure it is
+meant to close.
+
+Relation to ADO001 (``stapel-tools`` ``adoption_lint``)
+-------------------------------------------------------
+ADO001 asks the *absence* question statically, outside the process, by
+reading literal ``include("<pkg>.urls")`` pairs out of the ROOT_URLCONF
+AST. It is a pre-deploy gate and it stays: it runs without a settings
+module, a database, or an importable app registry.
+
+E005/E006 ask the same family of question *inside* the process, against the
+live resolver, which buys three things the AST cannot have:
+
+* the **address**, not just the presence, of a mount — ADO001 sees that
+  ``include("stapel_workspaces.urls")`` appears somewhere and is satisfied;
+  only the resolver knows it landed at ``workspaces/api/workspaces/``;
+* mounts ADO001 documents as opaque to it — a module included through a
+  variable, a computed prefix, or an inline list nested in another include;
+* what the module **contributes to its own path**, which is not symmetric
+  across the fleet and is invisible in the host's source. ``stapel_agent``
+  contributes ``api/v1/`` from inside its own ``urls.py``, so the correct
+  host mount is ``agent/``; ``stapel_workspaces`` contributes only ``v1/``,
+  so the correct host mount is ``workspaces/api/``. Two different literals,
+  one canonical address. Any check that compares host literals to each
+  other must get one of the two wrong.
+
+So they are complementary rather than duplicated: ADO001 fails a project
+that never wired the module, E005/E006 fail a deployment whose wiring does
+not land where callers look.
+
+What this still does not cover
+------------------------------
+Only the surface of the process it runs in. Each library mounts its own
+URLconf correctly in its own test suite, so every library is green in
+isolation and stays green; the divergence lives in the *assembled* system,
+which nothing here exercises end to end. This check moves the detection
+from "a user reports the app is empty" to "the service refuses to start",
+which is most of the distance — but a fleet-wide end-to-end gate over the
+assembled system (BACKLOG §69) remains open, and cross-service contracts
+(the caller's base URL, the proxy's route table) are still unverified by
+anything in this file.
 """
 from __future__ import annotations
+
+import re
 
 from django.core import checks
 
@@ -27,7 +102,13 @@ E001_LOGIN_URL_UNRESOLVABLE = "stapel_core.mounts.E001"
 E002_REDIRECT_URL_UNRESOLVABLE = "stapel_core.mounts.E002"
 E003_BAD_MOUNTS = "stapel_core.mounts.E003"
 E004_MODULE_OUTSIDE_CANON = "stapel_core.mounts.E004"
+E005_MODULE_API_OFF_CANON = "stapel_core.mounts.E005"
+E006_MODULE_SURFACE_UNMOUNTED = "stapel_core.mounts.E006"
 W001_STOCK_LOGIN_REDIRECT = "stapel_core.mounts.W001"
+
+#: A version segment in a module's mounted path — ``v1``, ``v2``, …
+#: (api-versioning.md §2: the version sits immediately after ``api/``).
+_VERSION_SEGMENT = re.compile(r"^v\d+$")
 
 #: BACKLOG §37 canon — the only path segments a Stapel module's own URL
 #: patterns may live under, anywhere in their full mounted path. Presence,
@@ -207,13 +288,202 @@ def check_module_surface_containment(app_configs=None, **kwargs):
     return findings
 
 
+def _headless_modules() -> set:
+    """Labels/packages the project declared it runs without an HTTP surface.
+
+    The in-process twin of ADO001's ``# stapel: headless <mod>`` marker: a
+    module wanted only for its models/services/tasks. Accepts either the app
+    label (``"gdpr"``) or the package (``"stapel_gdpr"``)::
+
+        STAPEL_HEADLESS_MODULES = ["gdpr"]
+    """
+    from django.conf import settings
+
+    declared = getattr(settings, "STAPEL_HEADLESS_MODULES", None) or ()
+    if isinstance(declared, str):
+        declared = [declared]
+    out = set()
+    for name in declared:
+        name = str(name).strip()
+        out.add(name)
+        out.add(name[len("stapel_"):] if name.startswith("stapel_") else f"stapel_{name}")
+    return out
+
+
+def _expected_module_prefix(app_config) -> str:
+    """Where this deployment says *app_config*'s surface lives, no leading
+    slash, trailing slash included — ``"workspaces/"``.
+
+    Default is the app label, which is the module slug by construction
+    (``stapel_workspaces`` → ``workspaces``) and is what the canon
+    ``/<mod>/api/v1/`` means by ``<mod>``. A deployment that deliberately
+    hosts a module somewhere else — a co-mounted module living inside a
+    sibling's prefix (``stapel_gdpr`` served by the auth service under
+    ``auth/``), a renamed prefix (``sso/``) — declares that in the existing
+    ``STAPEL_MOUNTS`` registry rather than being silently forgiven::
+
+        STAPEL_MOUNTS = {"gdpr": {"prefix": "auth/"}}
+
+    That declaration is the point, not an escape hatch: "this module is not
+    at its own name" is exactly the fact a reader of the URLconf cannot
+    otherwise recover, and the fact whose absence produced this incident.
+    """
+    from stapel_core.django.mounts import get_mount
+
+    mount = get_mount(app_config.label)
+    if mount is not None and mount.prefix:
+        return mount.prefix
+    return f"{app_config.label}/"
+
+
+def _declares_http_surface(app_config) -> bool:
+    """True when the module ships a ``urls`` submodule — the same signal
+    ADO001 uses for "exposes a urlconf". Import errors are treated as *no*
+    surface: a module whose urls.py cannot even be imported is a different
+    (and louder) failure than a mis-mounted one.
+    """
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(f"{app_config.name}.urls") is not None
+    except (ImportError, AttributeError, ValueError):
+        return False
+
+
+@checks.register("stapel_mounts")
+def check_module_api_address(app_configs=None, **kwargs):
+    """E005/E006 — every installed Stapel module's declared HTTP surface must
+    be reachable at ``/<mod>/api/v<N>/``.
+
+    For each installed Stapel module that ships a ``urls`` module, this walks
+    the live resolver, collects the leaf paths owned by that module, and
+    compares the prefix that actually precedes the version segment against
+    the canonical one. Versioned leaves are the subject because they *are*
+    the module's API: ``/<mod>/admin/``, ``/<mod>/swagger/`` and a host's own
+    ``/<mod>/api/error-keys/`` carry no version segment and are §37 business
+    (E004), not addressing business.
+
+    Ownership is decided exactly as E004 and module discovery decide it
+    (:func:`stapel_core.django.urlsurvey.callback_owner_app_label`), so a
+    host's own views are never the subject of a finding and a module that is
+    **not installed** has no surface to be unreachable — a service that drops
+    a module reports nothing here, it does not have to remember to also drop
+    an assertion about it.
+    """
+    from django.apps import apps as django_apps
+
+    from stapel_core.django.mounts import MountConfigError
+    from stapel_core.django.nav import is_stapel_app
+    from stapel_core.django.urlsurvey import iter_surface, path_segments
+
+    from django.conf import settings
+
+    if not getattr(settings, "ROOT_URLCONF", ""):
+        return []  # standalone package harness — no assembled surface
+
+    try:
+        headless = _headless_modules()
+        subjects = {
+            app_config.label: app_config
+            for app_config in django_apps.get_app_configs()
+            if is_stapel_app(app_config)
+            and app_config.label not in headless
+            and app_config.name not in headless
+            and _declares_http_surface(app_config)
+        }
+    except MountConfigError:
+        return []  # E003 already reported
+
+    if not subjects:
+        return []
+
+    # label -> {version_prefix_found: an example full path}
+    found: dict = {label: {} for label in subjects}
+    mounted_at_all = {label: False for label in subjects}
+
+    for entry in iter_surface():
+        label = entry.app_label
+        if label not in subjects:
+            continue
+        mounted_at_all[label] = True
+        segments = path_segments(entry.full_path)
+        for index, segment in enumerate(segments):
+            if _VERSION_SEGMENT.match(segment):
+                prefix = "".join(f"{seg}/" for seg in segments[:index])
+                found[label].setdefault(f"{prefix}{segment}/", entry.full_path)
+                break
+
+    findings = []
+    for label, app_config in sorted(subjects.items()):
+        try:
+            expected_prefix = _expected_module_prefix(app_config)
+        except MountConfigError:
+            continue  # E003 already reported
+        expected_api = f"{expected_prefix}api/"
+
+        if not mounted_at_all[label]:
+            findings.append(checks.Error(
+                f"Stapel module {label!r} is installed and ships "
+                f"{app_config.name}.urls, but not one of its URL patterns is "
+                f"reachable in this deployment — expected its API at "
+                f"/{expected_api}v1/, found nothing. The module's endpoints "
+                f"do not exist in this service.",
+                hint=(
+                    f"Mount it: path('{expected_api}', "
+                    f"include('{app_config.name}.urls')) if the module "
+                    f"contributes only 'v1/', or path('{expected_prefix}', ...) "
+                    f"if it contributes 'api/v1/' itself — read the docstring "
+                    f"of {app_config.name}.urls, the split is not the same "
+                    f"across modules. If this service wants the module "
+                    f"headless (models/tasks only, no HTTP), declare it: "
+                    f"STAPEL_HEADLESS_MODULES = ['{label}']."
+                ),
+                id=E006_MODULE_SURFACE_UNMOUNTED,
+            ))
+            continue
+
+        if not found[label]:
+            continue  # mounted, but publishes no versioned API — E004's business
+
+        for actual, example in sorted(found[label].items()):
+            actual_segments = path_segments(actual)
+            version = actual_segments[-1]
+            expected = f"{expected_api}{version}/"
+            if actual == expected:
+                continue
+            findings.append(checks.Error(
+                f"Stapel module {label!r} serves its {version} API at "
+                f"/{actual} — canon is /{expected} "
+                f"(api-versioning.md §2). Callers built against the canon get "
+                f"a 404 from a service that is otherwise healthy "
+                f"(example route: /{example}).",
+                hint=(
+                    f"Found:    /{actual}\n"
+                    f"Expected: /{expected}\n"
+                    f"Fix the host mount so the two agree — remember the "
+                    f"module contributes part of this path itself "
+                    f"({app_config.name}.urls says which part), so the mount "
+                    f"literal is NOT the whole expected prefix. If this "
+                    f"deployment deliberately hosts {label!r} somewhere other "
+                    f"than /{label}/, declare it instead of moving it: "
+                    f"STAPEL_MOUNTS = {{{label!r}: {{'prefix': "
+                    f"{actual_segments[0] + '/'!r}}}}}."
+                ),
+                id=E005_MODULE_API_OFF_CANON,
+            ))
+    return findings
+
+
 __all__ = [
     "E001_LOGIN_URL_UNRESOLVABLE",
     "E002_REDIRECT_URL_UNRESOLVABLE",
     "E003_BAD_MOUNTS",
     "E004_MODULE_OUTSIDE_CANON",
+    "E005_MODULE_API_OFF_CANON",
+    "E006_MODULE_SURFACE_UNMOUNTED",
     "W001_STOCK_LOGIN_REDIRECT",
     "check_auth_redirect_settings",
     "check_mounts_config",
+    "check_module_api_address",
     "check_module_surface_containment",
 ]

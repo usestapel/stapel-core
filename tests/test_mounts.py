@@ -6,13 +6,17 @@ import pytest
 from django.test import RequestFactory
 from django.urls import get_script_prefix, set_script_prefix
 
+import tests.mounts_address_urls as fixture
 from stapel_core.django.checks import (
     E001_LOGIN_URL_UNRESOLVABLE,
     E002_REDIRECT_URL_UNRESOLVABLE,
     E003_BAD_MOUNTS,
     E004_MODULE_OUTSIDE_CANON,
+    E005_MODULE_API_OFF_CANON,
+    E006_MODULE_SURFACE_UNMOUNTED,
     W001_STOCK_LOGIN_REDIRECT,
     check_auth_redirect_settings,
+    check_module_api_address,
     check_mounts_config,
     check_module_surface_containment,
 )
@@ -35,6 +39,7 @@ rf = RequestFactory()
 URLS = "tests.mounts_urls"
 URLS_PREFIXED = "tests.mounts_urls_prefixed"
 URLS_SURFACE = "tests.mounts_surface_urls"
+URLS_ADDRESS = "tests.mounts_address_urls"
 
 
 def _app(name, label=None, stapel_module=None):
@@ -440,3 +445,205 @@ class TestModuleSurfaceContainment:
         findings = check_module_surface_containment()
         assert {f.id for f in findings} == {E004_MODULE_OUTSIDE_CANON}
         assert len(findings) == 2  # translate/dashboard + calendar bare root
+
+
+# ---------------------------------------------------------------------------
+# check_module_api_address — E005/E006, canonical /<mod>/api/v<N>/ address
+# ---------------------------------------------------------------------------
+
+
+class TestModuleApiAddress:
+    """The address half of §37, written against the live app.ironmemo.com
+    mounts (see ``tests/mounts_address_urls.py`` for the transcription).
+
+    E004 was green through the whole life of that deployment because it
+    tests for the *presence* of an ``api`` segment and the segment was
+    present — one position too early.
+    """
+
+    @pytest.fixture
+    def surface(self, settings, monkeypatch, mock_apps):
+        """Install *patterns* as the deployment's URLconf and *apps* as its
+        installed Stapel modules, then run the check."""
+        from django.urls import clear_url_caches
+
+        import tests.mounts_address_urls as fixture_urls
+        from stapel_core.django import checks as checks_module
+
+        # Every module in these fixtures is treated as shipping a urls
+        # module: the real signal is importlib.find_spec("<pkg>.urls"), and
+        # stapel_agent/stapel_workspaces/... are not installed in this
+        # harness. E006's own tests override this back to False.
+        monkeypatch.setattr(checks_module, "_declares_http_surface", lambda app: True)
+
+        def _run(patterns, *apps):
+            monkeypatch.setattr(fixture_urls, "urlpatterns", patterns)
+            settings.ROOT_URLCONF = URLS_ADDRESS
+            clear_url_caches()
+            mock_apps(*apps)
+            return check_module_api_address()
+
+        yield _run
+        clear_url_caches()
+
+    # --- the two shapes that are correct, and differ from each other -------
+
+    def test_library_contributing_api_v1_mounted_at_bare_prefix(self, surface):
+        """stapel_agent adds ``api/v1/`` itself, so ``path('agent/', ...)``
+        is right — the literal is shorter than the canonical prefix."""
+        assert surface(fixture.CORRECT_AGENT, _app("stapel_agent", label="agent")) == []
+
+    def test_library_contributing_v1_mounted_through_api(self, surface):
+        """stapel_workspaces adds only ``v1/``, so the host mount must carry
+        ``api/`` — a different literal reaching the same canonical address."""
+        assert surface(
+            fixture.CORRECT_WORKSPACES, _app("stapel_workspaces", label="workspaces")
+        ) == []
+
+    # --- the live incident --------------------------------------------------
+
+    def test_extra_segment_before_version_is_error(self, surface):
+        """The defect: /workspaces/api/workspaces/v1/ instead of
+        /workspaces/api/v1/. Every caller got a 404 from a healthy service."""
+        findings = surface(
+            fixture.BROKEN_WORKSPACES, _app("stapel_workspaces", label="workspaces")
+        )
+        assert [f.id for f in findings] == [E005_MODULE_API_OFF_CANON]
+
+    def test_finding_reports_found_and_expected_address(self, surface):
+        """A check that says only "wrong" repeats the failure it closes."""
+        finding = surface(
+            fixture.BROKEN_WORKSPACES, _app("stapel_workspaces", label="workspaces")
+        )[0]
+        assert "/workspaces/api/workspaces/v1" in finding.msg
+        assert "/workspaces/api/v1" in finding.msg
+        assert "Found:    /workspaces/api/workspaces/v1" in finding.hint
+        assert "Expected: /workspaces/api/v1" in finding.hint
+
+    def test_module_mounted_at_site_root_is_error(self, surface):
+        """iron-translate's ``path('', include(...))`` — the module prefix is
+        missing entirely, so the surface answers at /api/v1/."""
+        findings = surface(
+            fixture.BROKEN_TRANSLATE_AT_ROOT, _app("stapel_translate", label="translate")
+        )
+        assert [f.id for f in findings] == [E005_MODULE_API_OFF_CANON]
+        assert "/translate/api/v1" in findings[0].msg
+
+    def test_missing_api_segment_is_error(self, surface):
+        """The symmetric mistake to the live one: a segment too few."""
+        findings = surface(fixture.BROKEN_MISSING_API, _app("stapel_agent", label="agent"))
+        assert [f.id for f in findings] == [E005_MODULE_API_OFF_CANON]
+        assert "/agent/v1" in findings[0].msg
+
+    # --- what must NOT be flagged ------------------------------------------
+
+    def test_unversioned_routes_are_not_addressing_subjects(self, surface):
+        """``/<mod>/api/error-keys/`` and ``/<mod>/admin/`` are owned by the
+        module but carry no version segment — E004's business, not this
+        check's. Flagging them would make the check unusable."""
+        assert surface(
+            fixture.UNVERSIONED_ONLY, _app("stapel_billing", label="billing")
+        ) == []
+
+    def test_host_own_routes_are_never_flagged(self, surface):
+        """A project is free in its own URL space: ``/whatever/api/v1/thing``
+        is shaped exactly like a mis-mounted module API, and is not one —
+        ownership follows the view's package, never the path shape."""
+        assert surface(
+            fixture.HOST_ALONGSIDE_CORRECT_MODULE,
+            _app("stapel_billing", label="billing"),
+        ) == []
+
+    def test_uninstalled_module_has_no_surface_to_be_unreachable(self, surface):
+        """A service that drops a module reports nothing — it does not also
+        have to remember to drop an assertion about it. (iron-translate is
+        being removed from ironmemo as this lands.)"""
+        assert surface(fixture.BROKEN_TRANSLATE_AT_ROOT) == []
+
+    def test_only_the_violator_is_reported(self, surface):
+        findings = surface(
+            fixture.MIXED,
+            _app("stapel_agent", label="agent"),
+            _app("stapel_workspaces", label="workspaces"),
+            _app("stapel_billing", label="billing"),
+        )
+        assert [f.id for f in findings] == [E005_MODULE_API_OFF_CANON]
+        assert "'workspaces'" in findings[0].msg
+
+    # --- deliberate placement is declared, not silently forgiven -----------
+
+    def test_co_mounted_module_is_flagged_when_undeclared(self, surface):
+        """stapel_gdpr served under the auth service's prefix. Real, and the
+        red state is silence: say where it lives."""
+        findings = surface(fixture.CO_MOUNTED_GDPR, _app("stapel_gdpr", label="gdpr"))
+        assert [f.id for f in findings] == [E005_MODULE_API_OFF_CANON]
+
+    def test_co_mounted_module_passes_once_declared(self, settings, surface):
+        """...and green as soon as STAPEL_MOUNTS records the decision. The
+        declaration is the deliverable: "this module is not at its own name"
+        is exactly what a reader of the URLconf cannot otherwise recover."""
+        settings.STAPEL_MOUNTS = {"gdpr": {"prefix": "auth/"}}
+        assert surface(fixture.CO_MOUNTED_GDPR, _app("stapel_gdpr", label="gdpr")) == []
+
+    # --- E006: the same defect with the segment count zero -----------------
+
+    def test_installed_and_shipping_urls_but_never_mounted(self, settings, monkeypatch,
+                                                           mock_apps):
+        """ADO001's question, asked in-process — so it also covers the mounts
+        ADO001 documents as opaque to its AST (variable/computed includes)."""
+        from django.urls import clear_url_caches
+
+        import tests.mounts_address_urls as fixture_urls
+        from stapel_core.django import checks as checks_module
+
+        monkeypatch.setattr(checks_module, "_declares_http_surface", lambda app: True)
+        monkeypatch.setattr(fixture_urls, "urlpatterns", fixture.CORRECT_AGENT)
+        settings.ROOT_URLCONF = URLS_ADDRESS
+        clear_url_caches()
+        mock_apps(_app("stapel_workspaces", label="workspaces"))
+
+        findings = check_module_api_address()
+        clear_url_caches()
+        assert [f.id for f in findings] == [E006_MODULE_SURFACE_UNMOUNTED]
+        assert "/workspaces/api/v1/" in findings[0].msg
+        assert "found nothing" in findings[0].msg
+
+    def test_headless_declaration_silences_e006(self, settings, monkeypatch, mock_apps):
+        """The in-process twin of ADO001's ``# stapel: headless`` marker: a
+        module wanted for its models/tasks only."""
+        from django.urls import clear_url_caches
+
+        import tests.mounts_address_urls as fixture_urls
+        from stapel_core.django import checks as checks_module
+
+        monkeypatch.setattr(checks_module, "_declares_http_surface", lambda app: True)
+        monkeypatch.setattr(fixture_urls, "urlpatterns", fixture.CORRECT_AGENT)
+        settings.ROOT_URLCONF = URLS_ADDRESS
+        settings.STAPEL_HEADLESS_MODULES = ["workspaces"]
+        clear_url_caches()
+        mock_apps(_app("stapel_workspaces", label="workspaces"))
+
+        findings = check_module_api_address()
+        clear_url_caches()
+        assert findings == []
+
+    def test_module_shipping_no_urlconf_is_not_a_subject(self, settings, monkeypatch,
+                                                         mock_apps):
+        """No ``urls`` module — nothing was declared, so nothing is missing."""
+        from django.urls import clear_url_caches
+
+        import tests.mounts_address_urls as fixture_urls
+        from stapel_core.django import checks as checks_module
+
+        monkeypatch.setattr(checks_module, "_declares_http_surface", lambda app: False)
+        monkeypatch.setattr(fixture_urls, "urlpatterns", fixture.CORRECT_AGENT)
+        settings.ROOT_URLCONF = URLS_ADDRESS
+        clear_url_caches()
+        mock_apps(_app("stapel_workspaces", label="workspaces"))
+
+        findings = check_module_api_address()
+        clear_url_caches()
+        assert findings == []
+
+    def test_no_urlconf_skips(self):
+        assert check_module_api_address() == []

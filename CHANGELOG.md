@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.23.0] — 2026-08-10
+
+### Added — a module's surface must be reachable at its canonical address (E005/E006)
+
+`app.ironmemo.com` served its entire workspaces API at
+`/workspaces/api/workspaces/v1/` for the whole life of the deployment. The
+frontend asked for `/workspaces/api/v1/`, got a 404, and showed every user an
+empty workspace list with the upload button greyed out. The host had written
+`path('workspaces/api/workspaces/', include('stapel_workspaces.urls'))` — one
+segment too many, because the library contributes the `v1/` segment itself.
+
+Nothing caught it, and the two things that should have are the interesting
+part:
+
+* Directly above the broken line sat
+  `assert url_prefix == 'workspaces/'`, whose stated job was to keep the
+  literal routes from diverging from the settings constant. It compared the
+  constant **to itself** and never looked at the literal, so it stayed green.
+  A string guarding a string.
+* `stapel_mounts` E004 (§37 containment) tests whether an `api` segment is
+  present *anywhere* in a module's path. It was present — one position too
+  early. E004 was green too.
+
+So the new checks do not compare a mount literal to anything. They assert the
+obligation itself: **a module's declared HTTP surface must be reachable at
+`/<mod>/api/v<N>/`**. A wrong mount is a wrong *connection* — the library's
+surface was not unreachable by a typo, it was not plugged in, the same defect
+class as a subscriber nobody starts or a registry nobody reads. That framing
+covers both ends of one axis:
+
+* **E005** — the surface is mounted at the wrong address (a segment too many,
+  too few, or in the wrong order);
+* **E006** — the surface is not mounted at all: the same defect with the
+  segment count zero, which no literal comparison can see because there is no
+  literal to compare.
+
+Both report the address **found** beside the address **expected** — a check
+that says only "wrong" repeats the failure it closes.
+
+The check runs against the live URL resolver, which is what lets it know
+something no static lint can: how much of the canonical path the *library*
+contributes, which is not uniform across the fleet. `stapel_agent.urls` adds
+`api/v1/` from inside the package, so its correct host mount is `agent/`;
+`stapel_workspaces.urls` adds only `v1/`, so its correct host mount is
+`workspaces/api/`. Two different literals, one canonical address — any check
+comparing host literals to each other must call one of them wrong. (`iron-agent`
+was audited during this incident and is correct as written, for exactly this
+reason.)
+
+Relation to `stapel-tools` ADO001: complementary, not duplicated. ADO001 asks
+the *absence* question statically, from the ROOT_URLCONF AST, with no settings
+module or app registry — it stays as the pre-deploy gate. E005/E006 ask it in
+process, and additionally see the **address**, plus the mounts ADO001
+documents as opaque to it (a module included through a variable or a computed
+prefix).
+
+Escape hatches, both explicit rather than silent: `STAPEL_HEADLESS_MODULES`
+declares a module installed for its models/tasks with no HTTP surface (the
+in-process twin of ADO001's `# stapel: headless` marker), and the existing
+`STAPEL_MOUNTS` registry declares a module deliberately hosted somewhere other
+than its own name (`stapel_gdpr` served under the auth service's prefix, as
+ironmemo does). A module that is **not installed** is never a subject, so a
+service that drops a module reports nothing.
+
+Scope, stated plainly: this covers the surface of the process it runs in. Every
+library mounts its own URLconf correctly in its own test suite, so every
+library is green in isolation and stays green; the divergence lives in the
+assembled system. This moves detection from "a user reports the app is empty"
+to "the service refuses to start", but the fleet-wide end-to-end gate over the
+assembled system (§69) remains open, and cross-service contracts — the caller's
+base URL, the proxy's route table — are still unverified.
+
 ## [0.22.0] — 2026-08-10
 
 ### Added — core ships its own error catalogs, and a module translates only what it owns
