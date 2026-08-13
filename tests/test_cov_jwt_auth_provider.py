@@ -344,23 +344,110 @@ class TestJWTAuthBackend:
 
 @pytest.mark.django_db
 class TestEmailAuthBackend:
+    """The backend changes the *lookup* key to email; nothing else.
+
+    Everything below the first two cases is the password check: this backend
+    sits in AUTHENTICATION_BACKENDS, so django.contrib.auth.authenticate()
+    hands it every login attempt in the process. Before this suite existed it
+    returned the user found by email regardless of the password, which made
+    "any nonempty password" a valid credential for any known address.
+    """
+
     backend = EmailAuthBackend()
 
     def test_authenticate_by_username_as_email(self):
         User = get_user_model()
-        user = User.objects.create_user(username="em1", email="em1@example.com")
-        assert self.backend.authenticate(None, username="em1@example.com") == user
+        user = User.objects.create_user(
+            username="em1", email="em1@example.com", password="correct-horse"
+        )
+        assert (
+            self.backend.authenticate(
+                None, username="em1@example.com", password="correct-horse"
+            )
+            == user
+        )
 
     def test_authenticate_by_email_kwarg(self):
         User = get_user_model()
-        user = User.objects.create_user(username="em2", email="em2@example.com")
-        assert self.backend.authenticate(None, email="em2@example.com") == user
+        user = User.objects.create_user(
+            username="em2", email="em2@example.com", password="correct-horse"
+        )
+        assert (
+            self.backend.authenticate(
+                None, email="em2@example.com", password="correct-horse"
+            )
+            == user
+        )
+
+    def test_wrong_password_denies(self):
+        User = get_user_model()
+        User.objects.create_user(
+            username="em-wrong", email="wrong@example.com", password="correct-horse"
+        )
+        assert (
+            self.backend.authenticate(
+                None, email="wrong@example.com", password="anything-at-all"
+            )
+            is None
+        )
+
+    def test_missing_password_denies(self):
+        """No secret presented = no principal returned, whatever the email."""
+        User = get_user_model()
+        User.objects.create_user(
+            username="em-nopw", email="nopw@example.com", password="correct-horse"
+        )
+        assert self.backend.authenticate(None, email="nopw@example.com") is None
+        assert (
+            self.backend.authenticate(None, email="nopw@example.com", password="")
+            is None
+        )
+
+    def test_inactive_user_denies_even_with_correct_password(self):
+        User = get_user_model()
+        User.objects.create_user(
+            username="em-off",
+            email="off@example.com",
+            password="correct-horse",
+            is_active=False,
+        )
+        assert (
+            self.backend.authenticate(
+                None, email="off@example.com", password="correct-horse"
+            )
+            is None
+        )
+
+    def test_ambiguous_email_denies(self):
+        """Two rows share the address: no single principal owns the secret."""
+        User = get_user_model()
+        User.objects.create_user(
+            username="dup-a", email="dup@example.com", password="correct-horse"
+        )
+        User.objects.create_user(
+            username="dup-b", email="dup@example.com", password="correct-horse"
+        )
+        assert (
+            self.backend.authenticate(
+                None, email="dup@example.com", password="correct-horse"
+            )
+            is None
+        )
 
     def test_authenticate_without_email_returns_none(self):
         assert self.backend.authenticate(None) is None
 
     def test_authenticate_unknown_email_returns_none(self):
-        assert self.backend.authenticate(None, email="nobody@example.com") is None
+        assert (
+            self.backend.authenticate(
+                None, email="nobody@example.com", password="correct-horse"
+            )
+            is None
+        )
+
+    def test_declares_that_it_verifies_credentials(self):
+        """The declaration the stapel_auth_backends boot check reads."""
+        assert EmailAuthBackend.verifies_credentials is True
 
     def test_get_user_found(self):
         User = get_user_model()
