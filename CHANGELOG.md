@@ -33,6 +33,31 @@ backend will not boot until that backend declares the attribute or is reviewed
 into the allowlist. That is the point of the gate — the decision is being asked
 for, once, out loud.
 
+### Security — one SSRF-hardened fetcher for the whole fleet (`stapel_core.net`)
+
+`stapel-cdn` had a genuinely good guarded fetcher: https-only, every resolved
+address validated against private/loopback/link-local/CGNAT/metadata ranges
+(including the IPv4-mapped, 6to4 and NAT64 re-encodings of them), the socket
+pinned to the validated IP so DNS rebinding gains nothing, every redirect
+re-validated from scratch, and a byte cap enforced mid-stream. It sat in a
+module nothing else depends on, so when `stapel-agent` needed to download
+audio it wrote `requests.get(url, timeout=600)` and read `.content` — no
+scheme check, no address check, no cap (audit AGENT-01). That is the fleet's
+recurring shape: the mechanism was built and the second consumer never picked
+it up, because picking it up was not possible.
+
+`stapel_core.net.fetch_bytes` is that fetcher, moved to where every module can
+reach it, plus the two controls the audit found missing: a **total deadline**
+covering the whole operation and all its redirect hops (a per-socket timeout
+alone bounds nothing against a server that trickles one byte per window), and
+an oversize `Content-Length` refused before a body byte is read. It also takes
+an exact-match `allowed_hosts` allowlist for the common case where the remote
+is a known API rather than a user-supplied address, and never sends an
+`Authorization` header, so there is nothing to leak across an origin change.
+`max_bytes` is mandatory and has no default: a caller that has not decided how
+much of its memory a stranger may fill has not finished thinking about the
+fetch.
+
 ### Security — a bearer token can no longer write account lifecycle
 
 `get_or_create_user_from_jwt` wrote the `is_active` claim into the local user
