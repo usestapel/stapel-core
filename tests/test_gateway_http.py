@@ -54,7 +54,20 @@ def audit_log():
         yield records
 
 
-def post(name, body=None, token=None, ip="10.0.7.4", header=None):
+#: The source address every ``post()`` below comes from — a stand-in for the
+#: container's own network. REQUIRE_NETWORK_BINDING is on by default, so a
+#: token that is not about the network factor still has to be pinned like a
+#: real container token is.
+DEFAULT_IP = "10.0.7.4"
+
+
+def issue_bound_token(project="p1", **kwargs):
+    """A token in the ordinary shape: pinned to the caller's network."""
+    kwargs.setdefault("network", DEFAULT_IP)
+    return issue_token(project, **kwargs)
+
+
+def post(name, body=None, token=None, ip=DEFAULT_IP, header=None):
     request = factory.post(f"/api/_gateway/{name}/", body or {}, format="json",
                            REMOTE_ADDR=ip,
                            **({"HTTP_AUTHORIZATION": f"Bearer {token}"} if token else {}),
@@ -100,7 +113,7 @@ def test_project_crosscheck_against_token(audit_log):
 
 def test_x_gateway_token_header_works():
     register_verb("echo", schema=ECHO_SCHEMA, handler=echo_handler)
-    issued = issue_token("p1")
+    issued = issue_bound_token()
     response = post("echo", {"args": {"value": "x"}},
                     header={"HTTP_X_GATEWAY_TOKEN": issued.token})
     assert response.status_code == 200
@@ -130,12 +143,20 @@ def test_bound_network_passes():
     assert response.status_code == 200
 
 
-def test_require_network_binding_blocks_unbound_tokens(audit_log):
-    with override_settings(STAPEL_GATEWAY={"REQUIRE_NETWORK_BINDING": True}):
+def test_unbound_tokens_are_blocked_by_default(audit_log):
+    """No override: the door refuses a token that names no network."""
+    register_verb("echo", schema=ECHO_SCHEMA, handler=echo_handler)
+    issued = issue_token("p1")  # no binding
+    response = post("echo", {"args": {"value": "x"}}, token=issued.token)
+    assert response.status_code == 403
+
+
+def test_unbound_tokens_pass_only_when_the_requirement_is_lifted(audit_log):
+    with override_settings(STAPEL_GATEWAY={"REQUIRE_NETWORK_BINDING": False}):
         register_verb("echo", schema=ECHO_SCHEMA, handler=echo_handler)
         issued = issue_token("p1")  # no binding
         response = post("echo", {"args": {"value": "x"}}, token=issued.token)
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 
 # --------------------------------------------------------------------------
@@ -158,7 +179,7 @@ def test_success_200_with_caller_identity(audit_log):
 
 
 def test_unknown_verb_404_without_enumeration(audit_log):
-    issued = issue_token("p1")
+    issued = issue_bound_token()
     response = post("secret_verb", {"args": {}}, token=issued.token)
     assert response.status_code == 404
     assert response.data == {"error": "unknown verb"}
@@ -167,7 +188,7 @@ def test_unknown_verb_404_without_enumeration(audit_log):
 
 def test_schema_violation_400(audit_log):
     register_verb("echo", schema=ECHO_SCHEMA, handler=echo_handler)
-    issued = issue_token("p1")
+    issued = issue_bound_token()
     response = post("echo", {"args": {"value": 42}}, token=issued.token)
     assert response.status_code == 400
     assert audit_log[-1]["payload"]["reason"] == "args_invalid"
@@ -176,7 +197,7 @@ def test_schema_violation_400(audit_log):
 def test_tier_denial_403():
     register_verb("deploy", schema=NOARGS_SCHEMA, handler=echo_handler,
                   policy={"tiers": ["business"]})
-    issued = issue_token("p1")
+    issued = issue_bound_token()
     response = post("deploy", {"args": {}}, token=issued.token)
     assert response.status_code == 403
 
@@ -184,7 +205,7 @@ def test_tier_denial_403():
 def test_rate_limit_429(audit_log):
     register_verb("echo", schema=ECHO_SCHEMA, handler=echo_handler,
                   policy={"rate_limit": "1/h"})
-    issued = issue_token("p1")
+    issued = issue_bound_token()
     assert post("echo", {"args": {"value": "a"}}, token=issued.token).status_code == 200
     response = post("echo", {"args": {"value": "b"}}, token=issued.token)
     assert response.status_code == 429
@@ -196,7 +217,7 @@ def test_handler_failure_502(audit_log):
         raise RuntimeError("nope")
 
     register_verb("echo", schema=ECHO_SCHEMA, handler=bad)
-    issued = issue_token("p1")
+    issued = issue_bound_token()
     response = post("echo", {"args": {"value": "x"}}, token=issued.token)
     assert response.status_code == 502
     assert audit_log[-1]["payload"]["ok"] is False
@@ -205,7 +226,7 @@ def test_handler_failure_502(audit_log):
 def test_pending_confirmation_202():
     register_verb("db_restore", schema=NOARGS_SCHEMA, handler=echo_handler,
                   policy={"require_confirmation": True})
-    issued = issue_token("p1")
+    issued = issue_bound_token()
     response = post("db_restore", {"args": {}}, token=issued.token)
     assert response.status_code == 202
     assert response.data["status"] == "pending"
@@ -221,7 +242,7 @@ def test_no_confirmation_route_on_container_surface():
 
 def test_misconfigured_gateway_500(audit_log):
     register_verb("echo", schema=ECHO_SCHEMA, handler="no.such.module.fn")
-    issued = issue_token("p1")
+    issued = issue_bound_token()
     response = post("echo", {"args": {"value": "x"}}, token=issued.token)
     assert response.status_code == 500
     assert audit_log[-1]["payload"]["reason"] == "gateway_misconfigured"
@@ -272,7 +293,7 @@ def test_comm_invoke_denials_propagate(comm_functions, audit_log):
 
 def test_unexpected_error_500_without_detail(audit_log, monkeypatch):
     register_verb("echo", schema=ECHO_SCHEMA, handler=echo_handler)
-    issued = issue_token("p1")
+    issued = issue_bound_token()
 
     def explode(*args, **kwargs):
         raise MemoryError("boom")

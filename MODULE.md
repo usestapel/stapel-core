@@ -848,7 +848,7 @@ issued = gateway.issue_token("proj-1", container="c-1", network="10.0.7.4")
 | `AUDIT_ARGS_MAXLEN` | `2048` | replace | Args longer than this (canonical JSON) become a sha256 fingerprint on the audit line |
 | `TOKEN_TTL` | `3600` | replace | Scope-token lifetime (seconds) |
 | `NETWORK_VERIFIER` | `…network.default_verifier` | replace (dotted path) | `callable(ip, token) -> bool`; default enforces the token's bound IP/CIDR from `REMOTE_ADDR` only (proxy trust = custom verifier) |
-| `REQUIRE_NETWORK_BINDING` | `False` | replace | `True` refuses HTTP calls with tokens that carry no network binding (strict fleet posture) |
+| `REQUIRE_NETWORK_BINDING` | `True` | replace | Refuses HTTP calls with tokens that carry no network binding. `False` accepts an unbound token from anywhere that can reach the door |
 | `TIER_RESOLVER` | `None` | replace (dotted path) | `callable(project) -> tier` when the caller carries none |
 | `CONFIRMATION_TTL` | `900` | replace | Pending (`require_confirmation`) actions expire after N seconds |
 

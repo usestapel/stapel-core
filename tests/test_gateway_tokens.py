@@ -166,10 +166,14 @@ def test_malformed_binding_fails_closed():
     assert default_verifier("10.0.7.4", _Tok("nonsense")) is False
 
 
-def test_unbound_token_follows_require_binding_setting():
-    assert default_verifier("10.0.7.4", _Tok(None)) is True  # opt-out posture
-    with override_settings(STAPEL_GATEWAY={"REQUIRE_NETWORK_BINDING": True}):
-        assert default_verifier("10.0.7.4", _Tok(None)) is False
+def test_unbound_token_is_refused_by_default():
+    """The network identity is documented as the third authorization factor,
+    and it used to default to off: an unbound scope token was accepted from
+    anywhere that could reach the container-facing door, which is the token
+    alone doing all the work. Opting out is now the explicit act."""
+    assert default_verifier("10.0.7.4", _Tok(None)) is False
+    with override_settings(STAPEL_GATEWAY={"REQUIRE_NETWORK_BINDING": False}):
+        assert default_verifier("10.0.7.4", _Tok(None)) is True
 
 
 def test_verifier_seam_is_swappable():

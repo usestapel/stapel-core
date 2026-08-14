@@ -11,9 +11,10 @@ container owns a source address right now.
 
 The default verifier enforces the binding recorded on the token at
 issuance (exact IP or CIDR, IPv4/IPv6 via :mod:`ipaddress`). A token
-without a binding passes only while ``REQUIRE_NETWORK_BINDING`` is off;
-switching it on makes unpinned tokens unusable over HTTP — the strict
-posture for real container fleets.
+without a binding is refused, because ``REQUIRE_NETWORK_BINDING`` defaults
+to on: a third factor that is off by default is not a third factor. Set it
+to False only where tokens are deliberately issued unpinned — that turns
+the check back into "the token alone is enough".
 
 Only ``REMOTE_ADDR`` is consulted — never a forwarded-for header: those
 are caller-controlled unless a trusted proxy rewrites them, and trusting

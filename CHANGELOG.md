@@ -45,6 +45,24 @@ New W-level boot check `stapel_blacklist`
 (`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
 is on, so the hatch cannot become forgotten configuration.
 
+### Security — the privilege gateway's third authorization factor is on
+
+**Upgrade note — scope tokens issued without a `network` binding stop working
+over HTTP.**
+
+`STAPEL_GATEWAY["REQUIRE_NETWORK_BINDING"]` defaulted to `False`, and
+`gateway/network.py` reads it as `if not bound: return not
+REQUIRE_NETWORK_BINDING`. So a scope token carrying no network binding was
+accepted from anywhere that could reach the container-facing door
+(`gateway/http.py`) — while the module's own docstring called network identity
+"the third authorization factor". A factor that is off by default is not a
+factor; only the token was doing any work.
+
+The default is now `True`. Issue tokens with `issue_token(project,
+network=...)` (exact IP or CIDR), which is what a container-manager already
+does. `STAPEL_GATEWAY = {"REQUIRE_NETWORK_BINDING": False}` restores the old
+behaviour for deployments that deliberately issue unpinned tokens.
+
 ### Security — a token no longer creates local users, or grants them staff, by default
 
 **Upgrade note — every downstream service that relies on JIT user creation

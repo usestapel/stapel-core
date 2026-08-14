@@ -34,10 +34,14 @@ gateway_settings = AppSettings(
         # enforces the token's bound network (exact IP or CIDR) and treats
         # an unbound token per REQUIRE_NETWORK_BINDING.
         "NETWORK_VERIFIER": "stapel_core.gateway.network.default_verifier",
-        # When True, an HTTP call with a token that has no network binding
-        # is refused: every container token must be pinned to its network
-        # identity ("a request about project X comes from container X").
-        "REQUIRE_NETWORK_BINDING": False,
+        # An HTTP call with a token that has no network binding is refused:
+        # every container token must be pinned to its network identity ("a
+        # request about project X comes from container X"). This defaulted to
+        # False, which meant the docstring's "third authorization factor" was
+        # off on the privileged container-facing door — an unbound token was
+        # accepted from anywhere that could reach it. Set False only where
+        # tokens are deliberately issued without a binding.
+        "REQUIRE_NETWORK_BINDING": True,
         # Optional tier resolver: callable(project) -> tier name. Used when
         # the caller did not carry a tier and a verb restricts tiers.
         "TIER_RESOLVER": None,
