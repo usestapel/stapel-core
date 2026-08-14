@@ -377,3 +377,25 @@ def test_schema_validation_when_enabled():
         assert call("svc.strict", {"n": 1}) == {"n": 1}
         with pytest.raises(SchemaValidationError):
             call("svc.strict", {"n": "not-int"})
+
+
+def test_schema_validation_is_on_in_production_by_default():
+    """The setting used to default to "follow settings.DEBUG", so payloads
+    were checked in development and waved through in production — the one
+    environment where they arrive from another host."""
+    pytest.importorskip("jsonschema")
+    from stapel_core.comm.exceptions import SchemaValidationError
+
+    register_function(
+        "svc.strict_default",
+        lambda p: p,
+        schema={
+            "type": "object",
+            "properties": {"n": {"type": "integer"}},
+            "required": ["n"],
+            "additionalProperties": False,
+        },
+    )
+    with override_settings(STAPEL_COMM={}, DEBUG=False):
+        with pytest.raises(SchemaValidationError):
+            call("svc.strict_default", {"n": "not-int"})

@@ -128,7 +128,7 @@ instances (e.g. `verification_settings` below).
 | `FUNCTION_TIMEOUT` | `5.0` | Default Function call timeout (seconds) |
 | `NATS_URL` | `"nats://nats:4222"` | NATS transport broker address |
 | `NATS_SUBJECT_PREFIX` | `"stapel.fn"` | NATS Function subject prefix |
-| `VALIDATE_SCHEMAS` | `None` | Validate payloads against schemas from `@function` / `@on_action`; `None` = follow `settings.DEBUG` |
+| `VALIDATE_SCHEMAS` | `True` | Validate payloads against schemas from `@function` / `@on_action`. On everywhere, `DEBUG` included and excluded; set `False` to opt out explicitly |
 | `TASK_EXECUTOR` | `"inline"` | How a worker runs a claimed task: `inline` \| `celery` \| dotted path to `callable(task_id)` |
 | `TASK_DISPATCH` | `"action"` | How `task.requested` reaches the worker: `action` (rides `ACTION_TRANSPORT`) \| `bus` (task.\* events go straight to the bus) \| `inline` (synchronous, tests only) |
 | `SERVICE` | `None` | Service name stamped into emitted events; falls back to `SERVICE_NAME` |

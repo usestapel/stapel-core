@@ -466,12 +466,27 @@ def test_deliver_unknown_transport_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_validate_skips_when_jsonschema_missing(monkeypatch):
+def test_validate_refuses_when_jsonschema_missing(monkeypatch):
+    """Used to skip validation silently, which made a declared-and-enforced
+    schema indistinguishable from no schema at all. A validator that cannot
+    run must not report success."""
+    from stapel_core.comm.exceptions import SchemaValidatorUnavailable
     from stapel_core.comm.registry import _validate
 
     monkeypatch.setitem(sys.modules, "jsonschema", None)  # forces ImportError
     with override_settings(STAPEL_COMM={"VALIDATE_SCHEMAS": True}):
-        assert _validate("svc.x", {"n": "wrong"}, {"type": "object"}) is None
+        with pytest.raises(SchemaValidatorUnavailable):
+            _validate("svc.x", {"n": "wrong"}, {"type": "object"})
+
+
+def test_validate_without_schema_needs_no_validator(monkeypatch):
+    """No schema registered means nothing to enforce — that path stays open
+    whether or not jsonschema is installed."""
+    from stapel_core.comm.registry import _validate
+
+    monkeypatch.setitem(sys.modules, "jsonschema", None)
+    with override_settings(STAPEL_COMM={"VALIDATE_SCHEMAS": True}):
+        assert _validate("svc.x", {"n": "wrong"}, None) is None
 
 
 def test_function_registry_register_schema_and_names():

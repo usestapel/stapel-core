@@ -86,6 +86,12 @@ class CommonDjangoConfig(AppConfig):
         # ModuleNotFoundError forever" misconfiguration at boot-smoke time
         # instead of the first (silently swallowed) publish in production.
         from stapel_core.bus import checks as _bus_checks  # noqa: F401
+        # Comm payload-validation checks (stapel_core.comm.checks): E-level
+        # when schema validation is on (the default) but jsonschema cannot be
+        # imported — otherwise every cross-service Function call carrying a
+        # schema fails at request time; W-level when validation is off, so an
+        # opt-out stays a stated choice.
+        from stapel_core.comm import checks as _comm_checks  # noqa: F401
         # Config-manifest checks (stapel_core.config.checks): E-level when a
         # CONFIG.MD-declared (or call-site-declared) required key has no
         # value and no default — "required" was previously only enforced the

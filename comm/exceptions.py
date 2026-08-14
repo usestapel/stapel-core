@@ -68,6 +68,17 @@ class SchemaValidationError(CommError):
     """Payload does not match the registered schema."""
 
 
+class SchemaValidatorUnavailable(CommError):
+    """A schema is registered and enforced, but ``jsonschema`` is not installed.
+
+    Previously this was a ``logger.debug`` and a silent pass-through: the
+    schema was declared, the operator believed payloads were checked, and
+    nothing was. A validator that cannot run must say so rather than report
+    success — same stance as the privilege gateway (``gateway/service.py``),
+    which refuses to degrade to best-effort.
+    """
+
+
 class ProjectionError(CommError):
     """A projection failed to apply an event or rebuild (runtime)."""
 

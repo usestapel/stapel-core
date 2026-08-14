@@ -27,8 +27,13 @@ _DEFAULTS: dict[str, Any] = {
     "NATS_URL": "nats://nats:4222",
     "NATS_SUBJECT_PREFIX": "stapel.fn",
     # Validate payloads against schemas registered with @function/@on_action.
-    # None = follow settings.DEBUG.
-    "VALIDATE_SCHEMAS": None,
+    # On by default: a Function payload arriving over HTTP or NATS comes from
+    # another service across the network, and the schema is the only thing
+    # standing between it and the handler. This used to follow settings.DEBUG,
+    # which meant validation was on where payloads are hand-written and off in
+    # production — dev and prod ran different code paths, and the one that
+    # mattered was the unchecked one. Set False to opt out explicitly.
+    "VALIDATE_SCHEMAS": True,
     # Task execution: inline (in the consumer/relay process) | celery |
     # dotted path to a callable(task_id).
     "TASK_EXECUTOR": "inline",
@@ -58,12 +63,12 @@ def comm_setting(name: str, default: Any = None) -> Any:
 
 
 def validation_enabled() -> bool:
-    from django.conf import settings
+    """Whether registered schemas are enforced.
 
-    configured = comm_setting("VALIDATE_SCHEMAS")
-    if configured is None:
-        return bool(getattr(settings, "DEBUG", False))
-    return bool(configured)
+    Deliberately independent of ``settings.DEBUG``: tying a security control to
+    the debug flag makes production the only environment that never runs it.
+    """
+    return bool(comm_setting("VALIDATE_SCHEMAS"))
 
 
 def service_name() -> str:

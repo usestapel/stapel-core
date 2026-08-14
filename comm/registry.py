@@ -11,7 +11,11 @@ import threading
 from typing import Any, Callable
 
 from .config import validation_enabled
-from .exceptions import FunctionNotRegistered, SchemaValidationError
+from .exceptions import (
+    FunctionNotRegistered,
+    SchemaValidationError,
+    SchemaValidatorUnavailable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +28,16 @@ def _validate(name: str, payload: dict, schema: dict | None) -> None:
         return
     try:
         import jsonschema
-    except ImportError:  # validation is best-effort tooling, not runtime dep
-        logger.debug("jsonschema not installed; skipping validation for %s", name)
-        return
+    except ImportError as exc:
+        # Fail closed. A silent skip here meant a declared schema and an
+        # unchecked payload looked identical from the outside, forever.
+        raise SchemaValidatorUnavailable(
+            f"payload for '{name}' declares a schema and validation is on, "
+            "but jsonschema is not installed, so nothing can be checked "
+            "(pip install jsonschema). Set STAPEL_COMM[\"VALIDATE_SCHEMAS\"] "
+            "= False to state, explicitly, that this deployment accepts "
+            "unvalidated payloads."
+        ) from exc
     try:
         jsonschema.validate(payload, schema)
     except jsonschema.ValidationError as exc:

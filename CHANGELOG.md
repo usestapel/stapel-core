@@ -45,6 +45,38 @@ New W-level boot check `stapel_blacklist`
 (`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
 is on, so the hatch cannot become forgotten configuration.
 
+### Security — cross-service payloads are validated in production, not only in DEBUG
+
+**Upgrade note — behaviour change for every `@function` / `@on_action` with a
+registered schema.**
+
+`STAPEL_COMM["VALIDATE_SCHEMAS"]` defaulted to `None`, which meant "follow
+`settings.DEBUG`". So payload validation ran where payloads are hand-written by
+a developer, and was off in production, where they arrive from another service
+over HTTP (`comm/http.py` `FunctionCallView`) or NATS. Dev and prod ran
+different code paths and the unchecked one was the one that mattered.
+
+- The default is now `True`, independent of `DEBUG`. Opt out explicitly with
+  `STAPEL_COMM = {"VALIDATE_SCHEMAS": False}`.
+- A missing `jsonschema` no longer skips validation silently. `_validate()`
+  raises the new `stapel_core.comm.exceptions.SchemaValidatorUnavailable`
+  instead — the same stance the privilege gateway already takes
+  (`gateway/service.py`): a validator that cannot run must not report success.
+- `jsonschema>=4.18` moved from the `gateway` extra into the base
+  dependencies, because a default-on control has to be installable by default.
+  It remains listed under `gateway` for anyone pinning that extra.
+
+New boot check `stapel_comm` (`stapel_core.comm.checks`): E-level when
+validation is on but `jsonschema` cannot be imported (caught at
+`manage.py check`, not at the first cross-service call), W-level when
+validation is off, so the opt-out stays a stated choice.
+
+*What can break:* a service whose emitted payloads have quietly drifted from
+their registered schema will now raise `SchemaValidationError` in production
+where it previously delivered. That drift was the thing the schema was
+registered to catch. Fix the payload or the schema; `VALIDATE_SCHEMAS: False`
+is the escape hatch if the fix has to wait.
+
 ### Added — the event store reads like a journal, purges like an eraser, and answers for a person
 
 Three mechanisms, one motive: every audit journal in the fleet belongs in the

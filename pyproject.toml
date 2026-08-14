@@ -42,6 +42,11 @@ dependencies = [
     "cryptography>=41.0",
     "requests>=2.31",
     "phonenumbers>=8.13",
+    # Payload validation for the comm layer (STAPEL_COMM["VALIDATE_SCHEMAS"],
+    # on by default). It used to be an optional extra because validation was
+    # best-effort; a default-on security control has to be installable by
+    # default, or the default configuration is one that cannot run.
+    "jsonschema>=4.18",
 ]
 
 [project.optional-dependencies]

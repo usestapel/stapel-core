@@ -21,14 +21,25 @@ def test_task_record_str():
     assert str(record) == "llm.summarize [running]"
 
 
-def test_validation_enabled_follows_debug_when_unset(settings):
+def test_validation_enabled_ignores_debug(settings):
+    """Validation used to follow settings.DEBUG, i.e. it was off in exactly
+    the environment where payloads arrive from other hosts. It is on by
+    default now, and DEBUG has no say in it either way."""
     from stapel_core.comm.config import validation_enabled
 
     settings.STAPEL_COMM = {}
     settings.DEBUG = False
-    assert validation_enabled() is False
+    assert validation_enabled() is True
     settings.DEBUG = True
     assert validation_enabled() is True
+
+
+def test_validation_can_be_disabled_explicitly(settings):
+    from stapel_core.comm.config import validation_enabled
+
+    settings.STAPEL_COMM = {"VALIDATE_SCHEMAS": False}
+    settings.DEBUG = True
+    assert validation_enabled() is False
 
 
 def test_appsettings_survives_missing_setting_changed_signal():
