@@ -83,3 +83,82 @@ def test_import_strings_empty_value_passes_through():
         import_strings=("PROVIDER",),
     )
     assert s.PROVIDER == ""
+
+
+# ---------------------------------------------------------------------------
+# import_strings is implicitly no_env: an env var must never choose the class
+# the process imports and runs.
+
+
+def test_import_strings_key_ignores_environment(monkeypatch):
+    """A stray env var must not pick the implementation.
+
+    Before this rule, any name in ``import_strings`` was a dotted path the
+    environment could set — so anything able to export a variable in the pod
+    (a leaked value, a sibling container, an entrypoint script) chose which
+    class the process loaded.
+    """
+    monkeypatch.setenv("PROVIDER", "stapel_core.conf.AppSettings")
+    s = AppSettings(
+        "STAPEL_CONFTEST",
+        defaults={"PROVIDER": "stapel_core.bus.backends.memory.MemoryBus"},
+        import_strings=("PROVIDER",),
+    )
+    from stapel_core.bus.backends.memory import MemoryBus
+
+    assert s.PROVIDER is MemoryBus  # the default, not the environment
+
+
+def test_import_strings_key_still_honours_the_project_settings_dict(
+    settings, monkeypatch
+):
+    """The project's settings module is trusted; the environment is not."""
+    monkeypatch.setenv("PROVIDER", "stapel_core.conf.AppSettings")
+    settings.STAPEL_CONFTEST = {
+        "PROVIDER": "stapel_core.bus.backends.memory.MemoryBus"
+    }
+    s = AppSettings(
+        "STAPEL_CONFTEST",
+        defaults={"PROVIDER": ""},
+        import_strings=("PROVIDER",),
+    )
+    from stapel_core.bus.backends.memory import MemoryBus
+
+    assert s.PROVIDER is MemoryBus
+
+
+def test_env_overridable_restores_environment_selection(monkeypatch):
+    """The explicit opt-out, for a deployment that really selects per env."""
+    monkeypatch.setenv("PROVIDER", "stapel_core.conf.AppSettings")
+    s = AppSettings(
+        "STAPEL_CONFTEST",
+        defaults={"PROVIDER": "stapel_core.bus.backends.memory.MemoryBus"},
+        import_strings=("PROVIDER",),
+        env_overridable=("PROVIDER",),
+    )
+    assert s.PROVIDER is AppSettings
+
+
+def test_non_import_string_key_is_still_env_overridable(monkeypatch):
+    """Non-vacuity: the env step is closed for implementations only."""
+    monkeypatch.setenv("STAPEL_CONFTEST_PLAIN", "from-env")
+    s = AppSettings(
+        "STAPEL_CONFTEST",
+        defaults={
+            "PROVIDER": "stapel_core.bus.backends.memory.MemoryBus",
+            "STAPEL_CONFTEST_PLAIN": "default",
+        },
+        import_strings=("PROVIDER",),
+    )
+    assert s.STAPEL_CONFTEST_PLAIN == "from-env"
+
+
+def test_no_env_and_env_overridable_together_is_a_declaration_error():
+    with pytest.raises(ValueError, match="env_overridable"):
+        AppSettings(
+            "STAPEL_CONFTEST",
+            defaults={"PROVIDER": ""},
+            import_strings=("PROVIDER",),
+            no_env=("PROVIDER",),
+            env_overridable=("PROVIDER",),
+        )

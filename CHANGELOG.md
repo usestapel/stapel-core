@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### Security — an environment variable can no longer choose which class the process loads
+
+**Upgrade note — behaviour change in every module built on `AppSettings`,
+including every sibling repo, the moment it picks up this core.**
+
+`AppSettings` resolves each key `settings.<NAMESPACE>` dict → flat Django
+setting → environment variable → default, and keys listed in `import_strings`
+are dotted paths it imports and instantiates. The two together meant a
+same-named environment variable selected the *implementation* of a provider,
+backend, policy or audit sink. In a shared pod, anything able to export a
+variable — a leaked value, a sibling container's config, a stray line in an
+entrypoint — picked the code that runs on the privileged path. Closing it
+namespace by namespace, with a `no_env` list per module, made safety depend on
+every author remembering a flag; roughly ten fleet repos (booking, calendar,
+chat, listings, shop, social, tasks, vault, video and others) declared
+`import_strings` with no `no_env` at all.
+
+**A key in `import_strings` is now implicitly `no_env`.** It still resolves
+from the project's `STAPEL_<MODULE>` dict, from a flat Django setting of the
+same name, or from the default — the project's own settings module is trusted.
+The environment is not, and is simply not consulted for such a key. No module
+can reopen this by forgetting a flag.
+
+The deliberate opt-out is the new `env_overridable=` argument, for a
+deployment that genuinely selects an implementation per environment:
+
+    AppSettings(
+        "STAPEL_BILLING",
+        defaults={...},
+        import_strings=("PAYMENT_PROVIDER",),
+        env_overridable=("PAYMENT_PROVIDER",),   # env may pick this one
+    )
+
+It is an opt-OUT of the safe default and greppable fleet-wide by that one
+name. Declaring the same key in both `no_env` and `env_overridable` now raises
+`ValueError` at construction instead of silently picking a winner.
+
+*What can break, and how to spot it:* a deployment that was selecting an
+implementation with a bare environment variable will **silently fall back to
+the default (or the settings value)** — no error, no log line, just different
+code running. Grep your deploy manifests, Helm values, `.env` files and
+entrypoints for the bare key names each namespace lists in `import_strings`
+(`PROVIDER`, `BACKEND`, `PAYMENT_PROVIDER`, `POLICY_ENGINE`, `AUDIT_SINK`,
+`NOTIFY`, `TRANSLATOR`, `WATERMARK`, …). If one is set on a running service,
+either move it into the project's settings dict (recommended) or add the key
+to `env_overridable` in that module's `AppSettings` declaration.
+
+Inside core, exactly one key changes behaviour: `STAPEL_MEDIA["WATERMARK"]`
+(`media/conf.py`) was in `import_strings` but not in `no_env`, so a bare
+`WATERMARK` env var used to select the watermark callable and no longer does.
+Core's other `import_strings` keys — `access` (`AUDIT_SINK`, `NOTIFY`),
+`gateway` (`POLICY_ENGINE`, `RATE_LIMITER`, `AUDIT_SINK`, `NETWORK_VERIFIER`,
+`TIER_RESOLVER`), `flows` (`DOC_TRANSLATOR`, `FLOW_DOC_RENDERER`) and `i18n`
+(`TRANSLATOR`) — were already `no_env` by hand and are unaffected.
+
 ### Security — a ban is enforced on every cache backend, and stops failing open
 
 **Upgrade note — behaviour change on every service that authenticates.**

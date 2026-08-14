@@ -116,6 +116,16 @@ resolved with `import_string` — the standard seam for swapping behavior
 without forking. Host apps and other stapel modules create their own
 instances (e.g. `verification_settings` below).
 
+**Keys in `import_strings` skip the environment step** — they are implicitly
+`no_env`. Such a key does not carry a value, it names the class the process
+imports and runs, so a same-named env var in a shared pod would choose the
+implementation of a provider, backend or policy. The project's settings dict
+and the flat setting still select it; the environment does not. A deployment
+that genuinely selects an implementation per environment opts out by name:
+`AppSettings(..., import_strings=("PROVIDER",), env_overridable=("PROVIDER",))`.
+Declaring the same key in both `no_env` and `env_overridable` raises at
+construction rather than picking a winner.
+
 ### comm transports — `STAPEL_COMM` dict (`comm/config.py`)
 
 | Key | Default | What it customizes |
