@@ -32,6 +32,13 @@ eventstore_settings = AppSettings(
         # Time-partition granularity for the Postgres backend: "month" or
         # "day". Structural only outside PostgreSQL (SQLite stays one table).
         "PARTITION_PERIOD": "month",
+        # The streams `manage.py audit_trail` reads when asked for a person's
+        # cross-module history. Empty (default) = discover by the naming
+        # convention every audit stream follows ("audit" or "*.audit") from
+        # the default backend. A deployment that routes an audit stream to a
+        # separate backend (ROUTES) lists its streams here explicitly —
+        # discovery cannot see across backends.
+        "AUDIT_STREAMS": [],
     },
     # BACKEND/ROUTES pick which store code runs and where a stream lands —
     # generic names that must never be silently overridden by a stray env var.

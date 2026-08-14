@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — the event store reads like a journal, purges like an eraser, and answers for a person
+
+Three mechanisms, one motive: every audit journal in the fleet belongs in the
+event store, and three small gaps were what kept consumers building bespoke
+tables instead (stapel-workspaces 0.24 built one — see its Unreleased entry
+for the deletion).
+
+- `eventstore.query(..., reverse=True)` — newest-first cursor reads
+  (`(-ts, -id)`, `after` advances into the past, same id tie-break). Journals
+  are written oldest-first and read newest-first; without this every
+  journal-shaped consumer had to refetch a stream from the top to show its
+  last page — reason enough to keep a bespoke ORDER BY table.
+- `eventstore.anchor.anchor_page(stream, *, filters, anchor, direction,
+  limit)` — the fleet's `AnchorPagination` wire contract (`{items,
+  next_anchor, prev_anchor, has_next, has_prev, count}`, ISO-timestamp
+  anchors, `next`/`prev`/`center`) served from a stream. A journal that moves
+  its storage into the store keeps its released HTTP shape byte-for-byte.
+- `eventstore.purge(..., filters=...)` — subject-scoped erasure. Retention
+  never needs a filter; a GDPR delete of one person's audit lines does, and
+  without it every module keeps a deletable table just to be able to forget.
+  This is the unblock for moving stapel-auth's `AuthAuditLog` (whose GDPR
+  provider deletes per user) onto a stream.
+- `manage.py audit_trail <person>` — the operator's cross-module window:
+  every audit line naming a person (canonical payload keys `subject`,
+  `subject_id`, `actor_id`) across every audit stream
+  (`STAPEL_EVENTSTORE["AUDIT_STREAMS"]`, or discovered by the
+  `audit`/`*.audit` naming convention), merged newest-first. The per-module
+  HTTP endpoints each gate their own slice under their own mandate; the
+  cross-module question is an operator's, so it lives on the operator
+  surface, not on any product API.
+
 ## [0.23.1] — 2026-08-10
 
 ### Fixed — the error reference resolves a key by its owner, not by its directory

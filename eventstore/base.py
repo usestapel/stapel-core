@@ -134,11 +134,17 @@ class EventStore(ABC):
         limit: int = 100,
         time_range: tuple[datetime | None, datetime | None] | None = None,
         filters: Mapping[str, object] | None = None,
+        reverse: bool = False,
     ) -> EventPage:
         """Cursor read: rows of *stream* strictly after *after*, in ``(ts, id)``
         order, at most *limit*. ``time_range`` bounds ``ts`` (half-open
         ``[start, end)``); ``filters`` matches identity columns or payload
-        keys (``{"project": "p1", "model": "opus"}``)."""
+        keys (``{"project": "p1", "model": "opus"}``).
+
+        ``reverse=True`` walks the stream newest-first (``(-ts, -id)`` order);
+        *after* then means "strictly older than". Journals are written oldest
+        first but read newest first — without this flag every audit-style
+        consumer would refetch the whole stream to show its last page."""
 
     @abstractmethod
     def rollup(
@@ -157,10 +163,22 @@ class EventStore(ABC):
         table; the concrete meaning of a rollup is the consumer's business."""
 
     @abstractmethod
-    def purge(self, stream: str, *, older_than: datetime) -> int:
+    def purge(
+        self,
+        stream: str,
+        *,
+        older_than: datetime,
+        filters: Mapping[str, object] | None = None,
+    ) -> int:
         """Delete raw events of *stream* with ``ts < older_than``; return the
         number removed. Retention policy lives in settings and is applied by
-        the sweep command — this is the mechanism."""
+        the sweep command — this is the mechanism.
+
+        ``filters`` (same contract as :meth:`query`) narrows the deletion to
+        matching rows. Retention never needs it; subject-scoped erasure does:
+        a GDPR delete of one person's audit lines is "purge everything about
+        this subject up to now", and without a filtered purge every module
+        would keep a bespoke deletable table just to be able to forget."""
 
     def purge_rollup(self, stream: str, *, older_than: datetime) -> int:
         """Delete rollup buckets older than *older_than* (raw retention ≠

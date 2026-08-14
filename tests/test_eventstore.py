@@ -392,3 +392,160 @@ def test_partition_command_skips_on_sqlite():
     call_command("eventstore_partition", "--periods-ahead", "1")
     out = "".join(str(a) for a in [connection.vendor])
     assert out  # command completed without raising on a plain table
+
+
+# --------------------------------------------------------------------------
+# reverse (newest-first) reads — the journal read path
+# --------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_reverse_reads_newest_first():
+    base = datetime(2026, 7, 6, 0, 0, 0, tzinfo=timezone.utc)
+    for i in range(4):
+        eventstore.append("s", {"i": i}, ts=base + timedelta(hours=i))
+    page = eventstore.query("s", reverse=True)
+    assert [e.payload["i"] for e in page] == [3, 2, 1, 0]
+
+
+@pytest.mark.django_db
+def test_reverse_cursor_walks_into_the_past_without_loss():
+    ts = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
+    for i in range(5):
+        # identical ts — the id tie-break must hold in reverse too
+        eventstore.append("s", {"i": i}, ts=ts)
+    seen = []
+    page = eventstore.query("s", limit=2, reverse=True)
+    seen += [e.payload["i"] for e in page]
+    page = eventstore.query("s", after=page.cursor, limit=2, reverse=True)
+    seen += [e.payload["i"] for e in page]
+    page = eventstore.query("s", after=page.cursor, limit=2, reverse=True)
+    seen += [e.payload["i"] for e in page]
+    assert not page.has_more
+    assert seen == [4, 3, 2, 1, 0]  # every row exactly once, newest first
+
+
+# --------------------------------------------------------------------------
+# filtered purge — subject-scoped erasure
+# --------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_purge_with_filters_forgets_one_subject_only():
+    eventstore.append("ws.audit", {"subject_id": "alice", "action": "joined"})
+    eventstore.append("ws.audit", {"subject_id": "bob", "action": "joined"})
+    removed = eventstore.purge(
+        "ws.audit",
+        older_than=dj_tz.now() + timedelta(seconds=1),
+        filters={"subject_id": "alice"},
+    )
+    assert removed == 1
+    left = eventstore.query("ws.audit")
+    assert [e.payload["subject_id"] for e in left] == ["bob"]
+
+
+# --------------------------------------------------------------------------
+# anchor pages — the AnchorPagination wire contract over a stream
+# --------------------------------------------------------------------------
+
+def _journal(n=5):
+    base = datetime(2026, 7, 6, 0, 0, 0, tzinfo=timezone.utc)
+    for i in range(n):
+        eventstore.append("j", {"i": i}, ts=base + timedelta(minutes=i))
+    return base
+
+
+@pytest.mark.django_db
+def test_anchor_first_page_is_newest_first_with_next_anchor():
+    from stapel_core.eventstore.anchor import anchor_page
+
+    _journal(5)
+    page = anchor_page("j", limit=2)
+    assert [e.payload["i"] for e in page.events] == [4, 3]
+    assert page.has_next and not page.has_prev
+    assert page.next_anchor == page.events[-1].ts.isoformat()
+    assert page.prev_anchor is None
+
+
+@pytest.mark.django_db
+def test_anchor_next_page_continues_strictly_past_the_anchor():
+    from stapel_core.eventstore.anchor import anchor_page
+
+    _journal(5)
+    first = anchor_page("j", limit=2)
+    second = anchor_page("j", limit=2, anchor=first.next_anchor)
+    assert [e.payload["i"] for e in second.events] == [2, 1]
+    assert second.has_next and second.has_prev
+    third = anchor_page("j", limit=2, anchor=second.next_anchor)
+    assert [e.payload["i"] for e in third.events] == [0]
+    assert not third.has_next
+
+
+@pytest.mark.django_db
+def test_anchor_prev_returns_the_adjacent_newer_page():
+    from stapel_core.eventstore.anchor import anchor_page
+
+    _journal(5)
+    first = anchor_page("j", limit=2)  # [4, 3]; next_anchor = i=3's ts
+    back = anchor_page("j", limit=2, anchor=first.next_anchor, direction="prev")
+    # Strictly newer than the anchor: the anchor row (i=3) itself is AT the
+    # anchor, not past it — the same exclusive contract the queryset
+    # paginator has always had.
+    assert [e.payload["i"] for e in back.events] == [4]
+    assert back.has_next  # the anchor's own page is still below
+
+
+@pytest.mark.django_db
+def test_anchor_center_pins_the_anchor_row_between_neighbours():
+    from stapel_core.eventstore.anchor import anchor_page
+
+    base = _journal(5)
+    at = (base + timedelta(minutes=2)).isoformat()  # i=2
+    page = anchor_page("j", limit=2, anchor=at, direction="center")
+    got = [e.payload["i"] for e in page.events]
+    assert 2 in got and got == sorted(got, reverse=True)
+    assert page.has_next and page.has_prev
+
+
+@pytest.mark.django_db
+def test_anchor_filters_scope_the_page():
+    from stapel_core.eventstore.anchor import anchor_page
+
+    eventstore.append("j", {"ws": "a", "i": 1})
+    eventstore.append("j", {"ws": "b", "i": 2})
+    page = anchor_page("j", filters={"ws": "a"})
+    assert [e.payload["i"] for e in page.events] == [1]
+
+
+@pytest.mark.django_db
+def test_anchor_malformed_anchor_raises_not_first_page():
+    from stapel_core.eventstore.anchor import anchor_page
+
+    _journal(2)
+    with pytest.raises(ValueError):
+        anchor_page("j", anchor="not-a-timestamp")
+
+
+# --------------------------------------------------------------------------
+# audit_trail — one operator window across every audit stream
+# --------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_audit_trail_merges_streams_and_matches_actor_and_subject(capsys):
+    # A gateway invocation line (key: subject) and a domain-fact line
+    # (keys: actor_id/subject_id) about the same person, in two streams.
+    eventstore.append("audit", {"verb": "deploy", "subject": "u-1", "decision": "denied"})
+    eventstore.append("workspace.audit", {"action": "member_removed", "actor_id": "u-1", "subject_id": "u-2"})
+    eventstore.append("workspace.audit", {"action": "member_joined", "subject_id": "u-9"})
+    call_command("audit_trail", "u-1")
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 2
+    assert "workspace.audit" in out[0] or "workspace.audit" in out[1]
+    assert not any("u-9" in line for line in out)
+
+
+@pytest.mark.django_db
+def test_audit_trail_discovers_streams_by_the_audit_naming_convention(capsys):
+    eventstore.append("llm.call", {"model": "opus", "subject": "u-1"})  # not an audit stream
+    eventstore.append("auth.audit", {"event": "login", "subject_id": "u-1"})
+    call_command("audit_trail", "u-1")
+    out = capsys.readouterr().out
+    assert "auth.audit" in out and "llm.call" not in out
