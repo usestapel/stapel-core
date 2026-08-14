@@ -42,7 +42,9 @@ from __future__ import annotations
 import logging
 
 from django.apps import apps
-from django.contrib.auth.backends import BaseBackend, ModelBackend
+from django.contrib.auth.backends import ModelBackend
+
+from stapel_core.django.auth_backend_checks import AuthorizationOnlyBackend
 
 from .declaration import ACTIONS, effective_access
 from .levels import Level
@@ -87,11 +89,16 @@ def mandate_decision(user, app_label: str, action: str, model) -> tuple[bool, Le
     return clearance >= required, clearance, required
 
 
-class MandateBackend(BaseBackend):
-    """MAC half of the chain — grants strictly by (declaration × clearance)."""
+class MandateBackend(AuthorizationOnlyBackend):
+    """MAC half of the chain — grants strictly by (declaration × clearance).
 
-    def authenticate(self, request, **credentials):  # not an authentication path
-        return None
+    Authorization only: it contributes ``has_perm``/``has_module_perms`` and
+    never returns a principal. It defines no ``authenticate`` on purpose — the
+    inherited ``BaseBackend`` no-op is what lets the ``stapel_auth_backends``
+    boot gate verify that from the MRO instead of trusting a declaration. It
+    previously spelled ``return None`` itself, which read to the gate as an
+    override indistinguishable from the AUTH-01 shape.
+    """
 
     def has_perm(self, user_obj, perm, obj=None):
         if not getattr(user_obj, "is_active", False):

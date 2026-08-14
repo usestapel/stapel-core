@@ -22,7 +22,17 @@ class JWTAuthBackend(BaseBackend):
 
     Authentication is delegated to the shared ``jwt_provider`` singleton so the
     JWT config, token manager and blacklist are initialised exactly once.
+
+    The credential this backend verifies is the token's signature, checked by
+    ``jwt_provider.validate_token``; it authenticates on the ``jwt_token``
+    keyword alone and returns ``None`` for a username/password call, so it can
+    never admit anyone on an unverified secret. ``verifies_credentials`` states
+    that out loud for the ``stapel_auth_backends`` boot gate — without it, a
+    project that wires this backend (ironmemo does) refuses to start.
     """
+
+    #: See the class docstring: this backend checks a real credential.
+    verifies_credentials = True
 
     def authenticate(self, request, jwt_token=None, **kwargs):
         """

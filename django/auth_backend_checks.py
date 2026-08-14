@@ -17,6 +17,13 @@ identity-federation shim, a remote-user backend) is not silently wrong — it
 simply may not sit in ``AUTHENTICATION_BACKENDS``, where ``authenticate()``
 will hand it a password and trust its answer.
 
+A backend that sits in ``AUTHENTICATION_BACKENDS`` only so Django will ask
+it ``has_perm``/``has_module_perms`` is a different, legitimate shape — and
+it has nowhere else to live, because Django resolves permissions by walking
+that same list. Such a backend inherits :class:`AuthorizationOnlyBackend`
+and defines no ``authenticate`` at all; the gate then exempts it
+STRUCTURALLY, from the MRO, rather than trusting a declaration.
+
 Third-party backends cannot declare the attribute, so a project that has
 reviewed one lists it in
 ``STAPEL_SECURITY["REVIEWED_AUTH_BACKENDS"]``. That is a deliberate,
@@ -25,11 +32,32 @@ closed here is the one nobody ever decided.
 """
 from __future__ import annotations
 
+from django.contrib.auth.backends import BaseBackend
 from django.core import checks
 
 E001_BACKEND_UNIMPORTABLE = "stapel_core.auth_backends.E001"
 E002_UNDECLARED_CREDENTIAL_HANDLING = "stapel_core.auth_backends.E002"
 E003_DOES_NOT_VERIFY_CREDENTIALS = "stapel_core.auth_backends.E003"
+E004_AUTHORIZATION_ONLY_OVERRIDES_AUTHENTICATE = "stapel_core.auth_backends.E004"
+
+
+class AuthorizationOnlyBackend(BaseBackend):
+    """Base for backends that exist only to answer ``has_perm``.
+
+    Django resolves permissions by iterating ``AUTHENTICATION_BACKENDS``, so a
+    backend that contributes only authorization has to be listed there. It is
+    not an authentication path and must never return a principal.
+
+    **This class deliberately defines no ``authenticate``.** That emptiness is
+    the whole mechanism: the implementation left in force is
+    ``BaseBackend.authenticate``, a no-op this library ships, and the gate
+    below reads that off the MRO. A declared attribute would be a claim the
+    gate has to trust — exactly the failure mode the gate exists to close.
+    Giving this class an ``authenticate`` "for clarity" would destroy the
+    guarantee, so a subclass that grows one is an error (E004) even if it also
+    declares ``verifies_credentials``: its base class then makes a false
+    machine-readable claim about it.
+    """
 
 
 def _overrides_authenticate(backend_cls) -> bool:
@@ -87,6 +115,23 @@ def check_authentication_backends(app_configs=None, **kwargs):
         if not isinstance(backend_cls, type) or not _overrides_authenticate(backend_cls):
             continue
 
+        if issubclass(backend_cls, AuthorizationOnlyBackend):
+            # Checked before the declaration below on purpose: the class name
+            # already claims "never returns a principal", so a declaration
+            # must not be able to talk past a contradicting implementation.
+            errors.append(checks.Error(
+                f"AUTHENTICATION_BACKENDS entry {path!r} inherits "
+                "AuthorizationOnlyBackend but defines its own authenticate(), "
+                "so its base class now claims something untrue about it.",
+                hint="Delete the authenticate() override — the inherited "
+                     "no-op is what makes the exemption verifiable. If this "
+                     "backend really does authenticate, stop inheriting "
+                     "AuthorizationOnlyBackend and declare "
+                     "verifies_credentials instead.",
+                id=E004_AUTHORIZATION_ONLY_OVERRIDES_AUTHENTICATE,
+            ))
+            continue
+
         declared = getattr(backend_cls, "verifies_credentials", None)
         if declared is True:
             continue
@@ -96,10 +141,14 @@ def check_authentication_backends(app_configs=None, **kwargs):
                 "verifies_credentials = False, so django.contrib.auth."
                 "authenticate() would accept any password it is given for a "
                 "principal this backend can resolve.",
-                hint="Remove it from AUTHENTICATION_BACKENDS. A backend that "
-                     "does not check a secret is not an authentication "
-                     "backend; call it explicitly from the flow that already "
-                     "proved the identity.",
+                hint="If this backend never returns a user from "
+                     "authenticate(), inherit AuthorizationOnlyBackend and "
+                     "delete the override — sitting here only for has_perm is "
+                     "a supported shape. Otherwise remove it from "
+                     "AUTHENTICATION_BACKENDS: a backend that resolves a "
+                     "principal without checking a secret is not an "
+                     "authentication backend; call it explicitly from the "
+                     "flow that already proved the identity.",
                 id=E003_DOES_NOT_VERIFY_CREDENTIALS,
             ))
             continue
