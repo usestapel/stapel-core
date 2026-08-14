@@ -143,3 +143,33 @@ class TestSpectacularImportOrderBug:
 
         monkeypatch.setattr(builtins, "__import__", _fake_import)
         assert _unpoison_spectacular_settings() == {}
+
+
+def test_unpoisoning_does_not_rebind_drf_base_apiview():
+    """The fix must not leak past drf-spectacular's own views.
+
+    `drf_spectacular.views` does `from rest_framework.views import APIView`,
+    so a naive `inspect.getmembers(..., isclass)` walk yields DRF's BASE class
+    alongside SpectacularAPIView. Rebinding `permission_classes` there changes
+    the default for every view in the process that does not declare its own —
+    which took passkey and TOTP endpoints staff-only at runtime in every
+    service declaring SPECTACULAR_SETTINGS, i.e. it locked ordinary users out
+    of logging in. The schema being staff-only must cost exactly the schema.
+    """
+    from rest_framework.views import APIView
+
+    from stapel_core.django.apps import _unpoison_serve_permissions
+
+    before = list(getattr(APIView, "permission_classes", ()) or ())
+
+    class _Settings:
+        SERVE_PERMISSIONS = None
+
+    _unpoison_serve_permissions(
+        _Settings(), ["rest_framework.permissions.IsAdminUser"]
+    )
+
+    assert list(getattr(APIView, "permission_classes", ()) or ()) == before, (
+        "stapel rebound rest_framework.views.APIView.permission_classes — "
+        "every view relying on DRF defaults just changed permission"
+    )

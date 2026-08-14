@@ -286,6 +286,15 @@ def _unpoison_serve_permissions(spectacular_settings, declared) -> bool:
     for _, view_cls in inspect.getmembers(spectacular_views, inspect.isclass):
         if not issubclass(view_cls, APIView):
             continue
+        # ONLY the views drf-spectacular defines. Its module does
+        # `from rest_framework.views import APIView`, so getmembers yields
+        # DRF's base class too — and rebinding permission_classes there
+        # rewrites the default for EVERY view in the process that does not
+        # declare its own. That is not a documentation artifact: it made
+        # passkey and TOTP endpoints staff-only at runtime in every service
+        # declaring SPECTACULAR_SETTINGS, i.e. it locked users out of login.
+        if not view_cls.__module__.startswith('drf_spectacular'):
+            continue
         if list(getattr(view_cls, 'permission_classes', ()) or ()) != desired:
             view_cls.permission_classes = desired
             changed = True

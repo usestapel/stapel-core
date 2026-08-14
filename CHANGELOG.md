@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.24.1] — 2026-08-15
+
+### Fixed — 0.24.0 made passkey and TOTP endpoints staff-only at runtime
+
+`_unpoison_serve_permissions` walked `inspect.getmembers(drf_spectacular.views)`
+and rebound `permission_classes` on every APIView subclass it found. That
+module does `from rest_framework.views import APIView`, so the walk yielded
+DRF's BASE class and the loop rewrote the default for every view in the
+process that does not declare its own permissions.
+
+Effect in any service declaring `SPECTACULAR_SETTINGS` — which is every
+service using `get_spectacular_settings`: `APIView.permission_classes`
+became `IsStaffUserForSwagger`, so passkey authenticate/begin and the TOTP
+endpoints answered staff-only. Ordinary users could not complete those
+login paths. Making the schema staff-only must cost exactly the schema.
+
+The walk is now restricted to classes drf-spectacular actually defines.
+
+Found by the stapel-example-monolith aggregate: 15 path objects disagreed
+with stapel-auth's own contract, and the disagreement was live behaviour,
+not a documentation artifact.
+
 ## [0.24.0] — 2026-08-14
 
 ### Security — an environment variable can no longer choose which class the process loads
