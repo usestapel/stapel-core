@@ -50,6 +50,11 @@ class CommonDjangoConfig(AppConfig):
         from stapel_core.django import (  # noqa: F401
             auth_backend_checks as _auth_backend_checks,
         )
+        # CORS pair checks (stapel_core.django.cors_checks): E-level when
+        # allow-all is combined with credentials — django-cors-headers then
+        # reflects the caller's Origin, which is audit CDN-01 reproduced in
+        # Python for every service, with no nginx involved.
+        from stapel_core.django import cors_checks as _cors_checks  # noqa: F401
         # Admin-visibility checks (stapel_core.django.admin.checks): E-level
         # for a malformed STAPEL_ADMIN["MODELS"] registry, W-level for
         # cross-service labels and secret-category downgrades.

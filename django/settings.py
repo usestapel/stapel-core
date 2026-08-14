@@ -199,8 +199,19 @@ JWT_REFRESH_ALLOWED = os.getenv('JWT_REFRESH_ALLOWED', 'False').lower() == 'true
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False').lower() == 'true'
 cors_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_origins.split(',') if origin.strip()]
-# Allow cookies to be sent with cross-origin requests
-CORS_ALLOW_CREDENTIALS = True
+# Cookies cross-origin, but only where an exact origin was named. This used to
+# be an unconditional True, which is the audited CDN-01 defect in Python: with
+# CORS_ALLOW_ALL_ORIGINS on, django-cors-headers cannot answer "*" for a
+# credentialed request, so it reflects the caller's own Origin — any site the
+# user visits could then read this service's authenticated responses. Deriving
+# it means the dev toggle can no longer arm that combination by itself, and
+# stapel_core.django.cors_checks refuses the pair at boot if a project sets it
+# back by hand.
+from stapel_core.security.cors import derive_allow_credentials
+
+CORS_ALLOW_CREDENTIALS = derive_allow_credentials(
+    CORS_ALLOW_ALL_ORIGINS, CORS_ALLOWED_ORIGINS
+)
 
 # Common app lists and middleware scaffolding (services can extend/override)
 COMMON_INSTALLED_APPS = [
