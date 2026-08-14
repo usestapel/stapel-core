@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 #: kind-derivation consults first. Extend per deployment via
 #: ``STAPEL_NETINTEL["EXTRA_DATACENTER_ASNS"]``.
 #:
+#: Because it is incomplete, absence from this list is never read as evidence
+#: of anything: it can promote an ASN to datacenter, it can never demote one
+#: to residential (see :meth:`MaxMindProvider._derive_kind`).
+#:
 #: Note on scope: only ASNs that serve *exclusively* infra/CDN egress belong
 #: here. AS15169 (Google's main ASN) is intentionally absent — it also carries
 #: consumer/residential Google traffic, so flagging it as datacenter would
@@ -104,7 +108,17 @@ class MaxMindProvider(NetIntelProvider):
     2. ASN in the builtin ``HOSTING_ASNS`` list ∪ ``EXTRA_DATACENTER_ASNS``
        → datacenter.
     3. ASN organization name containing a hosting keyword → datacenter.
-    4. ASN known at all → residential; otherwise unknown.
+    4. ASN known **and** the Anonymous-IP database was consulted and cleared
+       the address → residential (confidence 0.5).
+    5. Otherwise unknown — including "the ASN database knows this address but
+       nothing else does". The profile still carries ``asn``/``asn_org``/
+       ``country``: the kind is what we decline to assert, not the data.
+
+    Residential is a claim, and step 4 is the only evidence this provider
+    has for it: a maintained enumeration of hosting/anonymizer space
+    (``MAXMIND_ANONYMOUS_DB``) that does not list the address. Without that
+    database — the ASN-only deployment — nothing here can tell a VPS from a
+    home line, so the answer is unknown rather than the permissive class.
     """
 
     def __init__(
@@ -191,13 +205,24 @@ class MaxMindProvider(NetIntelProvider):
             except errors_mod.AddressNotFoundError:
                 pass
 
-        kind, confidence = self._derive_kind(is_vpn, is_tor, is_hosting, asn, asn_org)
+        kind, confidence = self._derive_kind(
+            is_vpn, is_tor, is_hosting, asn, asn_org,
+            # Reaching here with anonymous_db set means the Anonymous-IP
+            # database answered — either a record (flags above) or
+            # AddressNotFoundError, i.e. "not hosting/vpn/tor space". Any
+            # other reader error propagates and classify_ip fails open, so
+            # this flag is never True on an unread database.
+            hosting_dataset_consulted=bool(anonymous_db),
+        )
         return IpProfile(
             ip=ip, kind=kind, asn=asn, asn_org=asn_org,
             country=country, confidence=confidence,
         )
 
-    def _derive_kind(self, is_vpn, is_tor, is_hosting, asn, asn_org):
+    def _derive_kind(
+        self, is_vpn, is_tor, is_hosting, asn, asn_org,
+        hosting_dataset_consulted=False,
+    ):
         if is_tor:
             return IpKind.TOR, 0.95
         if is_vpn:
@@ -208,8 +233,19 @@ class MaxMindProvider(NetIntelProvider):
             return IpKind.DATACENTER, 0.8
         if asn_org and any(k in asn_org.lower() for k in _HOSTING_ORG_KEYWORDS):
             return IpKind.DATACENTER, 0.6
-        if asn is not None:
+        if asn is not None and hosting_dataset_consulted:
+            # Weak but real evidence: a maintained hosting/anonymizer
+            # enumeration was asked about this address and did not list it.
             return IpKind.RESIDENTIAL, 0.5
+        # A known ASN on its own says only "somebody routes this address".
+        # HOSTING_ASNS is ~18 hand-written entries against a datacenter space
+        # that changes weekly, so "absent from our list" is not evidence of a
+        # home connection — and residential is the most permissive class in
+        # every consumer of this seam (challenge matrix, rate limits,
+        # login-anomaly signal). Asserting it for an address we never
+        # classified hands a VPS the trust level of someone's living room.
+        # Not knowing is representable: kind is unknown, confidence is no
+        # claim at all, and asn/asn_org/country still travel with the profile.
         return IpKind.UNKNOWN, None
 
 

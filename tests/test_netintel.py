@@ -24,6 +24,7 @@ from stapel_core.netintel import (
 from stapel_core.netintel.checks import (
     W001_UNIMPORTABLE,
     W002_NOT_A_PROVIDER,
+    W003_NOT_CONFIGURED,
     check_netintel_provider,
 )
 from stapel_core.netintel.providers import default_response_mapper
@@ -471,9 +472,9 @@ def _fake_geoip2(records):
     }
 
 
-def _maxmind_classify(records, **kwargs):
+def _maxmind_classify(records, anonymous_db="anon.mmdb", **kwargs):
     provider = MaxMindProvider(
-        asn_db="asn.mmdb", country_db="country.mmdb", anonymous_db="anon.mmdb",
+        asn_db="asn.mmdb", country_db="country.mmdb", anonymous_db=anonymous_db,
         **kwargs,
     )
     with mock.patch.dict(sys.modules, _fake_geoip2(records)):
@@ -543,12 +544,61 @@ def test_maxmind_org_keyword_heuristic():
 
 
 def test_maxmind_known_asn_is_residential():
+    # The Anonymous-IP database was consulted and did not list the address:
+    # a maintained hosting enumeration cleared it, so residential is a claim
+    # backed by evidence rather than by "our hand-list has no entry".
     profile = _maxmind_classify({
         "asn.mmdb": {"asn": _asn(3320, "Deutsche Telekom AG")},
         "country.mmdb": {"country": _country("DE")},
     })
     assert profile.kind == IpKind.RESIDENTIAL
+    assert profile.confidence == 0.5
     assert profile.asn_org == "Deutsche Telekom AG"
+
+
+def test_maxmind_known_asn_without_hosting_dataset_is_unknown():
+    # No MAXMIND_ANONYMOUS_DB: the only input is "the ASN database has a row".
+    # HOSTING_ASNS is a stale-by-construction hand list, so its silence is not
+    # evidence of a home connection — an unenumerated VPS provider must not be
+    # handed the most permissive class.
+    profile = _maxmind_classify(
+        {
+            "asn.mmdb": {"asn": _asn(64500, "Nimbus Networks Ltd")},
+            "country.mmdb": {"country": _country("DE")},
+        },
+        anonymous_db=None,
+    )
+    assert profile.kind == IpKind.UNKNOWN
+    assert profile.confidence is None  # not knowing means claiming nothing
+
+
+def test_maxmind_unknown_kind_still_carries_what_is_known():
+    # "Unknown" is about the class only: the facts we do have travel with the
+    # profile, so a consumer can tell "no data at all" from "unclassified ASN".
+    profile = _maxmind_classify(
+        {
+            "asn.mmdb": {"asn": _asn(64500, "Nimbus Networks Ltd")},
+            "country.mmdb": {"country": _country("DE")},
+        },
+        anonymous_db=None,
+    )
+    assert (profile.asn, profile.asn_org, profile.country) == (
+        64500, "Nimbus Networks Ltd", "DE",
+    )
+
+
+def test_maxmind_datacenter_signals_survive_without_hosting_dataset():
+    # The narrowing only removes the residential guess; positive datacenter
+    # evidence must still classify with no Anonymous-IP database configured.
+    listed = _maxmind_classify(
+        {"asn.mmdb": {"asn": _asn(16509, "Amazon.com, Inc.")}}, anonymous_db=None,
+    )
+    keyword = _maxmind_classify(
+        {"asn.mmdb": {"asn": _asn(64998, "Example Hosting GmbH")}},
+        anonymous_db=None,
+    )
+    assert listed.kind == IpKind.DATACENTER
+    assert keyword.kind == IpKind.DATACENTER
 
 
 def test_maxmind_nothing_found_is_unknown():
@@ -673,6 +723,90 @@ def test_check_warns_on_non_provider():
 
 def test_check_accepts_instance():
     with override_settings(STAPEL_NETINTEL={"PROVIDER": CountingProvider()}):
+        assert check_netintel_provider() == []
+
+
+# --- W003: the seam is depended on but no provider was ever configured ------
+
+
+def test_check_w003_silent_when_nothing_expects_classification():
+    # Default project: NullProvider and no rule anywhere reads IpProfile.kind.
+    # A warning here would be noise on every project that never touches
+    # network trust, and noise is how a real finding gets scrolled past.
+    assert check_netintel_provider() == []
+
+
+def test_check_w003_fires_when_netintel_is_half_configured():
+    with override_settings(STAPEL_NETINTEL={"MAXMIND_ASN_DB": "/srv/geo/asn.mmdb"}):
+        messages = check_netintel_provider()
+    assert [m.id for m in messages] == [W003_NOT_CONFIGURED]
+    assert "MAXMIND_ASN_DB" in messages[0].msg
+    assert "SILENCED_SYSTEM_CHECKS" in messages[0].hint
+
+
+def test_check_w003_never_prints_a_credential():
+    with override_settings(STAPEL_NETINTEL={"HTTP_API_KEY": "not-a-real-key"}):
+        messages = check_netintel_provider()
+    assert [m.id for m in messages] == [W003_NOT_CONFIGURED]
+    assert "HTTP_API_KEY" in messages[0].msg
+    assert "not-a-real-key" not in messages[0].msg + messages[0].hint
+
+
+def test_check_w003_fires_on_captcha_rules_that_can_never_match():
+    with override_settings(STAPEL_CAPTCHA={
+        "CHALLENGE_MATRIX": {"datacenter": "block", "tor": "block"},
+    }):
+        messages = check_netintel_provider()
+    assert [m.id for m in messages] == [W003_NOT_CONFIGURED]
+    assert "datacenter, tor" in messages[0].msg
+
+
+def test_check_w003_fires_on_kind_keyed_action_override():
+    with override_settings(STAPEL_CAPTCHA={
+        "ACTION_OVERRIDES": {"login": {"vpn": "interactive"}},
+    }):
+        messages = check_netintel_provider()
+    assert [m.id for m in messages] == [W003_NOT_CONFIGURED]
+    assert "vpn" in messages[0].msg
+
+
+def test_check_w003_ignores_captcha_rules_that_still_work_unclassified():
+    # An 'unknown' matrix entry and a bare "+1" bump both apply to every
+    # request under NullProvider — they are not evidence of a missing seam.
+    with override_settings(STAPEL_CAPTCHA={
+        "CHALLENGE_MATRIX": {"unknown": "interactive"},
+        "ACTION_OVERRIDES": {"register": "+1"},
+    }):
+        assert check_netintel_provider() == []
+
+
+def test_check_w003_silent_in_debug():
+    # A developer machine has no GeoIP databases and makes no network-trust
+    # decisions worth the interruption; the finding is about a deployment.
+    with override_settings(
+        DEBUG=True, STAPEL_NETINTEL={"MAXMIND_ASN_DB": "/srv/geo/asn.mmdb"},
+    ):
+        assert check_netintel_provider() == []
+
+
+def test_check_w003_silent_once_a_provider_is_configured():
+    with override_settings(STAPEL_NETINTEL={
+        "PROVIDER": "stapel_core.netintel.providers.MaxMindProvider",
+        "MAXMIND_ASN_DB": "/srv/geo/asn.mmdb",
+    }):
+        assert check_netintel_provider() == []
+
+
+def test_check_w003_silent_for_a_custom_null_subclass():
+    # A subclass is somebody's own provider — it may well classify, so the
+    # check must not lecture its author about NullProvider.
+    class QuietProvider(NullProvider):
+        pass
+
+    with override_settings(STAPEL_NETINTEL={
+        "PROVIDER": QuietProvider,
+        "MAXMIND_ASN_DB": "/srv/geo/asn.mmdb",
+    }):
         assert check_netintel_provider() == []
 
 

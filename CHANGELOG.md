@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+### Security — an unrecognised ASN is no longer asserted to be residential
+
+`MaxMindProvider` ended its kind derivation with "the ASN database has a row
+for this address → residential". The only thing standing between a VPS and
+that verdict was `HOSTING_ASNS`, a hand-written frozenset of eighteen large
+cloud ASNs, and datacenter space changes weekly. A hosting provider nobody had
+enumerated therefore came out as the *most permissive* class in every consumer
+of the seam — the captcha challenge matrix, rate limits, the login-anomaly
+signal all treated it as somebody's home connection. A stale hand-list with a
+permissive fallback answers "no evidence" with "safe".
+
+`residential` is now a claim that needs evidence, and the provider has exactly
+one source of it: `MAXMIND_ANONYMOUS_DB` — a maintained enumeration of
+hosting/anonymiser space — consulted and not listing the address. Absent that
+database the kind is `unknown`, with `confidence=None`: no claim at all. The
+profile still carries `asn`, `asn_org` and `country`, so a consumer can tell
+"nothing is known about this address" from "we know who routes it and not what
+it is". `HOSTING_ASNS` can still promote an ASN to `datacenter`; it can no
+longer demote one to `residential`.
+
+Traffic impact under the shipped defaults: **none**. `DEFAULT_CHALLENGE_MATRIX`
+maps `residential` and `unknown` to the same level (`invisible`), so no user
+sees a challenge they did not see before. Deployments that configure
+`MAXMIND_ANONYMOUS_DB` are byte-identical.
+
+**Upgrade note for a host that overrides `unknown` in `CHALLENGE_MATRIX`.**
+That entry used to describe a sliver of traffic (addresses missing from the ASN
+database). On an ASN-only deployment it now describes the bulk of it — most
+consumer ISP traffic lands in `unknown`. If you set `{"unknown":
+"interactive"}` and run without `MAXMIND_ANONYMOUS_DB`, you are now asking to
+challenge nearly everyone: either configure the Anonymous-IP database, or move
+that strictness onto the kinds you meant.
+
+### Added — `manage.py check` names an unconfigured IP-intelligence seam
+
+`stapel_core.netintel.W003`. The default `PROVIDER` is `NullProvider`, so out
+of the box `classify_ip` answers `unknown` for every address and anything keyed
+off `IpProfile.kind` runs blind with nothing saying so.
+
+The warning fires only where the deployment can be shown to expect
+classification, because the core cannot see host code that calls `classify_ip`:
+either `STAPEL_NETINTEL` configures the seam (`MAXMIND_*`, `HTTP_URL_TEMPLATE`,
+`HTTP_API_KEY`, `EXTRA_DATACENTER_ASNS`, `TRUSTED_PROXY_HEADER`) while leaving
+`PROVIDER` at the default, or `STAPEL_CAPTCHA` carries challenge rules keyed by
+a network class other than `unknown` — rules no request can ever match while
+every request is unclassified. Silent in `DEBUG`, silent for a custom
+`NullProvider` subclass, and silenceable through `SILENCED_SYSTEM_CHECKS`. The
+message names settings, never their values (`HTTP_API_KEY` is a credential and
+check output lands in deploy logs).
+
 ## [0.24.1] — 2026-08-15
 
 ### Fixed — 0.24.0 made passkey and TOTP endpoints staff-only at runtime
