@@ -24,14 +24,20 @@ DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memor
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
+    "rest_framework",
+    "stapel_core.django.apps.CommonDjangoConfig",
     "stapel_core.django.users",
 ]
+ROOT_URLCONF = "projurls"
 """
+
+PROJECT_URLS = "urlpatterns = []\n"
 
 
 def _boot(tmp_path, body, env=None):
     """Run *body* against a project settings module that star-imports ours."""
     (tmp_path / "projsettings.py").write_text(PROJECT_SETTINGS, encoding="utf-8")
+    (tmp_path / "projurls.py").write_text(PROJECT_URLS, encoding="utf-8")
     child_env = dict(os.environ)
     child_env["DJANGO_SETTINGS_MODULE"] = "projsettings"
     # tmp_path only: the repo root holds a ``django/`` package directory that
@@ -132,3 +138,42 @@ def test_jwt_cookie_helper_defaults_to_secure_without_the_setting(tmp_path):
     """)
     assert result.returncode == 0, result.stderr
     assert "OK" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# The OpenAPI document is not anonymous reading
+# ---------------------------------------------------------------------------
+
+SCHEMA_PROBE = """
+    from django.conf import settings
+    from django.test import RequestFactory
+    from drf_spectacular.views import SpectacularAPIView
+
+    view = SpectacularAPIView.as_view()
+    response = view(RequestFactory().get("/schema/"))
+    print("STATUS", response.status_code)
+    print("PERMS", settings.SPECTACULAR_SETTINGS["SERVE_PERMISSIONS"])
+    print("FLAG", getattr(settings, "STAPEL_PUBLIC_API_SCHEMA", None))
+"""
+
+
+def test_schema_is_not_anonymous_by_default(tmp_path):
+    """SERVE_PERMISSIONS was AllowAny, so the OpenAPI document — every route,
+    every payload shape, and (via PermissionAwareAutoSchema) each endpoint's
+    permission classes — was readable by anyone who could reach the service."""
+    result = _boot(tmp_path, SCHEMA_PROBE)
+    assert result.returncode == 0, result.stderr
+    # 401 (not authenticated) rather than 403 — either way, not the document.
+    assert "STATUS 401" in result.stdout, result.stdout
+    assert "FLAG False" in result.stdout
+    assert "AllowAny" not in result.stdout
+
+
+def test_schema_can_be_published_explicitly(tmp_path):
+    """A genuinely public API is a real thing — it just has to say so."""
+    result = _boot(
+        tmp_path, SCHEMA_PROBE, env={"STAPEL_PUBLIC_API_SCHEMA": "True"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "STATUS 200" in result.stdout, result.stdout
+    assert "AllowAny" in result.stdout

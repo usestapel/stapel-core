@@ -47,6 +47,7 @@ __all__ = [
     # REST Framework
     "REST_FRAMEWORK",
     "SPECTACULAR_SETTINGS",
+    "STAPEL_PUBLIC_API_SCHEMA",
     # JWT
     "JWT_ACCESS_TOKEN_LIFETIME",
     "JWT_REFRESH_TOKEN_LIFETIME",
@@ -177,9 +178,24 @@ SPECTACULAR_SETTINGS = {
         'operationsSorter': 'alpha',
     },
 
-    # Disable session auth in Swagger UI
-    'SERVE_PERMISSIONS': ['rest_framework.permissions.AllowAny'],
+    # Who may read the schema, Swagger UI and ReDoc. This used to be
+    # AllowAny, which made the whole API surface anonymous reading: every
+    # route, every request/response shape, and — because DEFAULT_SCHEMA_CLASS
+    # is PermissionAwareAutoSchema — each endpoint's permission classes, which
+    # is a map of where to push. Staff-only by default; a genuinely public API
+    # says so with STAPEL_PUBLIC_API_SCHEMA=True.
+    'SERVE_PERMISSIONS': (
+        ['rest_framework.permissions.AllowAny']
+        if os.getenv('STAPEL_PUBLIC_API_SCHEMA', 'False').lower() == 'true'
+        else ['stapel_core.django.openapi.swagger.IsStaffUserForSwagger']
+    ),
 }
+
+#: Mirrors the SERVE_PERMISSIONS choice above as a plain flag, so a project (or
+#: a test) can read the stance without re-deriving it from a dotted path.
+STAPEL_PUBLIC_API_SCHEMA = (
+    os.getenv('STAPEL_PUBLIC_API_SCHEMA', 'False').lower() == 'true'
+)
 
 # JWT Configuration for common library - read from environment
 JWT_ACCESS_TOKEN_LIFETIME = int(os.getenv('JWT_ACCESS_TOKEN_LIFETIME', '3600'))  # 1 hour default

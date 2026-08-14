@@ -578,6 +578,13 @@ core. `get_swagger_urls()` / `get_dev_urls()` provide the URL patterns; the
 DRF defaults (`DEFAULT_SCHEMA_CLASS = PermissionAwareAutoSchema`,
 `EXCEPTION_HANDLER`) are plain settings a project may override.
 
+The document is staff-only: `SERVE_PERMISSIONS` defaults to
+`IsStaffUserForSwagger` (it was `AllowAny`), and `AppConfig.ready()` forces the
+choice onto drf-spectacular's settings singleton *and* its view classes, both
+of which snapshot it at import time — without that the setting is decorative
+for any project that star-imports `stapel_core.django.settings`. A genuinely
+public API sets `STAPEL_PUBLIC_API_SCHEMA=True`.
+
 ### Captcha backends & challenge policy — `STAPEL_CAPTCHA` (`captcha/`)
 
 | Key | Default | Semantics | What it customizes |

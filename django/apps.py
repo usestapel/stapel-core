@@ -233,6 +233,53 @@ def _unpoison_spectacular_settings() -> dict:
         for key in ('TITLE', 'VERSION', 'DESCRIPTION')
         if real.get(key) and getattr(spectacular_settings, key, None) != real[key]
     }
+
     if patches:
         spectacular_settings.apply_patches(patches)
+
+    # SERVE_PERMISSIONS is the same bug with teeth. A blank TITLE is
+    # embarrassing; a lost SERVE_PERMISSIONS means the singleton keeps
+    # drf-spectacular's own default — AllowAny — and the schema, Swagger UI and
+    # ReDoc serve the whole API surface, permission classes included, to anyone
+    # who can reach the service. apply_patches() refuses this key by name, so
+    # it is written straight onto the singleton, and onto the view classes that
+    # read it once at import time.
+    if real.get('SERVE_PERMISSIONS') and _unpoison_serve_permissions(
+        spectacular_settings, real['SERVE_PERMISSIONS']
+    ):
+        patches['SERVE_PERMISSIONS'] = real['SERVE_PERMISSIONS']
+
     return patches
+
+
+def _unpoison_serve_permissions(spectacular_settings, declared) -> bool:
+    """Force *declared* onto the settings singleton and drf-spectacular's views.
+
+    ``SERVE_PERMISSIONS`` is an import-string setting: the singleton holds
+    imported classes while the project's dict holds dotted paths, so both are
+    resolved before comparing — otherwise this would rewrite on every call and
+    could never report "nothing to do".
+
+    Returns True when something was actually changed.
+    """
+    import inspect
+
+    from drf_spectacular import views as spectacular_views
+    from rest_framework.settings import perform_import
+    from rest_framework.views import APIView
+
+    desired = list(perform_import(declared, 'SERVE_PERMISSIONS') or ())
+    changed = list(getattr(spectacular_settings, 'SERVE_PERMISSIONS', None) or ()) != desired
+    spectacular_settings.SERVE_PERMISSIONS = desired
+
+    # The views bind ``permission_classes = spectacular_settings.
+    # SERVE_PERMISSIONS`` at class-definition time, so patching the singleton
+    # alone leaves them holding the poisoned list — the same reason ready()
+    # already rebinds DRF's own APIView attributes below.
+    for _, view_cls in inspect.getmembers(spectacular_views, inspect.isclass):
+        if not issubclass(view_cls, APIView):
+            continue
+        if list(getattr(view_cls, 'permission_classes', ()) or ()) != desired:
+            view_cls.permission_classes = desired
+            changed = True
+    return changed

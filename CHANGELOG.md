@@ -45,6 +45,38 @@ New W-level boot check `stapel_blacklist`
 (`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
 is on, so the hatch cannot become forgotten configuration.
 
+### Security — the OpenAPI document is staff-only, and the setting that says so now works
+
+**Upgrade note — `/schema/`, `/swagger/` and `/redoc/` stop answering anonymous
+callers.**
+
+`SPECTACULAR_SETTINGS["SERVE_PERMISSIONS"]` was
+`['rest_framework.permissions.AllowAny']`, so anyone who could reach the
+service could read the full API surface: every route, every request and
+response shape, and — because `DEFAULT_SCHEMA_CLASS` is
+`PermissionAwareAutoSchema` — each endpoint's permission classes, which is a
+map of where to push. `JWTAuthMiddleware.SKIP_CONTAINS` skips those paths, so
+nothing else was gating them either.
+
+The default is now `stapel_core.django.openapi.swagger.IsStaffUserForSwagger`
+(the class this repo already shipped for the purpose). A genuinely public API
+sets `STAPEL_PUBLIC_API_SCHEMA=True`, which restores `AllowAny` and is also
+exported as a plain boolean setting of the same name.
+
+Found while pinning this: **the setting was decorative anyway.**
+`drf_spectacular/settings.py` snapshots `settings.SPECTACULAR_SETTINGS` in its
+module body, and its views bind `permission_classes =
+spectacular_settings.SERVE_PERMISSIONS` at class-definition time. For any
+project written as `from stapel_core.django.settings import *` the snapshot
+happens *during* that import, before `SPECTACULAR_SETTINGS` exists — the same
+import-order bug `_unpoison_spectacular_settings` already fixed for
+`TITLE`/`VERSION`/`DESCRIPTION`, but with a security consequence instead of a
+cosmetic one: whatever a project declared, drf-spectacular kept its own
+`AllowAny`. `AppConfig.ready()` now forces `SERVE_PERMISSIONS` onto both the
+singleton and every drf-spectacular view class. Projects that already set
+`SERVE_PERMISSIONS` themselves get the value they asked for, possibly for the
+first time.
+
 ### Security — a failed clearance check hides the nav link instead of showing it
 
 `stapel_core.django.nav._viewer_allowed` ended its clearance branch with a bare

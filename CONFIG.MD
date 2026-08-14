@@ -90,6 +90,7 @@ it only fills in keys this file does not know about yet. See
 | SESSION_COOKIE_SECURE | env | Send the session cookie only over HTTPS. | no | True |
 | CSRF_COOKIE_SECURE | env | Send the CSRF cookie only over HTTPS. | no | True |
 | STAPEL_TRUST_PROXY_SSL_HEADER | env | Believe `X-Forwarded-Proto` (only behind a proxy that overwrites it). | no | False |
+| STAPEL_PUBLIC_API_SCHEMA | env | Serve the OpenAPI schema / Swagger / ReDoc to anonymous callers. | no | False |
 | JWT_COOKIE_SAMESITE | env | Auth cookie SameSite policy. | no | Lax |
 | SENTRY_DSN | env | Sentry DSN; empty disables Sentry. | no | |
 | SENTRY_ENVIRONMENT | env | Sentry environment tag. | no | dev |
