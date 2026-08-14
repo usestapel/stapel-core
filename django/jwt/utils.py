@@ -277,17 +277,31 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
                 if list(user.staff_roles or []) != claim_roles:
                     user.staff_roles = claim_roles
                     updated = True
+            # Account lifecycle, same rule as roles: replace only when the
+            # claim is present. Absence = no information — a token minted
+            # before the claim existed must not activate anybody.
+            if "is_active" in user_data:
+                jwt_is_active = bool(user_data["is_active"])
+                if user.is_active != jwt_is_active:
+                    user.is_active = jwt_is_active
+                    updated = True
         # else: authoritative-user-store mode (auth service / monolith with
         # stapel-auth): the local DB is canonical, a token must never write
-        # staff attributes back into it. (This also fixes the pre-AS-2 hole
-        # where a stale staff token replayed at the auth service re-elevated
-        # a demoted admin via upgrade-only.)
+        # staff attributes OR account lifecycle back into it. (This fixes the
+        # pre-AS-2 hole where a stale staff token replayed at the auth service
+        # re-elevated a demoted admin via upgrade-only, and audit GDPR-01,
+        # where a token issued before account closure — which carries
+        # is_active=true for the rest of its lifetime — wrote that value back
+        # and undid the closure. Closure and reactivation belong to the
+        # lifecycle service, never to a bearer token.)
 
-        if user.is_active != user_data.get("is_active", True):
-            user.is_active = user_data.get("is_active", True)
+        # Email: replace only when the claim carries one. Writing the absent
+        # case through nulled the column on every request that presented a
+        # token without it.
+        jwt_email = user_data.get("email")
+        if jwt_email and user.email != jwt_email:
+            user.email = jwt_email
             updated = True
-
-        user.email = user_data.get("email", None)
 
         # Sync is_anonymous, auth_type, phone from JWT
         if hasattr(user, "is_anonymous") and "is_anonymous" in user_data:

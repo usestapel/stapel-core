@@ -43,6 +43,13 @@ class CommonDjangoConfig(AppConfig):
         # LOGIN_URL/redirect settings pointing at an unresolvable path —
         # otherwise every login_required ends in a user-facing 404.
         from stapel_core.django import checks as _mounts_checks  # noqa: F401
+        # AUTHENTICATION_BACKENDS checks (auth_backend_checks): E-level when
+        # a backend overrides authenticate() without declaring that it
+        # verifies a credential — the shape that turned a whole product's
+        # password login into "any nonempty string" (audit AUTH-01).
+        from stapel_core.django import (  # noqa: F401
+            auth_backend_checks as _auth_backend_checks,
+        )
         # Admin-visibility checks (stapel_core.django.admin.checks): E-level
         # for a malformed STAPEL_ADMIN["MODELS"] registry, W-level for
         # cross-service labels and secret-category downgrades.

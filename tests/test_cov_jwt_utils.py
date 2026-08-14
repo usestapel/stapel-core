@@ -322,6 +322,59 @@ class TestGetOrCreateUserFromJWT:
         assert result.is_superuser is True
         assert result.staff_roles == ["admin"]
 
+    @override_settings(JWT_CREATE_USERS_FROM_TOKEN=False)
+    def test_closed_account_is_not_reactivated_by_a_stale_token(self):
+        """Audit GDPR-01: account closure must survive a pre-closure token.
+
+        In authoritative mode the local row IS the account. Every token
+        minted before closure keeps carrying ``is_active=true`` until it
+        expires; writing that claim back turned each such token into an
+        undo button for account deletion.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="closed1", email="closed1@example.com", is_active=False
+        )
+        data = self._data(
+            user_id=str(user.pk), email="closed1@example.com", is_active=True
+        )
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        result.refresh_from_db()
+        assert result.is_active is False
+
+    @override_settings(JWT_CREATE_USERS_FROM_TOKEN=False)
+    def test_active_account_is_not_disabled_by_a_token_either(self):
+        """The rule is symmetric: lifecycle never comes from a bearer token."""
+        User = get_user_model()
+        user = User.objects.create_user(username="open1", email="open1@example.com")
+        data = self._data(
+            user_id=str(user.pk), email="open1@example.com", is_active=False
+        )
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        result.refresh_from_db()
+        assert result.is_active is True
+
+    def test_consumer_mode_ignores_an_absent_is_active_claim(self):
+        """Absence is not information: a pre-claim token must not activate."""
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="silent1", email="silent1@example.com", is_active=False
+        )
+        data = self._data(user_id=str(user.pk), email="silent1@example.com")
+        del data["is_active"]
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        result.refresh_from_db()
+        assert result.is_active is False
+
+    def test_absent_email_claim_does_not_null_the_column(self):
+        User = get_user_model()
+        user = User.objects.create_user(username="mail1", email="mail1@example.com")
+        data = self._data(user_id=str(user.pk))
+        del data["email"]
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        result.refresh_from_db()
+        assert result.email == "mail1@example.com"
+
     def test_claim_attr_stamped_on_user_when_claim_present(self):
         from stapel_core.access.sources import CLAIM_ATTR
 

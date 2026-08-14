@@ -33,6 +33,74 @@ for the deletion).
   cross-module question is an operator's, so it lives on the operator
   surface, not on any product API.
 
+### Security — an authentication backend must check the secret it is handed
+
+`stapel_core.django.jwt.session.EmailAuthBackend` resolved a user by email and
+returned it **without comparing a password**. Its docstring said passwords were
+"handled by the JWT tokens", which is true of the JWT middleware and false of
+`AUTHENTICATION_BACKENDS`: any project that listed the dotted path handed the
+backend every `django.contrib.auth.authenticate()` call in the process, and a
+known email address plus any nonempty string became a valid login. The
+2026-08-11 IronMemo audit found exactly that wiring in production code
+(AUTH-01, P0) reachable through stapel-auth's legacy `/token/` endpoint.
+
+The backend now does what its name promises and nothing more — email is the
+*lookup* key, credential verification is Django's: `check_password`,
+`user_can_authenticate`, an empty/absent password denies, an unknown address
+still runs one hash so timing does not enumerate accounts, and an email
+matching two rows denies because no single principal owns the secret.
+
+The wider defect is the seam, not the class: the wiring and the backend live in
+different repositories, so neither review sees the whole. New E-level boot gate
+`stapel_auth_backends` (`stapel_core.django.auth_backend_checks`) fails startup
+when an entry in `AUTHENTICATION_BACKENDS` overrides `authenticate()` without
+declaring `verifies_credentials = True` — and fails harder when it declares
+`False`. Third-party backends, which cannot carry the declaration, are listed
+once per project in `STAPEL_SECURITY["REVIEWED_AUTH_BACKENDS"]` (new settings
+namespace `stapel_core.security`).
+
+**Upgrade note:** a project whose `AUTHENTICATION_BACKENDS` contains a custom
+backend will not boot until that backend declares the attribute or is reviewed
+into the allowlist. That is the point of the gate — the decision is being asked
+for, once, out loud.
+
+### Security — one SSRF-hardened fetcher for the whole fleet (`stapel_core.net`)
+
+`stapel-cdn` had a genuinely good guarded fetcher: https-only, every resolved
+address validated against private/loopback/link-local/CGNAT/metadata ranges
+(including the IPv4-mapped, 6to4 and NAT64 re-encodings of them), the socket
+pinned to the validated IP so DNS rebinding gains nothing, every redirect
+re-validated from scratch, and a byte cap enforced mid-stream. It sat in a
+module nothing else depends on, so when `stapel-agent` needed to download
+audio it wrote `requests.get(url, timeout=600)` and read `.content` — no
+scheme check, no address check, no cap (audit AGENT-01). That is the fleet's
+recurring shape: the mechanism was built and the second consumer never picked
+it up, because picking it up was not possible.
+
+`stapel_core.net.fetch_bytes` is that fetcher, moved to where every module can
+reach it, plus the two controls the audit found missing: a **total deadline**
+covering the whole operation and all its redirect hops (a per-socket timeout
+alone bounds nothing against a server that trickles one byte per window), and
+an oversize `Content-Length` refused before a body byte is read. It also takes
+an exact-match `allowed_hosts` allowlist for the common case where the remote
+is a known API rather than a user-supplied address, and never sends an
+`Authorization` header, so there is nothing to leak across an origin change.
+`max_bytes` is mandatory and has no default: a caller that has not decided how
+much of its memory a stranger may fill has not finished thinking about the
+fetch.
+
+### Security — a bearer token can no longer write account lifecycle
+
+`get_or_create_user_from_jwt` wrote the `is_active` claim into the local user
+row in **both** deployment modes, including the authoritative one where that
+row *is* the account. Every token minted before an account was closed keeps
+carrying `is_active=true` until it expires, so replaying one undid the closure
+(audit GDPR-01, P0). Lifecycle now follows the same rule staff attributes
+already followed: in authoritative mode it is never written from a claim, and
+in consumer mode only when the claim is actually present — an absent claim is
+silence, not `True`, and must not reactivate anybody. An absent `email` claim
+likewise no longer nulls the stored address.
+
 ## [0.23.1] — 2026-08-10
 
 ### Fixed — the error reference resolves a key by its owner, not by its directory
