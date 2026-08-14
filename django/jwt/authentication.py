@@ -16,48 +16,104 @@ _USER_BLACKLIST_PREFIX = 'user_blacklisted:'
 
 
 def _get_redis_client():
-    """Get raw Redis client, bypassing Django cache KEY_PREFIX."""
-    try:
-        from django.core.cache import cache
-        if hasattr(cache, 'client'):
-            return cache.client.get_client()
-    except Exception as e:
-        logger.error(f"Error getting Redis client for user blacklist: {e}")
+    """Return a raw Redis client, or None when the backend is not django_redis.
+
+    Only django_redis exposes ``.client``, and only through it can we bypass
+    Django's cache ``KEY_PREFIX`` so one ban is visible to every service.
+    ``None`` is a normal answer, not a failure — callers fall back to the
+    Django cache framework, which works on every backend. Exceptions are
+    *not* swallowed here: whether an unreachable store means "not banned" or
+    "cannot tell" is the caller's decision, and it used to be silently
+    answered "not banned".
+    """
+    from django.core.cache import cache
+    if hasattr(cache, 'client'):
+        return cache.client.get_client()
     return None
 
 
-def blacklist_user(user_id: str, ttl: int = 7200):
+def _blacklist_fail_open() -> bool:
+    """Honour the one blacklist escape hatch (shared with ``TokenBlacklist``).
+
+    A deployment that has decided availability outranks revocation sets this
+    once and both blacklists read it — a second knob would let the two halves
+    of revocation drift apart.
+    """
+    from django.conf import settings
+    return bool(getattr(settings, "STAPEL_BLACKLIST_FAIL_OPEN", False))
+
+
+def blacklist_user(user_id: str, ttl: int = 7200) -> bool:
     """
     Blacklist a user so all their tokens are rejected.
 
-    Uses raw Redis to ensure the key is visible across all services
-    regardless of Django cache KEY_PREFIX.
+    Prefers raw Redis so the key is visible across all services regardless of
+    Django's cache ``KEY_PREFIX``, and falls back to the Django cache
+    framework on any other backend. The fallback matters: with Django's
+    default LocMemCache this function used to only log an error, so a ban was
+    a permanent no-op and nothing said so. The fallback is scoped by whatever
+    ``KEY_PREFIX`` the backend carries, so on a non-django_redis cache a ban
+    reaches every service sharing that cache and prefix — an enforced local
+    ban beats an unenforceable global one.
 
     Args:
         user_id: UUID of the user to blacklist
         ttl: Time to live in seconds (default 2h, should be >= access token lifetime)
+
+    Returns:
+        True when the ban was stored, False when the store rejected it — a
+        caller that ignores the result cannot tell a ban from a no-op.
     """
-    redis_client = _get_redis_client()
-    if redis_client:
-        redis_client.setex(f'{_USER_BLACKLIST_PREFIX}{user_id}', ttl, '1')
-        logger.info(f"User blacklisted: {user_id} for {ttl}s")
-    else:
-        logger.error(f"Cannot blacklist user {user_id}: Redis client unavailable")
+    key = f'{_USER_BLACKLIST_PREFIX}{user_id}'
+    try:
+        redis_client = _get_redis_client()
+        if redis_client is not None:
+            redis_client.setex(key, ttl, '1')
+        else:
+            from django.core.cache import cache
+            cache.set(key, '1', ttl)
+    except Exception as e:
+        logger.error(f"Cannot blacklist user {user_id}: {e}")
+        return False
+    logger.info(f"User blacklisted: {user_id} for {ttl}s")
+    return True
 
 
-def unblacklist_user(user_id: str):
-    """Remove user from blacklist."""
-    redis_client = _get_redis_client()
-    if redis_client:
-        redis_client.delete(f'{_USER_BLACKLIST_PREFIX}{user_id}')
+def unblacklist_user(user_id: str) -> bool:
+    """Remove user from blacklist. Returns True when the store accepted it."""
+    key = f'{_USER_BLACKLIST_PREFIX}{user_id}'
+    try:
+        redis_client = _get_redis_client()
+        if redis_client is not None:
+            redis_client.delete(key)
+        else:
+            from django.core.cache import cache
+            cache.delete(key)
+    except Exception as e:
+        logger.error(f"Cannot unblacklist user {user_id}: {e}")
+        return False
+    return True
 
 
 def is_user_blacklisted(user_id: str) -> bool:
-    """Check if a user is blacklisted."""
-    redis_client = _get_redis_client()
-    if redis_client:
-        return bool(redis_client.exists(f'{_USER_BLACKLIST_PREFIX}{user_id}'))
-    return False
+    """Check if a user is blacklisted.
+
+    Fails CLOSED, matching ``stapel_core.core.token_blacklist.TokenBlacklist``:
+    with the store unreachable, answering "not banned" resurrects every banned
+    session exactly when the system is degraded, and a ban is the one answer an
+    operator issues because they cannot wait. Override with
+    ``STAPEL_BLACKLIST_FAIL_OPEN`` for availability-over-security deployments.
+    """
+    key = f'{_USER_BLACKLIST_PREFIX}{user_id}'
+    try:
+        redis_client = _get_redis_client()
+        if redis_client is not None:
+            return bool(redis_client.exists(key))
+        from django.core.cache import cache
+        return bool(cache.get(key))
+    except Exception as e:
+        logger.error(f"Error checking user blacklist for {user_id}: {e}")
+        return not _blacklist_fail_open()
 
 
 class JWTCookieAuthentication(authentication.BaseAuthentication):

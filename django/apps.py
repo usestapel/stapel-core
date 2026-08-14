@@ -55,6 +55,13 @@ class CommonDjangoConfig(AppConfig):
         # reflects the caller's Origin, which is audit CDN-01 reproduced in
         # Python for every service, with no nginx involved.
         from stapel_core.django import cors_checks as _cors_checks  # noqa: F401
+        # Revocation escape-hatch check (stapel_core.django.blacklist_checks):
+        # W-level when STAPEL_BLACKLIST_FAIL_OPEN is on — both blacklists fail
+        # closed by default, and the one setting that reopens them is
+        # otherwise invisible in a running system.
+        from stapel_core.django import (  # noqa: F401
+            blacklist_checks as _blacklist_checks,
+        )
         # Admin-visibility checks (stapel_core.django.admin.checks): E-level
         # for a malformed STAPEL_ADMIN["MODELS"] registry, W-level for
         # cross-service labels and secret-category downgrades.

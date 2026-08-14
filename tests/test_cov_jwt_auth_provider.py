@@ -60,9 +60,20 @@ class TestUserBlacklistHelpers:
             blacklist_user("u1", ttl=60)
         redis.setex.assert_called_once_with("user_blacklisted:u1", 60, "1")
 
-    def test_blacklist_user_without_redis_logs_error(self):
+    def test_blacklist_user_without_redis_falls_back_to_django_cache(self):
         # LocMemCache (conftest) has no .client attribute -> no redis client.
-        blacklist_user("u1")  # must not raise
+        # It used to only log an error, which made the ban a permanent no-op.
+        from django.core.cache import cache
+        cache.delete("user_blacklisted:locmem-user")
+        assert blacklist_user("locmem-user") is True
+        assert is_user_blacklisted("locmem-user") is True
+        assert unblacklist_user("locmem-user") is True
+        assert is_user_blacklisted("locmem-user") is False
+
+    def test_blacklist_user_reports_failure(self):
+        with patch("django.core.cache.cache", _ExplodingCache()):
+            assert blacklist_user("u1") is False
+            assert unblacklist_user("u1") is False
 
     def test_unblacklist_user_with_redis(self):
         redis = MagicMock()
@@ -71,7 +82,7 @@ class TestUserBlacklistHelpers:
         redis.delete.assert_called_once_with("user_blacklisted:u1")
 
     def test_unblacklist_user_without_redis_noop(self):
-        unblacklist_user("u1")  # must not raise
+        assert unblacklist_user("u1") is True  # must not raise
 
     def test_is_user_blacklisted_true(self):
         redis = MagicMock()
@@ -85,12 +96,28 @@ class TestUserBlacklistHelpers:
         with patch("django.core.cache.cache", _RedisCache(redis)):
             assert is_user_blacklisted("u1") is False
 
-    def test_is_user_blacklisted_without_redis_false(self):
-        assert is_user_blacklisted("u1") is False
+    def test_is_user_blacklisted_without_redis_reads_django_cache(self):
+        # No raw-redis client is not "not banned": the Django cache framework
+        # answers, and an unbanned user is simply absent from it.
+        assert is_user_blacklisted("never-banned") is False
 
-    def test_get_redis_client_error_swallowed(self):
+    def test_is_user_blacklisted_fails_closed_when_store_is_down(self):
+        # Was pinned as False ("error swallowed"), i.e. an unreachable store
+        # silently unbanned everyone. Revocation must outlive the store.
         with patch("django.core.cache.cache", _ExplodingCache()):
-            assert is_user_blacklisted("u1") is False
+            assert is_user_blacklisted("u1") is True
+
+    def test_is_user_blacklisted_fail_open_hatch(self):
+        from django.test import override_settings
+        with patch("django.core.cache.cache", _ExplodingCache()):
+            with override_settings(STAPEL_BLACKLIST_FAIL_OPEN=True):
+                assert is_user_blacklisted("u1") is False
+
+    def test_is_user_blacklisted_fails_closed_on_redis_error(self):
+        redis = MagicMock()
+        redis.exists.side_effect = RuntimeError("connection refused")
+        with patch("django.core.cache.cache", _RedisCache(redis)):
+            assert is_user_blacklisted("u1") is True
 
 
 # ---------------------------------------------------------------------------

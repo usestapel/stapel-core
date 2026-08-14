@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+### Security — a ban is enforced on every cache backend, and stops failing open
+
+**Upgrade note — behaviour change on every service that authenticates.**
+
+`stapel_core.django.jwt.authentication.is_user_blacklisted()` decided that an
+unreachable, misconfigured or simply different cache backend meant "not
+banned". It asked `cache.client.get_client()` — an attribute only django_redis
+has — swallowed every exception, and answered `False` when it got nothing
+back. Two consequences, both silent:
+
+- On Django's default LocMemCache (what any project that forgets `CACHES`
+  gets), `blacklist_user()` logged an error and stored nothing, and
+  `is_user_blacklisted()` answered `False` forever. Ban and force-logout were
+  unenforceable, and nothing anywhere said so.
+- With Redis down or throwing, every banned user was silently unbanned —
+  precisely during the incident where a ban is the response an operator
+  cannot wait on.
+
+Both halves are closed:
+
+- The user blacklist now falls back to the Django cache framework when the
+  backend is not django_redis, so `blacklist_user()` / `unblacklist_user()` /
+  `is_user_blacklisted()` work on every backend. (Raw Redis is still
+  preferred, because only there can the key bypass `KEY_PREFIX` and be visible
+  fleet-wide; the fallback is scoped to the cache and prefix a service
+  shares.) `blacklist_user()` and `unblacklist_user()` now **return `bool`**
+  instead of `None` so a caller can tell a stored ban from a dropped one.
+- `is_user_blacklisted()` **fails CLOSED** on any store error, matching
+  `stapel_core.core.token_blacklist.TokenBlacklist`. It honours the same
+  existing escape hatch, `STAPEL_BLACKLIST_FAIL_OPEN = True`, rather than
+  introducing a second knob — set it only where an unreachable cache must not
+  lock users out.
+
+*What can break:* a deployment whose cache is unhealthy will now reject
+authentication (401) instead of admitting everyone, at
+`django/jwt/middleware.py`, `django/jwt/authentication.py` and the Channels
+WebSocket handshake. That is the intended trade; `STAPEL_BLACKLIST_FAIL_OPEN`
+restores the old behaviour explicitly.
+
+New W-level boot check `stapel_blacklist`
+(`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
+is on, so the hatch cannot become forgotten configuration.
+
 ### Added — the event store reads like a journal, purges like an eraser, and answers for a person
 
 Three mechanisms, one motive: every audit journal in the fleet belongs in the
