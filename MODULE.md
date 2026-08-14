@@ -126,12 +126,35 @@ that genuinely selects an implementation per environment opts out by name:
 Declaring the same key in both `no_env` and `env_overridable` raises at
 construction rather than picking a winner.
 
+**`resolvers=` — the import_strings family with a custom string→object step.**
+A value that is legally "registry short name OR dotted path" cannot go through
+the base class's eager `import_string`, so packages used to subclass
+`__getattr__` or keep the key out of `import_strings` with a comment — the
+second of which silently drops the key out of W001's scope.
+`AppSettings(..., resolvers={"PROVIDER": callable_or_dotted_path})` delegates
+only the resolution, at the same lazy, cached point where `import_string`
+runs today; a dotted-path resolver is itself imported at first use so a
+`conf.py` never drags a channel module into every import. Policy is
+unchanged from `import_strings`: implicitly env-closed, reopened only by
+`env_overridable`, reported by W001 with the class wording. Resolver
+exceptions pass through with their own type and message (a registry's
+`ImproperlyConfigured` naming the short names it knows survives instead of
+degrading to a bare `ImportError`). Declaring a key in both `import_strings`
+and `resolvers` raises at construction.
+
 Ignoring a variable is silent, so it is announced: `manage.py check` emits
 `stapel_core.conf.W001` (warning, tag `stapel_conf`) for every environment
 variable that is set while the namespace refuses to read it, naming the
 variable, the namespace and the key. Nobody has to grep a deploy manifest to
 learn that the process is running an implementation other than the one the
-environment asks for.
+environment asks for. **Scope is every key the namespace closes** — the
+implicit closure over `import_strings`/`resolvers` *and* `no_env` — because
+`no_env` was invented for the same threat model, and a set-but-ignored env
+var on a policy key is exactly the "the operator believes X is configured and
+it is not" silence W001 exists to end. The message branches on which family
+closed the key, so it never tells an operator that a policy toggle names a
+class. A key reached through a namespace's own alias route (media's
+`STAPEL_MEDIA_BACKEND`) is correctly not reported: that variable IS read.
 
 ### comm transports — `STAPEL_COMM` dict (`comm/config.py`)
 
@@ -740,14 +763,30 @@ production hot path — use the offline `MaxMindProvider` there; reserve
 
 System checks (W-level, registered by `stapel_core.django` app):
 `stapel_core.netintel.W001` (PROVIDER unimportable), `W002` (not a
-`NetIntelProvider`) — a broken provider degrades, it never blocks a deploy.
+`NetIntelProvider`), `W003` (the seam is depended on but never wired — fires
+when `STAPEL_NETINTEL` is configured while `PROVIDER` is left at the default
+`NullProvider`, or when captcha rules are keyed by a class no request can
+ever carry; silent under DEBUG, and it names settings, never their values).
+A broken or unwired provider degrades, it never blocks a deploy.
+
 MaxMind kind derivation: Anonymous-IP flags (tor > vpn > hosting) → ASN
-hosting list → org-name keyword heuristic → residential (ASN known) →
-unknown. The builtin `HOSTING_ASNS` list (AWS/Azure/GCP/Cloudflare/Fastly/…)
-is a **heuristic fallback only and intentionally incomplete**; the accurate
-source of truth is the offline MaxMind **Anonymous-IP** database
-(`MAXMIND_ANONYMOUS_DB`, `is_hosting_provider`), consulted first. Without that
-mmdb the ASN heuristic under-detects datacenter/VPN egress. AS15169 (Google's
+hosting list → org-name keyword heuristic → **`residential` only when the
+Anonymous-IP database was consulted and did not list the address** →
+otherwise `unknown` with `confidence=None`. Residential requires evidence: a
+known ASN is not evidence of a residence, and treating it as one made every
+unenumerated hosting provider come out as the most permissive class in every
+consumer of the seam. `asn`/`asn_org`/`country` still travel with an
+`unknown` profile, so "we know who routes it, not what it is" stays
+distinguishable from "nothing is known".
+
+The builtin `HOSTING_ASNS` list (AWS/Azure/GCP/Cloudflare/Fastly/…) is a
+**heuristic fallback only and intentionally incomplete**; it can promote to
+`datacenter` and can no longer demote to `residential`. The accurate source
+of truth is the offline MaxMind **Anonymous-IP** database
+(`MAXMIND_ANONYMOUS_DB`, `is_hosting_provider`), consulted first — and now
+also the only thing that can assert `residential`. Without that mmdb the ASN
+heuristic under-detects datacenter/VPN egress and everything it does not
+promote stays `unknown`. AS15169 (Google's
 main ASN) is deliberately excluded — it also carries consumer traffic;
 AS396982 (Google Cloud) is the datacenter-only ASN. `manage.py
 download_geolite` is a TODO (netintel package docstring). Consumers: captcha
@@ -1081,6 +1120,48 @@ JWT/CORS/session env-driven config, `get_default_database()`,
 `get_common_templates()`, `get_staticfiles_dirs()`, `setup_sentry()`).
 Everything is a plain module-level name — a service overrides by assignment
 after the star-import; env vars drive deployment differences.
+
+**Boot gates (`django/boot.py`).** Django runs system checks for management
+commands and `runserver` and **none at all** for `gunicorn
+config.wsgi:application` — which is how every generated project boots, so the
+E-gates guarded dev and CI and possibly production not at all.
+`BootGateMiddleware` sits at index 0 of `COMMON_MIDDLEWARE`: its `__init__`
+runs an allowlist of settings-only, DB-free check tags and raises
+`ImproperlyConfigured` with **every** finding's id, message and hint verbatim,
+then raises `MiddlewareNotUsed` so Django unhooks it and the per-request cost
+is zero. `get_wsgi_application()` builds a `WSGIHandler`, whose `__init__`
+calls `load_middleware()`, so the refusal lands at worker boot, before the
+first request — the same moment `manage.py` refuses today. (`AppConfig.ready()`
+is deliberately not used: it would crash `manage.py check` itself, so the tool
+whose job is printing the diagnosis could never print it.)
+
+| Setting | Default | Semantics |
+|---|---|---|
+| `STAPEL_BOOT_GATES` | `"enforce"` | `enforce` refuses the worker \| `warn` logs the same causes and serves \| `off` does not run the checks. Anything unrecognised means `enforce` — a typo must not open a gate. W-checked (`stapel_core.boot.W001`) whenever it is not `enforce`. |
+
+`BOOT_GATE_TAGS` is an explicit allowlist, not "everything registered":
+`stapel_auth_backends`, `stapel_cors`, `stapel_conf`, `stapel_comm`,
+`stapel_bus`, `stapel_config`, `stapel_captcha`. DB-touching and
+URLconf-resolving checks stay in `stapel_preflight` — a boot gate that needs
+the database up is a liveness probe, not a config gate. A project with a
+hand-rolled `MIDDLEWARE` that never picked up the middleware gets
+`stapel_core.boot.W002`.
+
+### Walking a repo's own sources (`stapel_core.testing`)
+
+`iter_own_sources(root, suffix=".py")` and the separately exposed predicate
+`is_foreign_source(path, root)`. Gates that walk a source tree must not read
+an installed sibling library and report it as this repo's violation — a gate
+accusing the wrong file is worse than no gate. Foreignness is decided by
+**marker, never by name-list**: a virtualenv is a directory containing
+`pyvenv.cfg` whatever it is called, a `site-packages` component is installed
+or vendored code, and `build`/`dist` are excluded only when they carry
+packaging markers (`build/lib`, `*.egg-info`, `*.dist-info`) so a source
+directory legitimately named `build` is not silently skipped. `__pycache__`,
+`.git`, `node_modules`, `.tox` and `.mypy_cache` are never sources. The
+predicate is exposed separately on purpose: in CI there is no in-repo venv,
+so the exclusion must be assertable on synthetic paths or it is untested
+exactly where it matters.
 
 ### URL mounting — `STAPEL_MOUNTS` (`django/mounts.py`)
 

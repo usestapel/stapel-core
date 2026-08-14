@@ -1,6 +1,227 @@
 # Changelog
 
-## [Unreleased]
+## [0.25.0] — 2026-08-15
+
+The hardening wave: every item here is a mechanism that already existed and
+sat on the wrong path or guarded the wrong population. Three of the four
+change runtime behaviour, and one of them can refuse to start a worker —
+hence the minor bump. Read the upgrade notes.
+
+### Security — a revoked access token no longer authenticates
+
+`TokenManager.validate_access_token` held the blacklist it was constructed
+with and deliberately did not consult it; its docstring said "caller should do
+that separately". Callers split into two populations. The ones that
+remembered: `JWTAuthMiddleware`, the DRF `JWTCookieAuthentication`, channels,
+and assorted stapel-auth views. The ones that did not: **`JWTAuthBackend`** —
+the Django auth backend ironmemo wires — `stapel-auth/sessions/services.py`,
+`openid/views.py`, and every future caller of `jwt_provider.validate_token`, a
+method that reads as "validate this token" and silently meant "validate
+everything except revocation". On those paths a user who logged out kept
+authenticating until the token expired on its own: up to a full access-token
+lifetime, and on the refresh path up to a week.
+
+**Revocation moved inside the validation seam. `validate` now means valid.**
+
+- `TokenManager.validate_access_token` / `validate_refresh_token` refuse a
+  blacklisted jti when the manager holds a blacklist. The jti is read from the
+  signature-verified payload, never from an unverified decode. A manager
+  constructed with no blacklist behaves exactly as before and touches no cache.
+- `JWTProvider.validate_token` additionally refuses a token belonging to a
+  blacklisted user — a django-layer concept that stays in the django layer.
+  `JWTProvider.refresh_access_token` runs both checks *before* minting: the
+  mint is the one operation that outlives the credential presented for it. The
+  old "IMPORTANT: Caller MUST check blacklist before calling this" contract is
+  deleted, because a contract whose violation is silent admission of a revoked
+  token is not a contract.
+- `JWTAuthBackend` is deliberately **not** patched. It inherits the fix through
+  the provider, and the regression test asserts it fixed without touching it —
+  patching the backend would have been the N-patches shape, leaving the next
+  `validate_token` caller to reopen the hole.
+
+0.24.0 already made both blacklists fail closed on every backend
+(`STAPEL_BLACKLIST_FAIL_OPEN` is the single, W-checked escape hatch), so the
+store is trustworthy and the original excuse for keeping the check out of the
+validation path is gone. A cache outage now yields 401s on the bypass paths
+too — the failure is honest and uniform instead of path-dependent.
+
+Cost: marginal, and mostly already paid. `JWTAuthMiddleware` is in
+`COMMON_MIDDLEWARE`, so most fleet requests already do the jti and user-level
+cache GETs; for them this adds one duplicate jti GET on the access path
+(Redis sub-ms, LocMem µs). The paths that gain a *new* GET are exactly the
+paths that until now skipped revocation. That GET is the fix.
+
+**Upgrade note.** Strictly stricter; no schema, no data migration. The only
+observable change for a correct deployment is that logout and revocation start
+working on every path, immediately. Any caller that relied on `validate_token`
+ignoring revocation (none found in-fleet) must stop.
+
+### Added — `manage.py check` names a per-process revocation store
+
+`stapel_core.blacklist.W002` (W-level, tag `stapel_blacklist`, silent under
+`DEBUG`). Both blacklists write to the default Django cache. With
+`LocMemCache` that store lives inside one worker: a logout served by worker 3
+revokes the token in worker 3 and nowhere else, and the next request —
+balanced to worker 1 — authenticates the token the user just killed. Nothing
+surfaced this; the revocation call returns success either way. Now that
+revocation is enforced inside the validation seam, this is the difference
+between "revocation works" and "revocation works one time in N".
+
+### Security — the E-gates now run under gunicorn, and can refuse a worker
+
+Django runs system checks for management commands and `runserver`. It runs
+**none** for `gunicorn config.wsgi:application` — and that is exactly how every
+generated Stapel project boots (stapel-tools emits that CMD and a bare
+`get_wsgi_application()`, with no migrate/check step in front of it). The
+entire 0.24.0 E-gate wave therefore guarded developer laptops and CI, and may
+have guarded production not at all. A gate that only fires where the damage is
+cheap is decoration.
+
+`stapel_core.django.boot.BootGateMiddleware`, inserted at **index 0 of
+`COMMON_MIDDLEWARE`**. `get_wsgi_application()` builds a `WSGIHandler`, whose
+`__init__` calls `load_middleware()`, which instantiates every middleware — so
+under gunicorn this runs at worker boot, before any request is served. The
+middleware runs an allowlist of check tags in its `__init__` and:
+
+- raises `ImproperlyConfigured` listing **every** ERROR-level finding's id,
+  message and hint verbatim (all of them, not the first: an operator who has to
+  redeploy to discover the second misconfiguration learns to distrust the
+  gate), then
+- raises `MiddlewareNotUsed` on success, so Django unhooks it and the
+  per-request cost is zero. The gate runs once per worker.
+
+Every project that builds `MIDDLEWARE` from `COMMON_MIDDLEWARE` is covered on
+its next core bump, with no entrypoint edit anywhere in the fleet. ASGI and
+channels take the same path. `AppConfig.ready()` was rejected as the seam:
+`populate()` ordering is not settled there, it would break `shell`/`migrate` on
+the box being used to debug the finding, and it would crash `manage.py check`
+itself at setup — so the tool whose whole job is printing the diagnosis could
+never print it, which is a gate lying about its cause, structurally.
+
+| Setting | Default | Semantics |
+|---|---|---|
+| `STAPEL_BOOT_GATES` | `"enforce"` | `enforce` refuses the worker \| `warn` logs the same causes and serves \| `off` skips the checks. An unrecognised value means `enforce` — a typo must not open a gate. |
+
+`BOOT_GATE_TAGS` is an explicit allowlist of settings-only, DB-free tags:
+`stapel_auth_backends`, `stapel_cors`, `stapel_conf`, `stapel_comm`,
+`stapel_bus`, `stapel_config`, `stapel_captcha`. DB-touching and
+URLconf-resolving checks stay in `stapel_preflight` — a boot gate that needs
+the database up is a liveness probe wearing a config gate's clothes, and would
+turn "Postgres is three seconds behind" into a fleet-wide boot failure.
+
+Two new W-checks (tag `stapel_boot`): `stapel_core.boot.W001` whenever the gate
+is not enforcing — an opt-out must stay a stated choice, not become forgotten
+configuration — and `stapel_core.boot.W002` when a hand-rolled `MIDDLEWARE`
+never picked up the middleware, which is the only way a non-conforming project
+learns its E-gates never run under gunicorn.
+
+**Upgrade note, read this one.** A service that today runs happily under
+gunicorn *with a configuration its own E-gates reject* will **refuse to boot**
+after bumping core. That is the intended meaning of an E-gate and it is not
+softened. The compat story is sequencing, not dilution:
+
+1. `manage.py stapel_preflight` — already in the deploy idiom — runs
+   `run_checks()` and shows the exact findings **before** the new core is live.
+2. The refusal names every finding with its own hint, so the fix is in the
+   error message.
+3. `STAPEL_BOOT_GATES="warn"` exists for a deployment that must boot tonight,
+   as a stated, W-checked choice. It is not the default and will not become one.
+
+The most likely tag to bite is `stapel_config`: it resolves CONFIG.MD-required
+keys from the **environment**, so a service whose required keys are not in the
+environment refuses to start. That is the gate working, but it is the one to
+check with preflight first.
+
+### Added — one tree-walk helper, so a gate stops accusing the wrong file
+
+`stapel_core.testing.iter_own_sources(root, suffix=".py")` and the separately
+exposed predicate `is_foreign_source(path, root)`.
+
+Three incidents in one day, all one shape: a test that wanted "our package's
+sources" implemented it as "every `*.py` under the root, minus a hand-written
+list of directory names". That list is an open-world enumeration of a
+closed-world question. The day someone's virtualenv is called `env312` or
+`.direnv/python-3.12`, the walk reads an **installed sibling library's** file
+and reports it as this repo's violation — a red on a file the repo does not
+own, sending the reader to hunt a defect that is not there.
+
+Foreignness is decided by **marker, never by name-list**:
+
+- a virtualenv is a directory containing `pyvenv.cfg`, whatever it is called;
+- a path with a `site-packages` component is installed or vendored code, with
+  or without a cfg;
+- `build`/`dist` are excluded **only** when they carry packaging markers
+  (`build/lib` layout, `*.egg-info`, `*.dist-info`) — a source directory
+  legitimately named `build` must not be silently skipped, which would be the
+  same stale-list disease inverted;
+- `__pycache__`, `.git`, `node_modules`, `.tox`, `.mypy_cache` are never
+  sources.
+
+Walking the package's `__path__` instead is not sufficient on its own: stapel
+repos are flat (the repo root IS the package directory), so an in-repo `.venv`
+and `build/lib/<pkg>/` sit *inside* the package path. The predicate is exposed
+separately because in CI there is no in-repo venv — a test that only walked the
+real tree would pass vacuously and the exclusion would rot exactly where it
+matters, so it is asserted on synthetic paths instead.
+
+Core hosts the helper rather than stapel-tools because every module already
+depends on stapel-core and already imports `stapel_core.testing` in its
+conftest: it is importable by construction in exactly the population that needs
+it. Core's own `tests/test_import_lock_discipline.py` is migrated onto it and
+its local skip-list deleted; the fleet sweep of the remaining offenders and the
+stapel-tools lint rule ride separately.
+
+### Changed — W001 now reports every environment variable a namespace ignores
+
+`AppSettings.ignored_env_vars()` iterated `import_strings` alone, while
+`_env_allowed()` already knew the full truth. So a variable set against a
+`no_env` key — stapel-auth's registration and behaviour toggles, core's own
+`STAPEL_MEDIA["BACKEND"]` — was dropped with **no warning at all**, reproducing
+the very silence W001 was built to end. `no_env` was invented for the same
+threat model (its own comment: generic names that could "silently change a
+trust/security decision"), and a set-but-ignored variable on such a key is
+precisely "the operator believes X is configured and it is not".
+
+The walk now covers **every key where `_env_allowed()` is False** — the
+implicit closure over `import_strings`/`resolvers` plus `no_env` — with names
+still spelled exclusively by `env_var_names()`. The noise worry (generic names
+like `BACKEND` colliding with unrelated variables) is answered by W-level
+severity, the per-namespace dedup that was already there, and the fact that the
+collision *is* the information: that variable is being ignored. The message
+branches on which family closed the key, so a policy toggle is never described
+as naming a class. Media's `STAPEL_MEDIA_BACKEND` alias stays correctly
+unreported — that variable is honored, and the check must never claim a
+variable was dropped when it was read.
+
+**Upgrade note.** Expect new W001 lines at `manage.py check` on deployments
+that set generically-named environment variables. Each one is a true statement
+about a variable that is not being read; none of them blocks a deploy.
+
+### Added — `resolvers=` on `AppSettings`
+
+`AppSettings(..., resolvers={"PROVIDER": callable_or_dotted_path})`. A value
+that is legally "registry short name OR dotted path" cannot go through the base
+class's eager `import_string`, so packages either subclassed `__getattr__`
+(stapel-notifications) or kept the key out of `import_strings` with a comment
+(stapel-auth's `OAUTH_PROVIDER_CLASSES`) — and the second silently drops the
+key out of W001's scope. Declaring `no_env` instead would close the door with
+no way back out, since `no_env ∩ env_overridable` is a construction error by
+design.
+
+A resolver key is **policy-wise a member of the import_strings family**:
+implicitly env-closed, reopened only by `env_overridable`, reported by W001
+with the class wording. Only the string→object step is delegated, at the same
+lazy, cached point where `import_string` runs today. A dotted-path resolver is
+itself imported at first use, so a `conf.py` never drags a channel module into
+every import of the package. Resolver exceptions pass through with their own
+type and message, so a registry's `ImproperlyConfigured` naming the short names
+it knows survives instead of degrading to a bare `ImportError`. Declaring a key
+in both `import_strings` and `resolvers` raises at construction rather than
+picking a winner.
+
+A free-floating `resolve=` callable was **rejected**: divorced from the
+import_strings policy family it would be a third kind of key with unspecified
+environment semantics — new surface, no gate.
 
 ### Security — an unrecognised ASN is no longer asserted to be residential
 

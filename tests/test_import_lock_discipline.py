@@ -37,6 +37,8 @@ from pathlib import Path
 
 import pytest
 
+from stapel_core.testing import iter_own_sources
+
 REPO = Path(__file__).resolve().parent.parent
 
 #: Packages whose bodies re-export from their own submodules — the shape that
@@ -44,9 +46,12 @@ REPO = Path(__file__).resolve().parent.parent
 #: with the same shape is covered the day it appears.
 def _packages_importing_own_submodules() -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
-    for init in sorted(REPO.rglob("__init__.py")):
-        if any(part in {".git", ".venv", "tests", "__pycache__"} for part in init.parts):
-            continue
+    # The local skip-list this used to carry is deleted, not extended: a
+    # venv named anything but ".venv" made this rule read an installed
+    # sibling library and report it as this repo's violation.
+    for init in iter_own_sources(REPO, suffix="__init__.py"):
+        if "tests" in init.parts:
+            continue  # test packages are not the library's import graph
         rel = init.relative_to(REPO).parent
         if not rel.parts:
             continue  # the top-level package itself has no parent to race

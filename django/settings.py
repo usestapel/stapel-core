@@ -255,6 +255,12 @@ COMMON_INSTALLED_APPS = [
 ]
 
 COMMON_MIDDLEWARE = [
+    # FIRST, and it removes itself. Django runs no system checks under
+    # gunicorn, so this is the only place the E-gates reach a production
+    # worker; it refuses the worker in __init__ and then raises
+    # MiddlewareNotUsed, costing nothing per request. See stapel_core.django.
+    # boot for why AppConfig.ready() is the wrong seam for this.
+    "stapel_core.django.boot.BootGateMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

@@ -78,10 +78,34 @@ class AppSettings:
         import_strings: Iterable[str] = (),
         no_env: Iterable[str] = (),
         env_overridable: Iterable[str] = (),
+        resolvers: dict[str, Any] | None = None,
     ) -> None:
         self.namespace = namespace
         self.defaults = dict(defaults)
         self.import_strings = frozenset(import_strings)
+        # Keys whose raw string is turned into an object by a CALLABLE of the
+        # declaring package's choosing instead of by bare ``import_string``.
+        #
+        # Policy-wise a resolver key is a MEMBER OF THE import_strings FAMILY:
+        # implicitly env-closed, reopened only by env_overridable, reported by
+        # W001 with the class wording. Only the string→object step is
+        # delegated. That is deliberate — a free-floating "resolve this key"
+        # hook divorced from the family would be a third kind of key with
+        # unspecified environment semantics: new surface, no gate.
+        #
+        # The need is real and three times proven: a value that is legally
+        # "registry short name OR dotted path" cannot go through the base
+        # class's eager import_string, so packages either subclassed around
+        # __getattr__ (stapel-notifications) or kept the key out of
+        # import_strings with a comment (stapel-auth's OAUTH_PROVIDER_CLASSES)
+        # — losing the declaration, and with it the W001 alarm. Declaring
+        # ``no_env`` instead would have closed the door with no way back out:
+        # ``no_env ∩ env_overridable`` is a construction error by design.
+        #
+        # A resolver may be given as a dotted path, resolved lazily at first
+        # use, so a package's conf.py never imports a channel module at
+        # declaration time.
+        self.resolvers: dict[str, Any] = dict(resolvers or {})
         # Keys that must never fall back to an environment variable: their
         # names are generic enough (PROVIDER, TRUSTED_PROXY_HEADER, …) that a
         # stray same-named env var could silently change a trust/security
@@ -102,6 +126,16 @@ class AppSettings:
                 f"{namespace}: {sorted(contradictory)} declared both no_env and "
                 "env_overridable — say which one you mean"
             )
+        double_resolved = self.import_strings & set(self.resolvers)
+        if double_resolved:
+            # Two answers to "what turns this string into an object" is an
+            # authoring mistake in the one declaration that decides what code
+            # the process loads. Picking a winner silently would hide it.
+            raise ValueError(
+                f"{namespace}: {sorted(double_resolved)} declared both "
+                "import_strings and resolvers — a resolver key already "
+                "belongs to the import_strings family; list it in one place"
+            )
         self._cache: dict[str, Any] = {}
         self._connect_reload()
         _INSTANCES.append(weakref.ref(self))
@@ -116,32 +150,67 @@ class AppSettings:
         """
         return (key,)
 
+    def _names_a_class(self, key: str) -> bool:
+        """Does *key* name the implementation the process loads?
+
+        True for import_strings and for resolver keys — the resolver family
+        is the import_strings family with a custom string→object step, so it
+        answers this question the same way and gets the same wording.
+        """
+        return key in self.import_strings or key in self.resolvers
+
     def _env_allowed(self, key: str) -> bool:
         """May *key* be read from ``os.environ``?
 
-        import_strings names an implementation, not a value, so it is
-        implicitly no_env; ``env_overridable`` is the explicit way back out.
+        A key that names an implementation, not a value, is implicitly
+        no_env; ``env_overridable`` is the explicit way back out.
         """
         if key in self.no_env:
             return False
-        if key in self.import_strings:
+        if self._names_a_class(key):
             return key in self.env_overridable
         return True
 
-    def ignored_env_vars(self) -> list[tuple[str, str]]:
-        """``(key, env var name)`` pairs that are SET and will not be read.
+    def env_closed_keys(self) -> list[str]:
+        """Every key whose environment step this instance closes, sorted.
 
-        Scope is deliberately the implementation seam: keys in
-        *import_strings* whose environment step this instance closes. That is
-        the pair — env var present, env var ignored — where an operator
-        believes one class is running and another one is. Both halves of the
-        answer come from the instance itself (``_env_allowed`` decides, and
-        ``env_var_names`` spells), never from a convention restated here.
+        The union of both closing families — ``no_env`` and the implicit
+        closure over import_strings/resolvers minus ``env_overridable`` —
+        computed by asking ``_env_allowed`` about every key this namespace
+        knows, so the walk can never ask a narrower question than the gate
+        answers.
+        """
+        known = set(self.defaults) | self.no_env | self.import_strings | set(self.resolvers)
+        return sorted(key for key in known if not self._env_allowed(key))
+
+    def ignored_env_vars(self) -> list[tuple[str, str, str]]:
+        """``(key, env var name, family)`` triples that are SET and unread.
+
+        Scope is EVERY key the instance closes, not just *import_strings*.
+        The narrow scope had no hidden justification and reproduced the very
+        silence W001 was built to end: ``no_env`` was invented for the same
+        threat model (generic names that could "silently change a
+        trust/security decision"), so a set-but-ignored env var on a no_env
+        key is precisely "the operator believes X is configured and it is
+        not".
+
+        The noise worry — generic names like ``BACKEND`` or ``PROVIDER``
+        colliding with unrelated variables — is answered by W-level severity,
+        by the per-namespace dedup the check already does, and by the fact
+        that the collision IS the information: that variable is being
+        ignored.
+
+        *family* is ``"class"`` when the key names the implementation the
+        process loads and ``"policy"`` when it is a no_env value key, so the
+        warning can say which rule closed the key and never over-claim.
+        Names are still spelled exclusively by ``env_var_names`` — a
+        namespace whose alias route never entered that method (media's
+        ``STAPEL_MEDIA_BACKEND``) is correctly not reported, because that
+        alias IS honored and the check must not claim it was dropped.
         """
         return [
-            (key, name)
-            for key in sorted(self.import_strings)
-            if not self._env_allowed(key)
+            (key, name, "class" if self._names_a_class(key) else "policy")
+            for key in self.env_closed_keys()
             for name in self.env_var_names(key)
             if name in os.environ
         ]
@@ -179,16 +248,39 @@ class AppSettings:
             return self.defaults[key]
         raise AttributeError(f"{self.namespace} has no setting {key!r}")
 
+    def _resolver_for(self, key: str):
+        """The callable that turns *key*'s raw string into an object.
+
+        A dotted-path resolver is imported HERE, at first use, not at
+        declaration time: a package's ``conf.py`` must not drag its channel
+        modules into every import of the package. The imported callable
+        replaces the string in place, so the import happens once.
+        """
+        resolver = self.resolvers[key]
+        if isinstance(resolver, str):
+            from django.utils.module_loading import import_string
+
+            resolver = import_string(resolver)
+            self.resolvers[key] = resolver
+        return resolver
+
     def __getattr__(self, key: str) -> Any:
         if key.startswith("_"):
             raise AttributeError(key)
         if key in self._cache:
             return self._cache[key]
         value = self._raw(key)
-        if key in self.import_strings and isinstance(value, str) and value:
-            from django.utils.module_loading import import_string
+        if isinstance(value, str) and value:
+            if key in self.resolvers:
+                # Errors pass through untouched on purpose: a registry
+                # resolver raises ImproperlyConfigured with a message that
+                # names the short names it does know, and wrapping that in
+                # ImportError would throw away the only useful half.
+                value = self._resolver_for(key)(value)
+            elif key in self.import_strings:
+                from django.utils.module_loading import import_string
 
-            value = import_string(value)
+                value = import_string(value)
         self._cache[key] = value
         return value
 

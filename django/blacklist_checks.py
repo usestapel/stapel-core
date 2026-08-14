@@ -20,6 +20,10 @@ from __future__ import annotations
 from django.core import checks
 
 W001_BLACKLIST_FAIL_OPEN = "stapel_core.blacklist.W001"
+W002_BLACKLIST_LOCMEM = "stapel_core.blacklist.W002"
+
+#: The one cache backend that cannot hold a fleet-wide revocation.
+_LOCMEM_BACKEND = "django.core.cache.backends.locmem.LocMemCache"
 
 
 @checks.register("stapel_blacklist")
@@ -38,4 +42,45 @@ def check_blacklist_fail_open(app_configs=None, **kwargs):
              "must not lock every user out, and make sure the store's "
              "availability is monitored.",
         id=W001_BLACKLIST_FAIL_OPEN,
+    )]
+
+
+@checks.register("stapel_blacklist")
+def check_blacklist_store_is_shared(app_configs=None, **kwargs):
+    """W002 — a per-process cache makes revocation per-process.
+
+    Both blacklists write to the default Django cache. With ``LocMemCache``
+    that store lives inside one worker: a logout served by worker 3 revokes
+    the token in worker 3 and nowhere else, so the very next request — load
+    balanced to worker 1 — authenticates the token the user just killed.
+    Nothing surfaces this; the revocation call returns success either way.
+
+    Now that revocation is enforced inside the validation seam, this is the
+    difference between "revocation works" and "revocation works one time in
+    N", so an operator should read it once, at boot.
+
+    W-level and DEBUG-exempt: single-process development and the test suite
+    run on LocMem legitimately, and the finding there would be noise that
+    trains people to ignore the check.
+    """
+    from django.conf import settings
+
+    if getattr(settings, "DEBUG", False):
+        return []
+
+    caches = getattr(settings, "CACHES", None) or {}
+    default = caches.get("default") or {}
+    if default.get("BACKEND") != _LOCMEM_BACKEND:
+        return []
+
+    return [checks.Warning(
+        "The default cache is LocMemCache, which is per-process: revoking a "
+        "token or banning a user only takes effect in the worker that handled "
+        "the request. Every other worker keeps accepting the revoked token "
+        "until it expires on its own.",
+        hint="Point the default cache at a shared store (Redis/Memcached) so "
+             "a revocation reaches every worker. If this process really is a "
+             "single worker that shares nothing, set DEBUG or accept the "
+             "warning knowingly.",
+        id=W002_BLACKLIST_LOCMEM,
     )]

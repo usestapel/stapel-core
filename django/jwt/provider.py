@@ -128,22 +128,56 @@ class JWTProvider:
         self._ensure_initialized()
         return self._manager.create_tokens(user_data)
 
+    def _user_banned(self, user_data: Optional[Dict[str, Any]]) -> bool:
+        """Is the user this token speaks for banned?
+
+        Per-user revocation ("log this person out everywhere", "ban this
+        account") is a django-layer concept — it reads a django cache and has
+        no place in the framework-free TokenManager — so the django layer is
+        where it is enforced, on the seam every django caller shares. Imported
+        inside the call so tests (and the middleware) patch one name.
+        """
+        if not user_data:
+            return False
+        from .authentication import is_user_blacklisted
+
+        user_id = user_data.get('user_id')
+        if user_id and is_user_blacklisted(user_id):
+            logger.warning("Token rejected: user %s is blacklisted", user_id)
+            return True
+        return False
+
     def validate_token(self, token: str) -> Optional[Dict[str, Any]]:
         """
         Validate an access token and return payload.
+
+        "Valid" includes "not revoked": the manager refuses a blacklisted jti
+        and this method additionally refuses a token belonging to a banned
+        user. Every caller of this method — the DRF authentication class, the
+        django auth backend, channels, and any caller written tomorrow —
+        therefore gets revocation without opting in. Callers that used to run
+        their own blacklist probe still may; it costs one extra cache GET.
 
         Args:
             token: JWT token string
 
         Returns:
-            Token payload dict or None if invalid
+            Token payload dict or None if invalid, revoked, or user-banned
         """
         self._ensure_initialized()
-        return self._manager.validate_access_token(token)
+        user_data = self._manager.validate_access_token(token)
+        if self._user_banned(user_data):
+            return None
+        return user_data
 
     def refresh_access_token(self, refresh_token: str, load_user_data=None) -> Optional[str]:
         """
         Refresh an access token using refresh token.
+
+        Minting a new access token is the one operation that outlives the
+        credential presented for it, so both revocation layers run BEFORE the
+        mint: the manager refuses a blacklisted refresh jti, and a banned user
+        gets no new token even if their refresh token is otherwise perfect.
 
         Args:
             refresh_token: JWT refresh token
@@ -152,9 +186,15 @@ class JWTProvider:
                            to include updated claims in new token.
 
         Returns:
-            New access token or None if refresh failed
+            New access token or None if refresh failed, was revoked, or the
+            user is banned
         """
         self._ensure_initialized()
+        # Validate first so the ban check sees the token's real identity, and
+        # so a revoked refresh token never reaches the minting step at all.
+        user_data = self._manager.validate_refresh_token(refresh_token)
+        if not user_data or self._user_banned(user_data):
+            return None
         return self._manager.refresh_access_token(refresh_token, load_user_data)
 
     def is_blacklisted(self, token: str) -> bool:

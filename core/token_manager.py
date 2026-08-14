@@ -115,20 +115,45 @@ class TokenManager:
     # Token Validation (pure validation, no refresh)
     # =========================================================================
 
+    def _revoked(self, payload: Dict[str, Any]) -> bool:
+        """Is the token this *verified* payload came from revoked?
+
+        Revocation is part of validity, not a separate courtesy check: a
+        manager that holds a blacklist and does not run it means every caller
+        who reads ``validate_*`` as "is this token good?" admits revoked
+        tokens. The jti is taken from the SIGNATURE-VERIFIED payload, never
+        from an unverified decode, so an attacker cannot pick which jti gets
+        looked up.
+        """
+        if not self.blacklist:
+            return False
+        jti = payload.get('jti')
+        if not jti:
+            # A token with no jti can never be revoked individually. Say so
+            # once instead of failing open in silence.
+            logger.debug("Token carries no jti; revocation cannot be checked")
+            return False
+        if self.blacklist.is_blacklisted(jti):
+            logger.debug("Revoked token rejected (jti=%s...)", str(jti)[:8])
+            return True
+        return False
+
     def validate_access_token(self, access_token: str) -> Optional[Dict[str, Any]]:
         """
         Validate access token and return user data.
 
-        This method ONLY validates. It does NOT:
-        - Check blacklist (caller should do that separately)
-        - Refresh tokens
-        - Make any decisions about what to do next
+        Validation means: correct type, valid signature, not expired, and NOT
+        REVOKED — when this manager was built with a blacklist, a blacklisted
+        jti is rejected here. Callers do not have to remember a second step;
+        forgetting it was how revoked tokens kept authenticating.
+
+        This method still does NOT refresh tokens or decide what happens next.
 
         Args:
             access_token: JWT access token string
 
         Returns:
-            User data dictionary or None if invalid/expired
+            User data dictionary or None if invalid/expired/revoked
         """
         if not self.jwt_handler.validate_token_type(access_token, "access"):
             logger.debug("Token is not an access token")
@@ -138,17 +163,23 @@ class TokenManager:
         if not payload:
             return None
 
+        if self._revoked(payload):
+            return None
+
         return self.jwt_handler.extract_user_data(payload)
 
     def validate_refresh_token(self, refresh_token: str) -> Optional[Dict[str, Any]]:
         """
         Validate refresh token and return user data.
 
+        As with :meth:`validate_access_token`, a blacklisted jti is refused
+        here when this manager holds a blacklist.
+
         Args:
             refresh_token: JWT refresh token string
 
         Returns:
-            User data dictionary or None if invalid
+            User data dictionary or None if invalid or revoked
         """
         if not self.jwt_handler.validate_token_type(refresh_token, "refresh"):
             logger.debug("Token is not a refresh token")
@@ -156,6 +187,9 @@ class TokenManager:
 
         payload = self.jwt_handler.decode_token(refresh_token, verify=True)
         if not payload:
+            return None
+
+        if self._revoked(payload):
             return None
 
         return self.jwt_handler.extract_user_data(payload)
@@ -188,11 +222,13 @@ class TokenManager:
         """
         Generate new access token using refresh token.
 
-        IMPORTANT: Caller MUST check blacklist before calling this method!
-        This method assumes the refresh token is not blacklisted.
+        The refresh token goes through :meth:`validate_refresh_token`, which
+        refuses a revoked one. The old "caller MUST check the blacklist first"
+        contract is gone: a contract whose violation is silent admission of a
+        revoked token is not a contract, it is a hole with a comment.
 
         Args:
-            refresh_token: Valid, non-blacklisted refresh token
+            refresh_token: Refresh token; revoked ones are refused here
             load_user_data: Optional callback(user_id) -> user_data dict.
                            If provided, loads fresh user data from database
                            instead of using data from refresh token.

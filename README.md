@@ -24,7 +24,7 @@ pip install stapel-core
 
 | Fact | Value |
 |---|---|
-| Version | `0.24.1` |
+| Version | `0.25.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | Django | `Django>=5.1,<6.1` |
 | Usage surface | 17 |
@@ -143,6 +143,19 @@ Built-in providers: `NullProvider` (default — always `unknown`),
 `HTTP_API_KEY` / `HTTP_RESPONSE_MAPPER`). `client_ip(request)` honors
 `TRUSTED_PROXY_HEADER` (default: `REMOTE_ADDR` only — proxy headers are
 spoofable unless your edge overwrites them).
+
+`residential` is a claim that requires evidence, and `MaxMindProvider` has
+exactly one source of it: the Anonymous-IP database consulted and not listing
+the address. Configure `MAXMIND_ANONYMOUS_DB` or the kind stays `unknown`
+with `confidence=None` — a known ASN is not evidence of a residence, and the
+`HOSTING_ASNS` fallback list can promote an address to `datacenter` but never
+demote one to `residential`. `asn`/`asn_org`/`country` still travel with an
+`unknown` profile.
+
+System checks (W-level, never blocking): `stapel_core.netintel.W001`
+(`PROVIDER` unimportable), `W002` (not a `NetIntelProvider`), `W003` (the
+seam is configured or depended on, but `PROVIDER` is still the default
+`NullProvider`, so every rule keyed on network class is dead code).
 
 ---
 

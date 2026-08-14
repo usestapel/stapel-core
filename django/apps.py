@@ -118,6 +118,11 @@ class CommonDjangoConfig(AppConfig):
         # no cdn.* comm route is wired at all — the "half the stack is
         # modular, half isn't" design gap (cdn-modularity.md §0.1/§0.5).
         from stapel_core.django.cdn import checks as _cdn_checks  # noqa: F401
+        # Boot-gate checks (stapel_core.django.boot): W-level when the gate is
+        # not enforcing, and W-level when a hand-rolled MIDDLEWARE never
+        # picked up BootGateMiddleware — the second one is the only way a
+        # non-conforming project learns its E-gates never run under gunicorn.
+        from stapel_core.django import boot as _boot_checks  # noqa: F401
 
         # Verification factors declared by the host in
         # STAPEL_VERIFICATION["EXTRA_FACTORS"] (#145). MODULE.md documents the
