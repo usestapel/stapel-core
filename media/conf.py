@@ -46,7 +46,15 @@ _UNSET = object()
 
 
 class MediaAppSettings(AppSettings):
-    """AppSettings that also honors the flat ``STAPEL_MEDIA_BACKEND`` name."""
+    """AppSettings that also honors the flat ``STAPEL_MEDIA_BACKEND`` name.
+
+    The alias is resolved in ``_raw`` *before* the base class's env gate and
+    is therefore never suppressed by no_env / implicit-no_env — that is the
+    point of it: BACKEND is too generic a bare name to trust, so the explicit
+    prefixed name carries the env path instead. Hence no ``env_var_names``
+    override: an alias is honored, so the ignored-env-var check must not
+    claim it was dropped.
+    """
 
     FLAT_ALIASES = {"BACKEND": "STAPEL_MEDIA_BACKEND"}
 

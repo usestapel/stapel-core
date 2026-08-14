@@ -30,13 +30,44 @@ The project's own settings module is trusted and still wins — the
 environment is not. A deployment that genuinely must select an
 implementation from the environment says so once, by name, with
 *env_overridable*.
+
+Ignoring a variable is silent by nature, so the rule carries its own alarm:
+``stapel_core.conf_checks`` walks :func:`registered_settings` and raises a
+warning at ``manage.py check`` time for every env var that is set and not
+read. Nobody has to remember to grep a manifest.
 """
 from __future__ import annotations
 
 import os
+import weakref
 from typing import Any, Iterable
 
 _EMPTY = object()
+
+# Every AppSettings ever built, in construction order. The instances are
+# per-module singletons living in ``<package>/conf.py`` modules that core
+# cannot enumerate — siblings declare their own namespaces and core has no
+# list of siblings. Registering at construction is the one place that sees
+# all of them, and it lives on the class that already owns the semantics
+# instead of a parallel list an author must remember to update. Weak, so a
+# throwaway instance (a test's) does not pin memory; iteration order is the
+# insertion order of the surviving entries.
+_INSTANCES: list[weakref.ReferenceType] = []
+
+
+def registered_settings() -> list["AppSettings"]:
+    """Every live :class:`AppSettings` instance, in construction order.
+
+    A namespace is only visible once its ``conf`` module has been imported —
+    consumers that need the whole fleet (the ignored-env-var system check)
+    must run after ``django.setup()``, when every installed app's modules
+    are loaded.
+    """
+    live = [ref() for ref in _INSTANCES]
+    if None in live:  # prune collected entries so the list cannot grow forever
+        _INSTANCES[:] = [ref for ref, obj in zip(_INSTANCES, live) if obj is not None]
+        live = [obj for obj in live if obj is not None]
+    return live
 
 
 class AppSettings:
@@ -73,6 +104,17 @@ class AppSettings:
             )
         self._cache: dict[str, Any] = {}
         self._connect_reload()
+        _INSTANCES.append(weakref.ref(self))
+
+    def env_var_names(self, key: str) -> tuple[str, ...]:
+        """Environment variable names ``_raw`` consults for *key*, in order.
+
+        The one place the naming convention lives. A check that reports env
+        vars this namespace ignores asks the same method, so the guard cannot
+        drift from the thing it guards. Subclasses that read other names
+        (through the gate) extend this.
+        """
+        return (key,)
 
     def _env_allowed(self, key: str) -> bool:
         """May *key* be read from ``os.environ``?
@@ -85,6 +127,24 @@ class AppSettings:
         if key in self.import_strings:
             return key in self.env_overridable
         return True
+
+    def ignored_env_vars(self) -> list[tuple[str, str]]:
+        """``(key, env var name)`` pairs that are SET and will not be read.
+
+        Scope is deliberately the implementation seam: keys in
+        *import_strings* whose environment step this instance closes. That is
+        the pair — env var present, env var ignored — where an operator
+        believes one class is running and another one is. Both halves of the
+        answer come from the instance itself (``_env_allowed`` decides, and
+        ``env_var_names`` spells), never from a convention restated here.
+        """
+        return [
+            (key, name)
+            for key in sorted(self.import_strings)
+            if not self._env_allowed(key)
+            for name in self.env_var_names(key)
+            if name in os.environ
+        ]
 
     def _connect_reload(self) -> None:
         try:
@@ -111,9 +171,10 @@ class AppSettings:
         if flat is not _EMPTY:
             return flat
         if self._env_allowed(key):
-            env = os.environ.get(key)
-            if env is not None:
-                return env
+            for name in self.env_var_names(key):
+                env = os.environ.get(name)
+                if env is not None:
+                    return env
         if key in self.defaults:
             return self.defaults[key]
         raise AttributeError(f"{self.namespace} has no setting {key!r}")
@@ -132,4 +193,4 @@ class AppSettings:
         return value
 
 
-__all__ = ["AppSettings"]
+__all__ = ["AppSettings", "registered_settings"]

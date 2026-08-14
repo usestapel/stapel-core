@@ -27,6 +27,13 @@ class CommonDjangoConfig(AppConfig):
 
         # System checks (registered on import; W-level, never block deploys).
         from stapel_core.netintel import checks as _netintel_checks  # noqa: F401
+        # Ignored-env-var check (stapel_core.conf_checks): W-level when an env
+        # var is set whose name an AppSettings namespace lists in
+        # import_strings without env_overridable. Such a var is silently not
+        # read since the implicit-no_env rule, so the operator believes one
+        # implementation is loaded while another runs; this says so at
+        # `manage.py check` time instead of leaving it to a manifest grep.
+        from stapel_core import conf_checks as _conf_checks  # noqa: F401
         # Staff-mandate checks (stapel_core.access): E-level for malformed
         # ROLES/MODELS/STEP_UP policy and an unenforceable STRICT mode,
         # W-level hints (incl. step-up degradation).

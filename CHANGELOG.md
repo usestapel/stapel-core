@@ -39,15 +39,21 @@ It is an opt-OUT of the safe default and greppable fleet-wide by that one
 name. Declaring the same key in both `no_env` and `env_overridable` now raises
 `ValueError` at construction instead of silently picking a winner.
 
-*What can break, and how to spot it:* a deployment that was selecting an
-implementation with a bare environment variable will **silently fall back to
-the default (or the settings value)** — no error, no log line, just different
-code running. Grep your deploy manifests, Helm values, `.env` files and
-entrypoints for the bare key names each namespace lists in `import_strings`
-(`PROVIDER`, `BACKEND`, `PAYMENT_PROVIDER`, `POLICY_ENGINE`, `AUDIT_SINK`,
-`NOTIFY`, `TRANSLATOR`, `WATERMARK`, …). If one is set on a running service,
-either move it into the project's settings dict (recommended) or add the key
-to `env_overridable` in that module's `AppSettings` declaration.
+*What can break, and how you are told:* a deployment that was selecting an
+implementation with a bare environment variable now **falls back to the
+default (or the settings value)** — different code running. That silence is
+the actual hazard, so it is not left to a manifest grep: **`manage.py check`
+names the variable.** The new system check `stapel_core.conf.W001` (warning,
+tag `stapel_conf`, registered by `CommonDjangoConfig`) walks every live
+`AppSettings` namespace in the process and reports each environment variable
+that is set while the namespace refuses to read it, naming the variable, the
+namespace and the key, with both remedies: move the value into the project's
+`STAPEL_<MODULE>` settings dict (recommended), or add the key to
+`env_overridable=` in that module's `AppSettings` declaration. A warning, not
+an error — the process is running the safe implementation; what is wrong is
+the operator's picture of it. A namespace is only visible once its `conf`
+module has been imported, so run the check on the service, not on an empty
+harness.
 
 Inside core, exactly one key changes behaviour: `STAPEL_MEDIA["WATERMARK"]`
 (`media/conf.py`) was in `import_strings` but not in `no_env`, so a bare

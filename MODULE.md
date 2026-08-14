@@ -126,6 +126,13 @@ that genuinely selects an implementation per environment opts out by name:
 Declaring the same key in both `no_env` and `env_overridable` raises at
 construction rather than picking a winner.
 
+Ignoring a variable is silent, so it is announced: `manage.py check` emits
+`stapel_core.conf.W001` (warning, tag `stapel_conf`) for every environment
+variable that is set while the namespace refuses to read it, naming the
+variable, the namespace and the key. Nobody has to grep a deploy manifest to
+learn that the process is running an implementation other than the one the
+environment asks for.
+
 ### comm transports — `STAPEL_COMM` dict (`comm/config.py`)
 
 | Key | Default | What it customizes |
