@@ -93,6 +93,7 @@ class PostgresEventStore(EventStore):
         limit: int = 100,
         time_range: tuple[datetime | None, datetime | None] | None = None,
         filters: Mapping[str, object] | None = None,
+        reverse: bool = False,
     ) -> EventPage:
         from django.db.models import Q
 
@@ -101,11 +102,20 @@ class PostgresEventStore(EventStore):
         queryset = _apply_time_range(queryset, time_range)
         queryset = _apply_filters(queryset, filters)
         if after is not None:
-            queryset = queryset.filter(
-                Q(ts__gt=after.ts) | Q(ts=after.ts, id__gt=after.id)
-            )
+            # Mirrored comparison, same tie-break: reversed pages advance
+            # strictly into the past, so a burst sharing one ts is still
+            # walked exactly once.
+            if reverse:
+                queryset = queryset.filter(
+                    Q(ts__lt=after.ts) | Q(ts=after.ts, id__lt=after.id)
+                )
+            else:
+                queryset = queryset.filter(
+                    Q(ts__gt=after.ts) | Q(ts=after.ts, id__gt=after.id)
+                )
+        ordering = ("-ts", "-id") if reverse else ("ts", "id")
         # Fetch one extra to learn whether a further page exists.
-        rows = list(queryset.order_by("ts", "id")[: limit + 1])
+        rows = list(queryset.order_by(*ordering)[: limit + 1])
         has_more = len(rows) > limit
         rows = rows[:limit]
         events = [
@@ -192,10 +202,16 @@ class PostgresEventStore(EventStore):
                 },
             )
 
-    def purge(self, stream: str, *, older_than: datetime) -> int:
-        deleted, _ = (
-            _model().objects.filter(stream=stream, ts__lt=older_than).delete()
-        )
+    def purge(
+        self,
+        stream: str,
+        *,
+        older_than: datetime,
+        filters: Mapping[str, object] | None = None,
+    ) -> int:
+        queryset = _model().objects.filter(stream=stream, ts__lt=older_than)
+        queryset = _apply_filters(queryset, filters)
+        deleted, _ = queryset.delete()
         return deleted
 
     def purge_rollup(self, stream: str, *, older_than: datetime) -> int:

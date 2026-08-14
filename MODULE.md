@@ -733,15 +733,27 @@ core primitive, not N bespoke tables). Facade API (root export
 
 - `append(stream, payload, *, ts=None, project=None, task=None, container=None)`
   — buffered write. `append_batch(events)`, `flush()`.
-- `query(stream, *, after=None, limit=100, time_range=None, filters=None)
-  -> EventPage` — cursor read in `(ts, id)` order (id tie-break, so bursts
-  never skip/repeat); `EventPage.cursor` (opaque `Cursor` token) feeds the
-  next `after=`. `filters` match identity columns or payload keys.
+- `query(stream, *, after=None, limit=100, time_range=None, filters=None,
+  reverse=False) -> EventPage` — cursor read in `(ts, id)` order (id
+  tie-break, so bursts never skip/repeat); `EventPage.cursor` (opaque
+  `Cursor` token) feeds the next `after=`. `filters` match identity columns
+  or payload keys. `reverse=True` walks newest-first (`(-ts, -id)`; `after`
+  then advances into the past) — the journal read order.
+- `anchor.anchor_page(stream, *, filters=None, anchor=None,
+  direction="next", limit=100) -> AnchorPage` — the `AnchorPagination` wire
+  contract (`{items, next_anchor, prev_anchor, has_next, has_prev, count}`,
+  newest first, ISO-timestamp anchors, `next`/`prev`/`center`) served from a
+  stream, so a journal that moves from a bespoke table into the store keeps
+  its released HTTP shape byte-for-byte (first consumer:
+  stapel-workspaces `GET <id>/audit`).
 - `rollup(stream, *, group_by, sum_fields, time_range=None, filters=None,
   into=None) -> list[RollupRow]` — group-by (identity columns or payload
   keys) + sum-fields; `into=` upserts buckets into a rollup table (replace /
   recompute semantics). Concrete rollups are the consumer's business.
-- `purge(stream, *, older_than) -> int` — retention mechanism.
+- `purge(stream, *, older_than, filters=None) -> int` — retention mechanism;
+  `filters` narrows it to matching rows (subject-scoped erasure: a GDPR
+  delete of one person's audit lines is `purge(stream, older_than=now,
+  filters={"subject_id": …})`).
 
 | Key | Default | Semantics | What it customizes |
 |---|---|---|---|
@@ -753,6 +765,7 @@ core primitive, not N bespoke tables). Facade API (root export
 | `RETENTION` | `{}` | replace | Per-stream raw retention in days, applied by `manage.py sweep_eventstore` |
 | `RETENTION_ROLLUP` | `{}` | replace | Per-stream rollup retention in days (raw ≠ rollup) |
 | `PARTITION_PERIOD` | `"month"` | replace | PG time-partition granularity (`month`/`day`); structural only off PostgreSQL |
+| `AUDIT_STREAMS` | `[]` | replace | Streams `manage.py audit_trail <person>` reads for one person's cross-module history; empty = discover by the `audit`/`*.audit` naming convention (a deployment that ROUTES an audit stream to another backend lists it here — discovery cannot see across backends) |
 
 `BACKEND`/`ROUTES` decide which store code runs and where a stream lands —
 generic names, so `AppSettings(no_env=…)` blocks a stray same-named env var

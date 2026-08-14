@@ -199,11 +199,20 @@ def query(
     limit: int = 100,
     time_range: tuple[datetime | None, datetime | None] | None = None,
     filters: Mapping[str, object] | None = None,
+    reverse: bool = False,
 ) -> EventPage:
-    """Read a page of *stream*. Flushes buffered writes first (read-your-writes)."""
+    """Read a page of *stream*. Flushes buffered writes first (read-your-writes).
+
+    ``reverse=True`` reads newest-first; *after* then advances into the past
+    (see :meth:`EventStore.query`)."""
     flush()
     return resolve_backend(stream).query(
-        stream, after=after, limit=limit, time_range=time_range, filters=filters
+        stream,
+        after=after,
+        limit=limit,
+        time_range=time_range,
+        filters=filters,
+        reverse=reverse,
     )
 
 
@@ -228,10 +237,20 @@ def rollup(
     )
 
 
-def purge(stream: str, *, older_than: datetime) -> int:
-    """Delete raw events of *stream* older than *older_than*; return count."""
+def purge(
+    stream: str,
+    *,
+    older_than: datetime,
+    filters: Mapping[str, object] | None = None,
+) -> int:
+    """Delete raw events of *stream* older than *older_than*; return count.
+
+    ``filters`` narrows the deletion (subject-scoped erasure — see
+    :meth:`EventStore.purge`); retention sweeps leave it unset."""
     flush()
-    return resolve_backend(stream).purge(stream, older_than=older_than)
+    return resolve_backend(stream).purge(
+        stream, older_than=older_than, filters=filters
+    )
 
 
 atexit.register(flush)
