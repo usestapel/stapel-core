@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-08-14
+
 ### Security — an environment variable can no longer choose which class the process loads
 
 **Upgrade note — behaviour change in every module built on `AppSettings`,
