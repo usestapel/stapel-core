@@ -45,6 +45,29 @@ New W-level boot check `stapel_blacklist`
 (`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
 is on, so the hatch cannot become forgotten configuration.
 
+### Security — step-up verification stops reading its policy from the environment
+
+`AppSettings` falls back to `os.environ[KEY]` for any key a namespace does not
+list in `no_env`. Every sibling namespace declares one — `access`, `netintel`,
+`gateway`, `secrets`, `security`, `media` — and `STAPEL_VERIFICATION` did not,
+while owning some of the most generic key names in the fleet:
+
+- `DEFAULT_LEVEL=opt_in` in a container's environment switched every
+  `@requires_verification(level=None)` view from mandatory to off.
+- `DEFAULT_FACTORS=<anything>` arrived as a `str`, so `list("otp_email")`
+  became single characters, `factor_registry.available_for()` returned
+  nothing, and `default_on` views passed straight through to the handler.
+- `MAX_ATTEMPTS`, `DEFAULT_MAX_AGE`, `CHALLENGE_TTL`, `EXTRA_FACTORS` and
+  `POLICY_CACHE_TTL` were equally settable by accident.
+
+All of them are now `no_env`. They still resolve from the
+`STAPEL_VERIFICATION` dict, a flat Django setting, or the default — an
+environment variable of the same name is ignored.
+
+*What can break:* a deployment that was deliberately configuring step-up
+through bare env vars (`DEFAULT_LEVEL=…`) rather than settings. Move those
+values into `STAPEL_VERIFICATION` in the settings module.
+
 ### Security — cross-service payloads are validated in production, not only in DEBUG
 
 **Upgrade note — behaviour change for every `@function` / `@on_action` with a

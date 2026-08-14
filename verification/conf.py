@@ -22,6 +22,26 @@ verification_settings = AppSettings(
         # (auth.verification.policy Function result) stays cached.
         "POLICY_CACHE_TTL": 60,
     },
+    # Every key here decides whether, and how hard, a user is challenged
+    # before a privileged action — and every name is generic enough to
+    # collide with something else in a container's environment. Without this
+    # list, `DEFAULT_LEVEL=opt_in` in the environment silently turned step-up
+    # off for every @requires_verification(level=None) view, and any
+    # `DEFAULT_FACTORS` env var arrived as a *str* (so list("...") became
+    # single characters, available_for() found nothing, and default_on views
+    # passed straight through to the handler). Values still resolve from the
+    # STAPEL_VERIFICATION dict, a flat Django setting, or the default — an
+    # env var is simply ignored. Same reason as access/, netintel/, gateway/,
+    # secrets/, security/ and media/; this namespace was the one that missed it.
+    no_env=(
+        "DEFAULT_FACTORS",
+        "DEFAULT_MAX_AGE",
+        "CHALLENGE_TTL",
+        "MAX_ATTEMPTS",
+        "EXTRA_FACTORS",
+        "DEFAULT_LEVEL",
+        "POLICY_CACHE_TTL",
+    ),
 )
 
 __all__ = ["verification_settings"]

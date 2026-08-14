@@ -371,6 +371,47 @@ def test_level_none_defers_to_settings_default(user, policy_functions):
     verification_settings.reload()
 
 
+@pytest.mark.django_db
+def test_stray_env_vars_cannot_turn_step_up_off(user, policy_functions, monkeypatch):
+    """STAPEL_VERIFICATION declared no ``no_env``, so ``AppSettings._raw``
+    fell back to ``os.environ`` for every key — and these key names are
+    generic enough to appear in a container by accident. ``DEFAULT_LEVEL``
+    from the environment switched every ``level=None`` view from mandatory to
+    off; ``DEFAULT_FACTORS`` arrived as a str, so ``list()`` produced single
+    characters, no factor was available, and ``default_on`` views passed
+    straight through to the handler. Configuration reaches this namespace
+    through settings, never through the environment."""
+    from stapel_core.verification.conf import verification_settings
+
+    class SettingsLevelView(APIView):
+        @requires_verification(scope="export", factors=["test_code"], level=None)
+        def post(self, request):
+            from rest_framework.response import Response
+
+            return Response({"ok": True})
+
+    monkeypatch.setenv("DEFAULT_LEVEL", "opt_in")
+    monkeypatch.setenv("DEFAULT_FACTORS", "otp_email")
+    monkeypatch.setenv("MAX_ATTEMPTS", "999999")
+    monkeypatch.setenv("DEFAULT_MAX_AGE", "86400")
+    monkeypatch.setenv("CHALLENGE_TTL", "86400")
+    monkeypatch.setenv("EXTRA_FACTORS", "attacker.module.Factor")
+    verification_settings.reload()
+    try:
+        assert verification_settings.DEFAULT_LEVEL == "strict"
+        assert verification_settings.DEFAULT_FACTORS == [
+            "otp_email", "totp", "passkey",
+        ]
+        assert verification_settings.MAX_ATTEMPTS == 5
+        assert verification_settings.DEFAULT_MAX_AGE == 300
+        assert verification_settings.CHALLENGE_TTL == 600
+        assert verification_settings.EXTRA_FACTORS == []
+        # The end the settings serve: the endpoint still challenges.
+        assert _call(SettingsLevelView, user).status_code == status.HTTP_403_FORBIDDEN
+    finally:
+        verification_settings.reload()
+
+
 def test_unknown_level_rejected_at_decoration_time():
     with pytest.raises(ValueError, match="unknown verification level"):
         requires_verification(scope="x", level="sometimes")
