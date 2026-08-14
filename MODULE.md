@@ -664,6 +664,13 @@ DATABASES["default"]["PASSWORD"] = get_secret("POSTGRES_PASSWORD")  # fail-close
 - **prodguard.** Guards run over the resolved value —
   `guard_secret("SECRET_KEY", get_secret("SECRET_KEY"))` — so a
   placeholder/short/empty secret is caught regardless of provider.
+- **prodguard, transport.** `guard_cookie_security(globals())` in the prod
+  settings tier refuses to boot with a cleartext session/CSRF/JWT cookie, no
+  HTTPS redirect or HSTS, or a trusted `SECURE_PROXY_SSL_HEADER` the
+  deployment never vouched for. An edge that already redirects and sends
+  HSTS says so with `STAPEL_TLS_TERMINATED_UPSTREAM = True`; one that
+  overwrites `X-Forwarded-Proto` says so with
+  `STAPEL_TRUST_PROXY_SSL_HEADER = True`.
 - System checks (W-level, `stapel_secrets`): W001 unimportable provider, W002
   not a provider. The env default never trips them.
 

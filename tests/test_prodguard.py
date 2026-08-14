@@ -11,7 +11,11 @@ all rejected; a real generated secret (SEC-6: `secrets.token_urlsafe`-style,
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
-from stapel_core.django.prodguard import guard_db_password, guard_secret
+from stapel_core.django.prodguard import (
+    guard_cookie_security,
+    guard_db_password,
+    guard_secret,
+)
 
 # A stand-in for what stapel-create-project actually writes into .env
 # (64 letters/digits — see stapel-tools create_project._random_secret).
@@ -80,3 +84,78 @@ class TestGuardDbPassword:
 
     def test_accepts_generated_password(self):
         guard_db_password("kX9mQ2vN8pL4rT6wZ1yB")
+
+
+# ---------------------------------------------------------------------------
+# guard_cookie_security — the transport the guarded SECRET_KEY's cookie rides
+# ---------------------------------------------------------------------------
+
+def _hardened(**overrides) -> dict:
+    """A prod settings namespace with every TLS flag closed."""
+    namespace = {
+        "SESSION_COOKIE_SECURE": True,
+        "CSRF_COOKIE_SECURE": True,
+        "JWT_COOKIE_SECURE": True,
+        "SECURE_SSL_REDIRECT": True,
+        "SECURE_HSTS_SECONDS": 31536000,
+    }
+    namespace.update(overrides)
+    return namespace
+
+
+class TestGuardCookieSecurity:
+    def test_accepts_a_hardened_namespace(self):
+        guard_cookie_security(_hardened())
+
+    @pytest.mark.parametrize(
+        "flag", ["SESSION_COOKIE_SECURE", "CSRF_COOKIE_SECURE", "JWT_COOKIE_SECURE"]
+    )
+    def test_rejects_each_cleartext_cookie_flag(self, flag):
+        with pytest.raises(ImproperlyConfigured, match=flag):
+            guard_cookie_security(_hardened(**{flag: False}))
+
+    def test_rejects_a_namespace_that_declares_nothing(self):
+        """The "deployed as downloaded" shape this whole module exists for."""
+        with pytest.raises(ImproperlyConfigured) as exc:
+            guard_cookie_security({})
+        message = str(exc.value)
+        for flag in ("SESSION_COOKIE_SECURE", "CSRF_COOKIE_SECURE", "JWT_COOKIE_SECURE"):
+            assert flag in message
+
+    def test_reports_every_problem_at_once(self):
+        """A guard the operator has to run four times is one they stop running."""
+        with pytest.raises(ImproperlyConfigured) as exc:
+            guard_cookie_security(
+                _hardened(SESSION_COOKIE_SECURE=False, JWT_COOKIE_SECURE=False)
+            )
+        assert "SESSION_COOKIE_SECURE" in str(exc.value)
+        assert "JWT_COOKIE_SECURE" in str(exc.value)
+
+    def test_requires_redirect_and_hsts(self):
+        with pytest.raises(ImproperlyConfigured, match="SECURE_SSL_REDIRECT"):
+            guard_cookie_security(_hardened(SECURE_SSL_REDIRECT=False))
+        with pytest.raises(ImproperlyConfigured, match="SECURE_HSTS_SECONDS"):
+            guard_cookie_security(_hardened(SECURE_HSTS_SECONDS=0))
+
+    def test_upstream_termination_is_an_explicit_statement(self):
+        """An edge that already redirects and sends HSTS is a real shape — but
+        it has to be claimed, not assumed by omission."""
+        guard_cookie_security(_hardened(
+            SECURE_SSL_REDIRECT=False,
+            SECURE_HSTS_SECONDS=0,
+            STAPEL_TLS_TERMINATED_UPSTREAM=True,
+        ))
+
+    def test_rejects_untrusted_proxy_header(self):
+        """Trusting a client-settable X-Forwarded-Proto makes every other flag
+        here decorative — the caller decides what "secure" means."""
+        with pytest.raises(ImproperlyConfigured, match="SECURE_PROXY_SSL_HEADER"):
+            guard_cookie_security(_hardened(
+                SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https"),
+            ))
+
+    def test_accepts_proxy_header_when_the_deployment_vouches_for_it(self):
+        guard_cookie_security(_hardened(
+            SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https"),
+            STAPEL_TRUST_PROXY_SSL_HEADER=True,
+        ))

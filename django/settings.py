@@ -33,6 +33,7 @@ __all__ = [
     "SECRET_KEY",
     # Proxy & SSL
     "SECURE_PROXY_SSL_HEADER",
+    "STAPEL_TRUST_PROXY_SSL_HEADER",
     # Session & CSRF
     "SESSION_ENGINE",
     "SESSION_CACHE_ALIAS",
@@ -40,6 +41,7 @@ __all__ = [
     "SESSION_COOKIE_SAMESITE",
     "SESSION_COOKIE_SECURE",
     "CSRF_USE_SESSIONS",
+    "CSRF_COOKIE_SECURE",
     "LOGIN_URL",
     "LOGOUT_REDIRECT_URL",
     # REST Framework
@@ -185,7 +187,12 @@ JWT_REFRESH_TOKEN_LIFETIME = int(os.getenv('JWT_REFRESH_TOKEN_LIFETIME', '604800
 JWT_COOKIE_NAME = os.getenv('JWT_COOKIE_NAME', 'stapel_jwt')
 JWT_REFRESH_COOKIE_NAME = os.getenv('JWT_REFRESH_COOKIE_NAME', 'stapel_refresh_jwt')
 JWT_COOKIE_DOMAIN = os.getenv('JWT_COOKIE_DOMAIN', None)  # None = host-only, set to ".domain.com" for subdomains
-JWT_COOKIE_SECURE = os.getenv('JWT_COOKIE_SECURE', 'False').lower() == 'true'  # True in production with HTTPS
+# TLS-only by default. This used to default to False, so a deployment that
+# never set the variable shipped its session cookie in cleartext on any
+# non-HTTPS hop. Local development is not the casualty it looks like: browsers
+# treat http://localhost as a trustworthy origin and accept Secure cookies
+# there. Set JWT_COOKIE_SECURE=False explicitly for the rare plain-HTTP host.
+JWT_COOKIE_SECURE = os.getenv('JWT_COOKIE_SECURE', 'True').lower() == 'true'
 JWT_COOKIE_HTTPONLY = os.getenv('JWT_COOKIE_HTTPONLY', 'True').lower() == 'true'
 JWT_COOKIE_SAMESITE = os.getenv('JWT_COOKIE_SAMESITE', 'Lax')
 JWT_AUTO_REFRESH_ENABLED = os.getenv('JWT_AUTO_REFRESH_ENABLED', 'False').lower() == 'true'
@@ -325,19 +332,35 @@ def get_default_database(
         'DISABLE_SERVER_SIDE_CURSORS': True,
     }
 
-# Trust X-Forwarded-Proto from nginx (all services run behind reverse proxy)
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# X-Forwarded-Proto is a request header: any client can send it. It is
+# trustworthy only where a reverse proxy strips the incoming value and writes
+# its own, and only the deployment knows whether that is true. This used to be
+# set unconditionally, so a service exposed directly — a debug port, a
+# misrouted ingress, a pod reachable inside the cluster — let a caller claim
+# HTTPS and turn every is_secure() check into a lie. Trust is now a statement
+# the deployment makes: STAPEL_TRUST_PROXY_SSL_HEADER=True.
+STAPEL_TRUST_PROXY_SSL_HEADER = (
+    os.getenv('STAPEL_TRUST_PROXY_SSL_HEADER', 'False').lower() == 'true'
+)
+SECURE_PROXY_SSL_HEADER = (
+    ("HTTP_X_FORWARDED_PROTO", "https") if STAPEL_TRUST_PROXY_SSL_HEADER else None
+)
 
-# Session defaults (services can override domain/secure in prod)
+# Session defaults (services can override domain in prod)
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
 SESSION_COOKIE_NAME = "stapel_sessionid"
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SECURE = False  # set True in prod
+# TLS-only by default, same reasoning as JWT_COOKIE_SECURE above: a session id
+# is a bearer credential, and "set True in prod" is a comment, not a mechanism.
+SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'True').lower() == 'true'
 
 # CSRF cookie-based (default) - works better with microservices
 # JS must call syncCsrfToken() after AJAX requests to update form tokens
 CSRF_USE_SESSIONS = False
+# Django's own default is False. A CSRF token readable on a cleartext hop is
+# a CSRF token an on-path attacker can reuse.
+CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', 'True').lower() == 'true'
 # Note: Each service should override CSRF_COOKIE_NAME in their base.py settings
 
 # Default login URLs (can override per service) — derived lazily from the

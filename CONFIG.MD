@@ -86,7 +86,10 @@ it only fills in keys this file does not know about yet. See
 | JWT_COOKIE_NAME | env | Access-token cookie name. | no | stapel_jwt |
 | JWT_REFRESH_COOKIE_NAME | env | Refresh-token cookie name. | no | stapel_refresh_jwt |
 | JWT_COOKIE_DOMAIN | env | Cookie domain; empty = host-only. | no | |
-| JWT_COOKIE_SECURE | env | Send auth cookies only over HTTPS. | no | False |
+| JWT_COOKIE_SECURE | env | Send auth cookies only over HTTPS. | no | True |
+| SESSION_COOKIE_SECURE | env | Send the session cookie only over HTTPS. | no | True |
+| CSRF_COOKIE_SECURE | env | Send the CSRF cookie only over HTTPS. | no | True |
+| STAPEL_TRUST_PROXY_SSL_HEADER | env | Believe `X-Forwarded-Proto` (only behind a proxy that overwrites it). | no | False |
 | JWT_COOKIE_SAMESITE | env | Auth cookie SameSite policy. | no | Lax |
 | SENTRY_DSN | env | Sentry DSN; empty disables Sentry. | no | |
 | SENTRY_ENVIRONMENT | env | Sentry environment tag. | no | dev |

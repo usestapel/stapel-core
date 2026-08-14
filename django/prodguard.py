@@ -125,4 +125,97 @@ def guard_db_password(password: str | None) -> None:
         )
 
 
-__all__ = ["MIN_SECRET_LENGTH", "guard_secret", "guard_db_password"]
+#: Cookie flags that carry a bearer credential and must never travel in
+#: cleartext. There is no legitimate production reason for any of these to be
+#: off, so the guard offers no escape for them.
+_TLS_ONLY_COOKIE_FLAGS = (
+    "SESSION_COOKIE_SECURE",
+    "CSRF_COOKIE_SECURE",
+    "JWT_COOKIE_SECURE",
+)
+
+
+def guard_cookie_security(namespace: dict) -> None:
+    """Refuse to boot a production tier that serves credentials over cleartext.
+
+    Same genre as :func:`guard_secret` — the "deployed as downloaded" mistake,
+    not a routine speed bump. `SECRET_KEY` was already guarded here; the
+    transport the resulting session cookie travels on was not, which made the
+    guarded half of the pair the less interesting one.
+
+    Call it from the prod settings tier, after the settings it inspects::
+
+        from stapel_core.django.prodguard import guard_cookie_security
+
+        guard_cookie_security(globals())
+
+    What it requires:
+
+    - ``SESSION_COOKIE_SECURE`` / ``CSRF_COOKIE_SECURE`` / ``JWT_COOKIE_SECURE``
+      on. These are bearer credentials; no escape hatch is offered.
+    - ``SECURE_SSL_REDIRECT`` on and ``SECURE_HSTS_SECONDS`` non-zero, so a
+      first plain-HTTP request is upgraded rather than answered. A deployment
+      whose edge already does both states that with
+      ``STAPEL_TLS_TERMINATED_UPSTREAM = True`` — the safe value is the
+      default, and the opt-out is a sentence someone had to write.
+    - ``SECURE_PROXY_SSL_HEADER`` set only where the deployment has stated it
+      is behind a proxy that overwrites the header
+      (``STAPEL_TRUST_PROXY_SSL_HEADER``). Trusting a client-settable header
+      lets a caller claim HTTPS, which makes every other check here decorative.
+
+    Raises:
+        django.core.exceptions.ImproperlyConfigured: listing *every* problem
+            found, not just the first — a boot guard the operator has to run
+            four times is a guard they will stop running.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+
+    problems: list[str] = []
+
+    for flag in _TLS_ONLY_COOKIE_FLAGS:
+        if not namespace.get(flag, False):
+            problems.append(
+                f"{flag} is off — the cookie it controls is a bearer "
+                f"credential and would be sent over plain HTTP."
+            )
+
+    if not namespace.get("STAPEL_TLS_TERMINATED_UPSTREAM", False):
+        if not namespace.get("SECURE_SSL_REDIRECT", False):
+            problems.append(
+                "SECURE_SSL_REDIRECT is off, so a plain-HTTP request is "
+                "answered instead of upgraded."
+            )
+        if not namespace.get("SECURE_HSTS_SECONDS", 0):
+            problems.append(
+                "SECURE_HSTS_SECONDS is 0, so a browser will try plain HTTP "
+                "again on the next visit."
+            )
+
+    if namespace.get("SECURE_PROXY_SSL_HEADER") and not namespace.get(
+        "STAPEL_TRUST_PROXY_SSL_HEADER", False
+    ):
+        problems.append(
+            "SECURE_PROXY_SSL_HEADER is set but STAPEL_TRUST_PROXY_SSL_HEADER "
+            "is not. X-Forwarded-Proto is a request header any client can "
+            "send; trusting it without a proxy that overwrites it lets a "
+            "caller declare its own connection secure."
+        )
+
+    if problems:
+        raise ImproperlyConfigured(
+            "Production TLS configuration is incomplete:\n  - "
+            + "\n  - ".join(problems)
+            + "\n\nSet the flags above. If TLS is terminated at an edge that "
+            "already redirects and sends HSTS, set "
+            "STAPEL_TLS_TERMINATED_UPSTREAM = True to say so explicitly. If "
+            "that edge also overwrites X-Forwarded-Proto, set "
+            "STAPEL_TRUST_PROXY_SSL_HEADER = True."
+        )
+
+
+__all__ = [
+    "MIN_SECRET_LENGTH",
+    "guard_secret",
+    "guard_db_password",
+    "guard_cookie_security",
+]

@@ -45,6 +45,65 @@ New W-level boot check `stapel_blacklist`
 (`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
 is on, so the hatch cannot become forgotten configuration.
 
+### Security — cookies are TLS-only by default, and a forwarded header is no longer believed on sight
+
+**Upgrade note — affects every service that star-imports
+`stapel_core.django.settings`.**
+
+The shipped settings served bearer credentials over cleartext by default and
+trusted a client-settable header:
+
+- `JWT_COOKIE_SECURE` defaulted to `False` (`# True in production with HTTPS`),
+  and that value propagated into every cookie write in `django/jwt/utils.py`.
+- `SESSION_COOKIE_SECURE = False  # set True in prod` — a comment is not a
+  mechanism.
+- `CSRF_COOKIE_SECURE` was never set at all, so Django's `False` applied.
+- `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")` was set
+  **unconditionally**. `X-Forwarded-Proto` is a request header: it is
+  trustworthy only where a proxy strips the incoming value and writes its own.
+  A process reachable directly — a debug port, a misrouted ingress, a pod
+  addressable inside the cluster — let any caller declare its own connection
+  secure, which makes every `is_secure()` decision the caller's to make.
+
+Now:
+
+| setting | was | is | opt-out |
+| --- | --- | --- | --- |
+| `JWT_COOKIE_SECURE` | `False` | `True` | `JWT_COOKIE_SECURE=False` |
+| `SESSION_COOKIE_SECURE` | `False` | `True` | `SESSION_COOKIE_SECURE=False` |
+| `CSRF_COOKIE_SECURE` | unset (`False`) | `True` | `CSRF_COOKIE_SECURE=False` |
+| `SECURE_PROXY_SSL_HEADER` | always trusted | `None` | `STAPEL_TRUST_PROXY_SSL_HEADER=True` |
+
+The library's own fallbacks in `django/jwt/utils.py` (`getattr(settings,
+"JWT_COOKIE_SECURE", False)`, twice) now default to `True` as well, so a
+service that configures Django by hand does not get a cleartext cookie from an
+absent setting.
+
+New `stapel_core.django.prodguard.guard_cookie_security(globals())`, in the
+genre of the existing `guard_secret` / `guard_db_password`: call it from the
+prod settings tier and it refuses to boot on a cleartext session/CSRF/JWT
+cookie, a missing HTTPS redirect or HSTS, or a `SECURE_PROXY_SSL_HEADER` the
+deployment never vouched for. It reports every problem at once. An edge that
+already redirects and sends HSTS states that with
+`STAPEL_TLS_TERMINATED_UPSTREAM = True`.
+
+*What can break:* a deployment genuinely served over plain HTTP loses its
+cookies until it sets the flags to `False` explicitly. (Local development is
+mostly unaffected: browsers treat `http://localhost` as a trustworthy origin
+and accept `Secure` cookies there.) A deployment behind a TLS-terminating
+proxy will see `request.is_secure()` return `False`, and `build_absolute_uri()`
+emit `http://` URLs, until it sets `STAPEL_TRUST_PROXY_SSL_HEADER=True` — one
+environment variable, stating a fact only the deployment knows.
+
+`SECURE_SSL_REDIRECT` and `SECURE_HSTS_SECONDS` are deliberately **not**
+flipped in the shared settings: enabling a redirect for a service whose proxy
+does not forward the protocol produces an infinite redirect loop, and HSTS is
+close to irreversible for a domain. Both are required by
+`guard_cookie_security()` instead, where a human is making a per-deployment
+decision. `SECURE_CONTENT_TYPE_NOSNIFF` and `SECURE_REFERRER_POLICY` were
+already safe by Django's own defaults (`True` / `same-origin`) and needed no
+change.
+
 ### Security — captcha no longer disables itself when its secret goes missing
 
 **Upgrade note — a deployment naming a captcha backend without a secret will

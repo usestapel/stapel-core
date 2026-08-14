@@ -61,7 +61,9 @@ def load_jwt_config_from_settings():
             settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
         ),
         "cookie_domain": getattr(settings, "JWT_COOKIE_DOMAIN", None),
-        "cookie_secure": getattr(settings, "JWT_COOKIE_SECURE", False),
+        # Default True: a service that never declared the setting still
+        # gets a TLS-only cookie. Opting out is an explicit False.
+        "cookie_secure": getattr(settings, "JWT_COOKIE_SECURE", True),
         "cookie_httponly": getattr(settings, "JWT_COOKIE_HTTPONLY", True),
         "cookie_samesite": getattr(settings, "JWT_COOKIE_SAMESITE", "Lax"),
     }
@@ -501,7 +503,8 @@ def set_jwt_cookies(response, access_token: str, refresh_token: Optional[str] = 
         settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
     )
     cookie_domain = getattr(settings, "JWT_COOKIE_DOMAIN", None)
-    cookie_secure = getattr(settings, "JWT_COOKIE_SECURE", False)
+    # Default True, matching get_jwt_config: absent setting means TLS-only.
+    cookie_secure = getattr(settings, "JWT_COOKIE_SECURE", True)
     cookie_httponly = getattr(settings, "JWT_COOKIE_HTTPONLY", True)
     cookie_samesite = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
     access_token_lifetime = getattr(settings, "JWT_ACCESS_TOKEN_LIFETIME", 3600)
