@@ -115,6 +115,30 @@ def _get_user_model():
     return get_user_model()
 
 
+def _create_users_from_token() -> bool:
+    """Whether a bearer token may create local users and rewrite their flags.
+
+    ``True`` is consumer (shadow-copy) mode: an unknown ``user_id`` is
+    materialised as a local row, and ``is_staff`` / ``is_superuser`` /
+    ``is_active`` are REPLACED from the token's claims on every request. It is
+    the right mode for a downstream service whose users genuinely live in the
+    auth service — and it means one compromised signing key, or one
+    over-broad claim, mints a local superuser.
+
+    ``False`` is authoritative mode: the local database decides who exists and
+    what they may do, and a token that names an unknown user is treated as
+    stale.
+
+    The default used to be ``True``, so a service that never thought about the
+    question got the trusting mode. It is ``False`` now: consuming an external
+    identity source is a design decision a service makes on purpose, and the
+    setting is where it says so.
+    """
+    from django.conf import settings
+
+    return bool(getattr(settings, "JWT_CREATE_USERS_FROM_TOKEN", False))
+
+
 def load_user_by_uid(uid: str) -> Optional[Dict[str, Any]]:
     """
     Load user data from database by email.
@@ -242,8 +266,6 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     The public wrapper stamps the transient ``staff_roles`` claim
     (CLAIM_ATTR) onto whatever user this returns.
     """
-    from django.conf import settings
-
     User = _get_user_model()
     pk = user_data.get("user_id")
     if not pk:
@@ -256,7 +278,7 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
 
         # Staff status sync-down (admin-suite AS-2, c.3).
         updated = False
-        create_from_jwt = getattr(settings, "JWT_CREATE_USERS_FROM_TOKEN", True)
+        create_from_jwt = _create_users_from_token()
 
         if create_from_jwt:
             # Consumer (shadow-copy) mode — REPLACE from the claim (c.3):
@@ -333,7 +355,7 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         # Check if we should create users from JWT
         # Auth service should NOT create users - if user_id not found, JWT is stale
         # Other services should create users to sync from auth service
-        create_from_jwt = getattr(settings, "JWT_CREATE_USERS_FROM_TOKEN", True)
+        create_from_jwt = _create_users_from_token()
 
         if not create_from_jwt:
             # Auth service mode: reject stale JWT, user must re-login

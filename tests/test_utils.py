@@ -237,6 +237,15 @@ class TestLoadJwtConfigFromSettings:
 
 @pytest.mark.django_db
 class TestGetOrCreateUserFromJwt:
+    @pytest.fixture(autouse=True)
+    def _consumer_mode(self, settings):
+        """Consumer (shadow-copy) mode is what this class describes: a
+        downstream service whose users live in the auth service. It stopped
+        being the default in 0.24 — a service that never made the decision
+        gets the authoritative mode now — so tests that exercise it have to
+        say which mode they mean."""
+        settings.JWT_CREATE_USERS_FROM_TOKEN = True
+
     def _data(self, **kwargs):
         uid = str(uuid.uuid4())
         data = {

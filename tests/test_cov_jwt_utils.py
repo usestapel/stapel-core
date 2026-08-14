@@ -186,6 +186,15 @@ class TestEnsureUserInStaffGroup:
 
 @pytest.mark.django_db
 class TestGetOrCreateUserFromJWT:
+    @pytest.fixture(autouse=True)
+    def _consumer_mode(self, settings):
+        """Consumer (shadow-copy) mode is what this class describes: a
+        downstream service whose users live in the auth service. It stopped
+        being the default in 0.24 — a service that never made the decision
+        gets the authoritative mode now — so tests that exercise it have to
+        say which mode they mean."""
+        settings.JWT_CREATE_USERS_FROM_TOKEN = True
+
     def _data(self, **kwargs):
         data = {
             "user_id": _uid(),
@@ -727,3 +736,63 @@ class TestResetSequences:
         from django.contrib.auth.models import Group
 
         jwt_utils.reset_sequences_for_models(Group)
+
+
+# ---------------------------------------------------------------------------
+# JWT_CREATE_USERS_FROM_TOKEN — which mode a service gets when it never chose
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestCreateUsersFromTokenDefault:
+    """The trusting mode used to be the default.
+
+    With ``JWT_CREATE_USERS_FROM_TOKEN`` unset, a token could materialise a
+    local user out of nothing and REPLACE ``is_staff`` / ``is_superuser`` /
+    ``is_active`` from its own claims on every request. One compromised
+    signing key, or one over-broad claim from an upstream that issues tokens
+    for a different audience, became a local superuser — in a service that
+    never decided to consume an external identity source at all.
+    """
+
+    def _data(self, **kwargs):
+        data = {
+            "user_id": str(uuid.uuid4()),
+            "email": "unset@example.com",
+            "username": "unsetuser",
+            "is_staff": False,
+            "is_superuser": False,
+        }
+        data.update(kwargs)
+        return data
+
+    def test_unknown_user_is_not_created_when_setting_is_absent(self):
+        User = get_user_model()
+        data = self._data(is_staff=True, is_superuser=True)
+        assert jwt_utils.get_or_create_user_from_jwt(data) is None
+        assert not User.objects.filter(pk=data["user_id"]).exists()
+
+    def test_claims_do_not_raise_privilege_when_setting_is_absent(self):
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="plain", email="plain@example.com",
+        )
+        assert user.is_staff is False
+        result = jwt_utils.get_or_create_user_from_jwt(self._data(
+            user_id=str(user.pk),
+            email="plain@example.com",
+            is_staff=True,
+            is_superuser=True,
+        ))
+        result.refresh_from_db()
+        assert result.is_staff is False
+        assert result.is_superuser is False
+
+    @override_settings(JWT_CREATE_USERS_FROM_TOKEN=True)
+    def test_consumer_mode_still_available_when_declared(self):
+        """The mode is legitimate — it just has to be asked for."""
+        User = get_user_model()
+        data = self._data(is_staff=True)
+        result = jwt_utils.get_or_create_user_from_jwt(data)
+        assert result is not None
+        assert User.objects.filter(pk=data["user_id"]).exists()
+        assert result.is_staff is True

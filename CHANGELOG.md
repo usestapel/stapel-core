@@ -45,6 +45,32 @@ New W-level boot check `stapel_blacklist`
 (`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
 is on, so the hatch cannot become forgotten configuration.
 
+### Security — a token no longer creates local users, or grants them staff, by default
+
+**Upgrade note — every downstream service that relies on JIT user creation
+must now declare it.**
+
+`JWT_CREATE_USERS_FROM_TOKEN` defaulted to `True`, so a service that never
+considered the question got the trusting mode: an unknown `user_id` was
+materialised as a local row, and `is_staff` / `is_superuser` / `is_active`
+were REPLACED from the token's claims on every request
+(`django/jwt/utils.py`). One compromised signing key, or one over-broad claim
+from an upstream issuing tokens for a different audience, became a local
+superuser — in a service that never decided to consume an external identity
+source at all.
+
+The default is now `False`: the local database decides who exists and what
+they may do, and a token naming an unknown user is treated as stale
+(the existing "authoritative user store" mode, unchanged in behaviour). Both
+read sites go through one helper, `_create_users_from_token()`, so the two
+halves of the decision cannot drift apart.
+
+*What can break:* a downstream microservice whose users genuinely live in the
+auth service will start rejecting first-time logins. Set
+`JWT_CREATE_USERS_FROM_TOKEN = True` in that service's settings — consuming an
+external identity source is a design decision, and this is where a service
+says it made one.
+
 ### Security — cookies are TLS-only by default, and a forwarded header is no longer believed on sight
 
 **Upgrade note — affects every service that star-imports
