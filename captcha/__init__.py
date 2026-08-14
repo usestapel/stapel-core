@@ -1,4 +1,5 @@
 from .backends import (
+    CaptchaConfigurationError,
     CaptchaVerifier,
     TurnstileVerifier,
     RecaptchaVerifier,
@@ -18,6 +19,7 @@ from .policy import (
 )
 
 __all__ = [
+    'CaptchaConfigurationError',
     'CaptchaVerifier',
     'TurnstileVerifier',
     'RecaptchaVerifier',

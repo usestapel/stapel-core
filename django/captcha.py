@@ -90,8 +90,11 @@ def _extract_ip(request) -> str | None:
 def get_verifier() -> 'CaptchaVerifier':  # noqa: F821
     """Build a verifier from ``STAPEL_CAPTCHA["BACKEND"/"SECRET"]``.
 
-    Returns ``NoopVerifier`` when no secret is configured, making captcha
-    effectively disabled with no extra toggle needed.
+    Returns ``NoopVerifier`` when captcha is deliberately off: no ``BACKEND``,
+    or ``BACKEND='noop'``. A named backend without a secret raises
+    ``CaptchaConfigurationError`` rather than degrading to pass-everything —
+    see that class, and the ``stapel_captcha`` boot check that catches it
+    before any request does.
     """
     from django.conf import settings
 

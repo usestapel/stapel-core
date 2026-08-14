@@ -108,10 +108,24 @@ class HcaptchaVerifier(CaptchaVerifier):
             return False
 
 
+class CaptchaConfigurationError(Exception):
+    """A captcha backend is named but cannot actually challenge anyone.
+
+    Previously ``build_verifier`` answered this shape with ``NoopVerifier``,
+    which passes every token. A rotated-away, typo'd or unmounted secret was
+    therefore indistinguishable from "captcha on", and the brute-force
+    protection on OTP request, password reset and magic link evaporated with
+    nothing to see. Naming a backend is a statement of intent; the framework
+    now refuses to quietly do the opposite of it.
+    """
+
+
 class NoopVerifier(CaptchaVerifier):
     """Always passes — for tests, development, and the disabled state.
 
-    ``build_verifier`` returns this when no secret is configured.
+    ``build_verifier`` returns this when no backend is configured (or when
+    the backend is explicitly ``'noop'``), never as a fallback for a broken
+    configuration.
     """
 
     def verify(self, token: str, ip: str | None = None, *, level: str | None = None) -> bool:
@@ -133,16 +147,29 @@ def build_verifier(backend: str, secret: str | None) -> CaptchaVerifier:
         backend: Short name (``'turnstile'``, ``'recaptcha'``, ``'hcaptcha'``,
                  ``'noop'``) or a dotted import path to a custom
                  ``CaptchaVerifier`` subclass (e.g. ``'myapp.captcha.MyVerifier'``).
-        secret:  Backend secret key.  If ``None`` or empty, returns
-                 ``NoopVerifier`` regardless of backend — captcha is effectively
-                 disabled.
+        secret:  Backend secret key. Required for every backend except
+                 ``'noop'`` (and the unconfigured state).
+
+    Returns:
+        ``NoopVerifier`` when captcha is *deliberately* off — no backend named,
+        or ``'noop'`` named explicitly. Never as a stand-in for a backend that
+        was asked for and could not be built.
 
     Raises:
+        CaptchaConfigurationError: If a real backend is named without a secret.
         ImportError: If a dotted-path backend cannot be imported.
         TypeError: If a dotted-path class does not subclass ``CaptchaVerifier``.
     """
-    if not secret:
+    if not backend or backend == 'noop':
         return NoopVerifier()
+
+    if not secret:
+        raise CaptchaConfigurationError(
+            f'captcha backend {backend!r} is configured but STAPEL_CAPTCHA'
+            '["SECRET"] is empty, so nothing can verify a token. Set the '
+            'secret, or set BACKEND to "noop" (or unset it) to turn captcha '
+            'off deliberately.'
+        )
 
     cls = _BUILTIN_BACKENDS.get(backend)
     if cls is None:

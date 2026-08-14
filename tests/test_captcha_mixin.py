@@ -54,8 +54,18 @@ class TestExtractIp:
 
 
 class TestGetVerifier:
-    def test_noop_when_secret_absent(self):
+    def test_backend_without_secret_raises(self):
+        """Used to answer NoopVerifier, i.e. captcha silently off."""
+        from stapel_core.captcha import CaptchaConfigurationError
+
         with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile"}):
+            with pytest.raises(CaptchaConfigurationError):
+                get_verifier()
+
+    def test_noop_when_no_backend_named(self):
+        with override_settings(STAPEL_CAPTCHA={}):
+            assert isinstance(get_verifier(), NoopVerifier)
+        with override_settings(STAPEL_CAPTCHA={"BACKEND": "noop"}):
             assert isinstance(get_verifier(), NoopVerifier)
 
     def test_real_backend_when_secret_set(self):
@@ -81,7 +91,7 @@ class TestCaptchaMixin:
                 ser._require_captcha_if_configured({})
 
     def test_skipped_when_disabled(self):
-        # No SECRET -> NoopVerifier -> _require is a no-op.
-        with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile"}):
+        # No backend named -> NoopVerifier -> _require is a no-op.
+        with override_settings(STAPEL_CAPTCHA={}):
             ser = _CaptchaSerializer(data={}, context={"request": None})
             assert ser._require_captcha_if_configured({}) is None

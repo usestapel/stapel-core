@@ -70,6 +70,13 @@ class CommonDjangoConfig(AppConfig):
         # for a malformed STAPEL_SERVICES env-JSON or STAPEL_ADMIN["NAV_LINKS"]
         # overlay — otherwise the nav block silently renders empty.
         from stapel_core.django import nav_checks as _nav_checks  # noqa: F401
+        # Captcha checks (stapel_core.django.captcha_checks): E-level when a
+        # backend is named but cannot be built (no secret, bad dotted path) —
+        # the shape that used to silently degrade to "pass every token" and
+        # take the brute-force floor under OTP/reset/magic-link with it.
+        from stapel_core.django import (  # noqa: F401
+            captcha_checks as _captcha_checks,
+        )
         # Adoption checks (stapel_core.django.adoption_checks): E-level when
         # the AUTH_ANONYMOUS axis is on and a view gates on a bare
         # IsAuthenticated without saying whether guests are meant to pass —

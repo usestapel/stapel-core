@@ -49,9 +49,19 @@ class _Holder(CaptchaMixin):
 
 
 def test_validate_captcha_token_noop_passthrough():
-    # no SECRET -> NoopVerifier -> token accepted untouched
-    with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile"}):
+    # no BACKEND -> NoopVerifier -> token accepted untouched
+    with override_settings(STAPEL_CAPTCHA={}):
         assert _Holder().validate_captcha_token("anything") == "anything"
+
+
+def test_validate_captcha_token_refuses_backend_without_secret():
+    """BACKEND named + SECRET missing used to be a silent pass-through — the
+    exact shape a rotated-away or unmounted secret produces."""
+    from stapel_core.captcha import CaptchaConfigurationError
+
+    with override_settings(STAPEL_CAPTCHA={"BACKEND": "turnstile"}):
+        with pytest.raises(CaptchaConfigurationError):
+            _Holder().validate_captcha_token("anything")
 
 
 def test_validate_captcha_token_success_forwards_ip():

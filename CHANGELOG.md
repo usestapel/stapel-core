@@ -45,6 +45,36 @@ New W-level boot check `stapel_blacklist`
 (`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
 is on, so the hatch cannot become forgotten configuration.
 
+### Security — captcha no longer disables itself when its secret goes missing
+
+**Upgrade note — a deployment naming a captcha backend without a secret will
+now refuse to boot.**
+
+`build_verifier(backend, secret)` returned `NoopVerifier` — which returns
+`True` for every token — whenever the secret was empty, whatever backend was
+named. Every consumer (`CaptchaMixin.validate_captcha_token`,
+`_require_captcha_if_configured`, `@captcha_protected`) reads
+`isinstance(verifier, NoopVerifier)` as "captcha is off" and waves the request
+through. So `BACKEND='turnstile'` with a rotated-away, typo'd or unmounted
+`SECRET` was indistinguishable from a healthy captcha, and the brute-force
+floor under OTP request, password reset and magic link was gone with nothing
+to notice.
+
+- `NoopVerifier` is now returned only when captcha is *deliberately* off: no
+  `BACKEND`, or `BACKEND='noop'`. It is never a fallback for a backend that
+  was asked for and could not be built.
+- A named backend with an empty secret raises the new
+  `stapel_core.captcha.CaptchaConfigurationError`.
+- New E-level boot check `stapel_captcha`
+  (`stapel_core.django.captcha_checks`): E001 for a named backend without a
+  secret, E002 for a backend that cannot be built at all (bad dotted path, not
+  a `CaptchaVerifier`). An operator meets the misconfiguration at
+  `manage.py check`, not as a 500 on somebody's password reset.
+
+*What can break:* a deployment that set `BACKEND` but never mounted `SECRET`
+and has, unknowingly, been running with captcha off. Either mount the secret
+or set `BACKEND='noop'` — the opt-out is now an explicit statement.
+
 ### Security — step-up verification stops reading its policy from the environment
 
 `AppSettings` falls back to `os.environ[KEY]` for any key a namespace does not

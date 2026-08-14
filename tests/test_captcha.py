@@ -2,6 +2,7 @@
 from unittest import TestCase, mock
 
 from stapel_core.captcha import (
+    CaptchaConfigurationError,
     HcaptchaVerifier,
     NoopVerifier,
     RecaptchaVerifier,
@@ -16,13 +17,22 @@ from stapel_core.captcha import (
 
 class BuildVerifierTests(TestCase):
 
-    def test_no_secret_returns_noop(self):
-        result = build_verifier('turnstile', None)
-        self.assertIsInstance(result, NoopVerifier)
+    def test_no_secret_raises(self):
+        # Used to return NoopVerifier, which passes every token: a named
+        # backend with a rotated-away secret was indistinguishable from a
+        # working captcha, and the brute-force floor was gone in silence.
+        with self.assertRaises(CaptchaConfigurationError):
+            build_verifier('turnstile', None)
 
-    def test_empty_secret_returns_noop(self):
-        result = build_verifier('turnstile', '')
-        self.assertIsInstance(result, NoopVerifier)
+    def test_empty_secret_raises(self):
+        with self.assertRaises(CaptchaConfigurationError):
+            build_verifier('turnstile', '')
+
+    def test_no_backend_is_deliberately_off(self):
+        # Naming no backend (or 'noop') is how a deployment says "no captcha".
+        self.assertIsInstance(build_verifier('noop', None), NoopVerifier)
+        self.assertIsInstance(build_verifier('', None), NoopVerifier)
+        self.assertIsInstance(build_verifier(None, None), NoopVerifier)
 
     def test_builtin_turnstile(self):
         result = build_verifier('turnstile', 'secret')

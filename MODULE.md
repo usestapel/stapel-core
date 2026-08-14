@@ -583,7 +583,7 @@ DRF defaults (`DEFAULT_SCHEMA_CLASS = PermissionAwareAutoSchema`,
 | Key | Default | Semantics | What it customizes |
 |---|---|---|---|
 | `BACKEND` | `None` (→ `noop`) | replace | Verifier: `turnstile` \| `recaptcha` \| `hcaptcha` \| `noop` \| dotted path to a `CaptchaVerifier` subclass |
-| `SECRET` | `None` | replace | Backend secret; empty → `NoopVerifier` (captcha disabled) |
+| `SECRET` | `None` | replace | Backend secret; **required** whenever `BACKEND` names a real verifier — a named backend without a secret raises `CaptchaConfigurationError` (boot check `stapel_captcha`), it does not silently disable captcha. Leave `BACKEND` unset (or `noop`) to disable |
 | `CHALLENGE_MATRIX` | `{}` | **merge** over `DEFAULT_CHALLENGE_MATRIX` | ip-kind → level: residential/unknown → `invisible`, datacenter/vpn → `interactive`, tor → `interactive+ratelimit` |
 | `ACTION_OVERRIDES` | `{}` | merge (per action) | `{action: {kind: level} \| "+1"}`; `"+1"` bumps one level (saturates at `block`) |
 | `CHALLENGE_POLICY` | `stapel_core.captcha.policy.MatrixChallengePolicy` | replace (dotted path) | The whole `ChallengePolicy` (`level_for(request, action) -> level`) |
