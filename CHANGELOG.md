@@ -45,6 +45,23 @@ New W-level boot check `stapel_blacklist`
 (`stapel_core.django.blacklist_checks`) reports when `STAPEL_BLACKLIST_FAIL_OPEN`
 is on, so the hatch cannot become forgotten configuration.
 
+### Security — a failed clearance check hides the nav link instead of showing it
+
+`stapel_core.django.nav._viewer_allowed` ended its clearance branch with a bare
+`except Exception: return True`, commented "mandate not engaged — degrade to
+staff". That is right for a build without `stapel_core.access`; it also caught
+a broken role source, a malformed clearance level and every other error raised
+*inside* the mandate, and answered "allowed" — any failure in the
+authorization machinery became a grant.
+
+Only `ImportError` degrades now (the mandate is genuinely absent). A failure
+while evaluating the mandate hides the link and logs a warning. An
+unrecognized `requires` value no longer falls through to "any staff member"
+either.
+
+Blast radius is nav-link visibility only — the targets carry their own
+perimeter — but the shape is the one being swept out of the codebase.
+
 ### Security — the privilege gateway's third authorization factor is on
 
 **Upgrade note — scope tokens issued without a `network` binding stop working

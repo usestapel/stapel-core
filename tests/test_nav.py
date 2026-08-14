@@ -360,3 +360,53 @@ class TestChecks:
         settings.STAPEL_ADMIN = {"NAV_LINKS": {"x": {"title": "orphan"}}}
         errors = check_nav_links()
         assert any(e.id == E002_BAD_NAV_LINKS for e in errors)
+
+
+class TestViewerAllowedFailsClosed:
+    """``_viewer_allowed`` used to end a clearance gate with a bare
+    ``except Exception: return True``.
+
+    The comment said "mandate not engaged — degrade to staff", and for a build
+    without ``stapel_core.access`` that is right. But the same clause also
+    swallowed a broken role source, a malformed clearance and any other error
+    raised *inside* the mandate, and answered "allowed" — so every failure in
+    the authorization machinery became a grant. Nav-link visibility is a small
+    blast radius; the shape is the point.
+    """
+
+    def _staff(self):
+        return _User(staff=True, superuser=False)
+
+    def test_broken_role_source_hides_the_link(self, monkeypatch):
+        def explode(user):
+            raise RuntimeError("role backend down")
+
+        monkeypatch.setattr("stapel_core.access.sources.user_roles", explode)
+        assert nav._viewer_allowed(self._staff(), "high") is False
+
+    def test_unparseable_gate_hides_the_link(self, monkeypatch):
+        monkeypatch.setattr(
+            "stapel_core.access.roles.clearance_for", lambda roles: "not-a-level"
+        )
+        assert nav._viewer_allowed(self._staff(), "high") is False
+
+    def test_unknown_requirement_is_not_a_satisfied_one(self):
+        # register_nav_link validates `requires`, but _viewer_allowed is also
+        # reachable with whatever a caller passes; an ungraspable requirement
+        # must not fall through to "any staff member".
+        assert nav._viewer_allowed(self._staff(), "quorum") is False
+        assert nav._viewer_allowed(self._staff(), "staff") is True
+
+    def test_absent_mandate_still_degrades_to_staff(self, monkeypatch):
+        """The one case the old clause was actually written for."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def no_access(name, *args, **kwargs):
+            if name.startswith("stapel_core.access"):
+                raise ImportError(f"no module named {name}")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_access)
+        assert nav._viewer_allowed(self._staff(), "high") is True

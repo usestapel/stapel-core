@@ -35,8 +35,11 @@ Rendering respects two gates:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional
+
+logger = logging.getLogger(__name__)
 
 #: Navigation sections the mechanism fixes; NAV_LINKS entries must pick one.
 SECTIONS = ("tools", "monitoring", "dashboards")
@@ -367,15 +370,37 @@ def _viewer_allowed(user, requires: str) -> bool:
             from stapel_core.access.levels import Level
             from stapel_core.access.roles import clearance_for
             from stapel_core.access.sources import user_roles
-
+        except ImportError:
+            # The mandate machinery is genuinely absent from this build, so a
+            # clearance gate has nothing to evaluate against — degrade to
+            # staff, which is what the link's own is_staff check already
+            # established. This is the ONLY case that degrades: a bare
+            # ``except Exception`` here also swallowed a broken role source or
+            # a malformed level and answered "allowed", turning any error
+            # inside the mandate into a grant.
+            return True
+        try:
             clearance = clearance_for(user_roles(user))
-            if clearance is None:
-                return False
+        except Exception:
+            logger.warning(
+                "nav: clearance lookup failed for requires=%r; hiding the link",
+                requires, exc_info=True,
+            )
+            return False
+        if clearance is None:
+            return False
+        try:
             return clearance >= Level.parse(requires, clearance_only=True)
         except Exception:
-            # Mandate not engaged (no roles configured) — degrade to staff.
-            return True
-    return True  # "staff"
+            logger.warning(
+                "nav: unparseable clearance gate %r; hiding the link", requires,
+                exc_info=True,
+            )
+            return False
+    # Only the recognized "staff" gate reaches here; anything else is a link
+    # whose requirement this build does not understand, and an ungraspable
+    # requirement is not a satisfied one.
+    return requires == "staff"
 
 
 def _prefix_url(root: str, url: str, external: bool) -> str:
