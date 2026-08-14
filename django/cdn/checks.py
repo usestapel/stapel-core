@@ -13,11 +13,18 @@ nothing catches the mismatch" finding):
   its own type) or, after the freeze was lifted, would only surface as a
   ``ValidationError`` inside ``full_clean()`` — a path plenty of DRF
   viewsets skip.
-* **E002** — *any* CDN field is declared at all, but no ``cdn.*`` comm
-  route is configured — i.e. the cdn module/service was never wired up.
-  This is the literal meettoday incident (cdn-modularity.md §0.5): a model
-  field frozen to CDN format with no CDN service behind it, caught only
-  when a user clicks "Change avatar" in production.
+* **E002** — *any* CDN field is declared at all, but ``cdn.media_exists``
+  is not reachable over this deployment's comm transport — i.e. the cdn
+  module/service was never wired up. This is the literal meettoday incident
+  (cdn-modularity.md §0.5): a model field frozen to CDN format with no CDN
+  service behind it, caught only when a user clicks "Change avatar" in
+  production.
+
+  What "reachable" means is the transport's answer, not the route table's:
+  ``FUNCTION_ROUTES`` is http-only, so reading it under NATS (where the
+  subject IS the function name) reported a correctly wired fleet as unwired.
+  ``comm.function_unreachable_reason`` asks each transport the question it
+  can actually answer.
 """
 from __future__ import annotations
 
@@ -25,6 +32,8 @@ from django.core import checks
 
 E001_TYPE_NOT_CONFIGURED = "stapel_core.cdn.E001"
 E002_CDN_ROUTE_MISSING = "stapel_core.cdn.E002"
+
+CDN_MEDIA_EXISTS = "cdn.media_exists"
 
 
 def _iter_cdn_fields():
@@ -66,35 +75,38 @@ def check_cdn_field_types_configured(app_configs=None, **kwargs):
 
 @checks.register("stapel_cdn")
 def check_cdn_module_wired(app_configs=None, **kwargs):
-    """E002 — CDN fields exist, but no ``cdn.*`` comm route is configured."""
+    """E002 — CDN fields exist, but ``cdn.media_exists`` is unreachable."""
     fields = list(_iter_cdn_fields())
     if not fields:
         return []
 
-    from stapel_core.comm.exceptions import FunctionRouteNotConfigured
-    from stapel_core.comm.functions import _route_for
+    from stapel_core.comm.functions import function_unreachable_reason
 
-    try:
-        _route_for("cdn.media_exists")
-    except FunctionRouteNotConfigured:
-        labels = sorted({f"{model._meta.label}.{field.name}" for model, field in fields})
-        return [
-            checks.Error(
-                "CdnImageField/CdnImageListField are declared (" + ", ".join(labels) +
-                "), but cdn.media_exists has no configured route — "
-                "the cdn module is not wired up, and any check/upload through "
-                "these fields will fail at runtime on every attempt.",
-                hint="Wire up stapel-cdn (a STAPEL_COMM route for "
-                     "cdn.*) or remove CdnImageField from the project's models "
-                     "in favor of a source without CDN (e.g. "
-                     "stapel_core.media / a separate source field).",
-                id=E002_CDN_ROUTE_MISSING,
-            )
-        ]
-    return []
+    reason = function_unreachable_reason(CDN_MEDIA_EXISTS)
+    if reason is None:
+        return []
+    labels = sorted({f"{model._meta.label}.{field.name}" for model, field in fields})
+    return [
+        checks.Error(
+            "CdnImageField/CdnImageListField are declared (" + ", ".join(labels) +
+            f"), but {CDN_MEDIA_EXISTS} is not reachable in this deployment "
+            f"({reason}) — the cdn module is not wired up, and any "
+            "check/upload through these fields will fail at runtime on every "
+            "attempt.",
+            hint="Wire up stapel-cdn for the transport this deployment runs — "
+                 "install it in this process (inprocess), add a "
+                 "STAPEL_COMM['FUNCTION_ROUTES'] entry for 'cdn.' (http), or "
+                 "run the cdn service's `manage.py serve_functions` (nats) — "
+                 "or remove CdnImageField from the project's models in favor "
+                 "of a source without CDN (e.g. stapel_core.media / a "
+                 "separate source field).",
+            id=E002_CDN_ROUTE_MISSING,
+        )
+    ]
 
 
 __all__ = [
+    "CDN_MEDIA_EXISTS",
     "E001_TYPE_NOT_CONFIGURED",
     "E002_CDN_ROUTE_MISSING",
     "check_cdn_field_types_configured",

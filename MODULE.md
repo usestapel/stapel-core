@@ -1141,11 +1141,34 @@ whose job is printing the diagnosis could never print it.)
 
 `BOOT_GATE_TAGS` is an explicit allowlist, not "everything registered":
 `stapel_auth_backends`, `stapel_cors`, `stapel_conf`, `stapel_comm`,
-`stapel_bus`, `stapel_config`, `stapel_captcha`. DB-touching and
+`stapel_bus`, `stapel_captcha`. DB-touching and
 URLconf-resolving checks stay in `stapel_preflight` — a boot gate that needs
 the database up is a liveness probe, not a config gate. A project with a
 hand-rolled `MIDDLEWARE` that never picked up the middleware gets
 `stapel_core.boot.W002`.
+
+`stapel_config` is deliberately absent: it resolves manifest-required keys out
+of `os.environ` alone (so a deployment whose secret arrives as
+`DJANGO_SECRET_KEY`, with a valid `settings.SECRET_KEY`, is refused) and finds
+its `CONFIG.MD` by walking up from `Path.cwd()` (so the verdict depends on the
+launch directory). It stays registered for `manage.py check` and
+`stapel_preflight`; it can rejoin once required keys are resolved against the
+settings the process actually uses and manifest discovery is explicit.
+
+### Is a comm seam wired? (`comm.function_unreachable_reason`)
+
+`function_unreachable_reason(name) -> str | None` answers "can `call(name)`
+reach this function in *this* deployment", asked of the configured transport
+branch for branch: `inprocess` needs a provider in this process, `http` needs a
+matching `FUNCTION_ROUTES` prefix **and ignores the registry** (because
+`call()` does), `nats` and a dotted-path custom transport are wired by
+construction, and anything else is a transport `call()` cannot dispatch at all.
+Any check asking "is module X wired" must go through this. Reading
+`FUNCTION_ROUTES` directly is the recurring bug it exists to end: that table is
+http-only, so under NATS — where the subject *is* the function name — it
+reported correctly wired fleets as unwired (`stapel_core.cdn.E002`, and twice
+in stapel-workspaces before that). It is never a liveness probe: settings and
+registry only, so a wired-but-down provider is still the runtime's problem.
 
 ### Walking a repo's own sources (`stapel_core.testing`)
 

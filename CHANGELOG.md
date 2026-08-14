@@ -104,7 +104,7 @@ never print it, which is a gate lying about its cause, structurally.
 
 `BOOT_GATE_TAGS` is an explicit allowlist of settings-only, DB-free tags:
 `stapel_auth_backends`, `stapel_cors`, `stapel_conf`, `stapel_comm`,
-`stapel_bus`, `stapel_config`, `stapel_captcha`. DB-touching and
+`stapel_bus`, `stapel_captcha`. DB-touching and
 URLconf-resolving checks stay in `stapel_preflight` — a boot gate that needs
 the database up is a liveness probe wearing a config gate's clothes, and would
 turn "Postgres is three seconds behind" into a fleet-wide boot failure.
@@ -127,10 +127,63 @@ softened. The compat story is sequencing, not dilution:
 3. `STAPEL_BOOT_GATES="warn"` exists for a deployment that must boot tonight,
    as a stated, W-checked choice. It is not the default and will not become one.
 
-The most likely tag to bite is `stapel_config`: it resolves CONFIG.MD-required
-keys from the **environment**, so a service whose required keys are not in the
-environment refuses to start. That is the gate working, but it is the one to
-check with preflight first.
+**`stapel_config` is deliberately NOT on the roster**, though it was while the
+roster was being drafted. Measured across twelve real deployments it is a
+no-op — `discover_manifest_path()` reads `STAPEL_CONFIG_MANIFEST` or walks up
+from `Path.cwd()` for a `CONFIG.MD`, and no fleet service ships one where that
+walk can reach it, so `config_manifest_required_keys` came back empty
+everywhere. And on the day a project does the right thing and adopts a
+scaffolded `CONFIG.MD`, the check would refuse a *correct* deployment: it
+resolves the manifest's key name out of `os.environ` alone, so a service that
+supplies its secret as `DJANGO_SECRET_KEY` — with a perfectly valid
+`settings.SECRET_KEY` — is rejected (reproduced against
+`stapel-example-minimal/CONFIG.MD`). Its verdict is also cwd-dependent: same
+image, same environment, same settings, different answer depending on the
+directory the process started in. None of that belongs in something that can
+refuse a worker. The check stays registered and is still reported by
+`manage.py check` and `stapel_preflight`; it can rejoin the roster once
+required keys are resolved against the settings the process actually uses and
+the manifest is discovered explicitly rather than by walking the cwd.
+
+### Fixed — a wiring check that asked the route table a NATS question
+
+`stapel_core.cdn.E002` ("CDN fields are declared but the cdn module is not
+wired up") decided wiring by calling `_route_for("cdn.media_exists")` — a
+read of `STAPEL_COMM["FUNCTION_ROUTES"]`, which is **http-only** by
+construction. Under the NATS transport the subject *is* the function name and
+there is no route table at all, so every correctly wired NATS deployment that
+declared a single `CdnImageField` was told its CDN was missing. This is the
+third sighting of one defect: the same reasoning was found and fixed twice in
+stapel-workspaces (E011, W001) before anyone looked back at the check they had
+both been modelled on.
+
+Survivable while `manage.py check` was the only place it fired; not survivable
+next to a boot gate. It blocks `manage.py check`, `migrate` and
+`stapel_preflight` on a healthy fleet today, and had `stapel_cdn` ever joined
+`BOOT_GATE_TAGS` it would have refused every worker in a NATS deployment.
+
+The fix is one shared answer rather than one patched caller:
+
+**`stapel_core.comm.function_unreachable_reason(name) -> str | None`** — "can
+`call(name)` actually reach this function here?", asked of the transport
+branch for branch, returning the operator-facing reason or `None`:
+
+- `inprocess` — `call()` reads the process-local registry, so a provider must
+  be registered in *this* process;
+- `http` — `call()` resolves a longest-prefix `FUNCTION_ROUTES` entry and
+  never consults the registry, so only a matching route counts. Note this is
+  **stricter** than what E002 did before, not weaker: an installed provider no
+  longer excuses a missing route, because `call()` would not use it;
+- `nats` — wired by construction; nothing at check time can or should prove the
+  provider is up, which is what the runtime timeout is for;
+- a dotted path — a custom transport does its own addressing;
+- anything else — `call()` raises `FunctionRouteNotConfigured` on every call, so
+  the seam is as unreachable as an unwired one.
+
+Never a liveness probe: it reads settings and the registry and nothing else.
+Any check in any module that asks "is module X wired" should call this instead
+of reading `FUNCTION_ROUTES`; a sweep of core found E002 to be the only other
+reader.
 
 ### Added — one tree-walk helper, so a gate stops accusing the wrong file
 

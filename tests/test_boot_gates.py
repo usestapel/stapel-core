@@ -47,26 +47,6 @@ CLEAN_CORS = {
 WITH_GATE = [MIDDLEWARE_PATH, "django.middleware.common.CommonMiddleware"]
 
 
-@pytest.fixture
-def config_keys_satisfied(monkeypatch):
-    """Give every CONFIG.MD-required key a value for the duration of a test.
-
-    ``stapel_config`` is in the roster and it resolves required keys from the
-    ENVIRONMENT, not from ``settings`` — which is correct for a deployment
-    (SECRET_KEY arrives as an env var) and means a bare test process has a
-    standing E001. Without this fixture the "a clean config boots" tests would
-    be measuring SECRET_KEY instead of the gate.
-
-    That standing finding is itself informative: of the whole roster,
-    ``stapel_config`` is the tag most likely to refuse a real worker.
-    """
-    from stapel_core.config.checks import _required_entries
-
-    for key in _required_entries():
-        monkeypatch.setenv(key, "set-for-this-test")
-    yield
-
-
 def build_wsgi_handler():
     """Exactly what ``get_wsgi_application()`` constructs under gunicorn.
 
@@ -90,7 +70,7 @@ def test_wsgi_boot_refuses_a_configuration_the_gates_reject():
 
 
 @override_settings(MIDDLEWARE=WITH_GATE, **CLEAN_CORS)
-def test_clean_configuration_boots_and_the_gate_removes_itself(config_keys_satisfied):
+def test_clean_configuration_boots_and_the_gate_removes_itself():
     """MiddlewareNotUsed: the gate runs once per worker, never per request."""
     handler = build_wsgi_handler()
     chain = repr(handler._middleware_chain) + repr(
@@ -122,7 +102,7 @@ def test_warn_mode_boots_and_logs_the_same_causes(caplog):
 
 @override_settings(MIDDLEWARE=WITH_GATE, STAPEL_BOOT_GATES="off", **BROKEN_CORS)
 def test_off_mode_does_not_even_run_the_checks(monkeypatch):
-    # No config_keys_satisfied on purpose: "off" must not consult anything.
+    # "off" must not consult anything at all.
     monkeypatch.setattr(
         "stapel_core.django.boot.run_boot_gates",
         lambda: (_ for _ in ()).throw(AssertionError("off must not run checks")),
@@ -140,7 +120,7 @@ def test_a_typo_in_the_switch_still_enforces():
 
 
 @override_settings(MIDDLEWARE=WITH_GATE, **CLEAN_CORS)
-def test_warnings_alone_never_refuse_a_worker(config_keys_satisfied):
+def test_warnings_alone_never_refuse_a_worker():
     """Only ERROR-or-worse refuses.
 
     ``stapel_conf`` is in the roster and is W-only; a boot gate that refused
@@ -175,9 +155,29 @@ def test_boot_gate_tag_roster_is_pinned():
         "stapel_conf",
         "stapel_comm",
         "stapel_bus",
-        "stapel_config",
         "stapel_captcha",
     )
+
+
+def test_cwd_dependent_and_environ_only_tags_are_not_in_the_roster():
+    """``stapel_config`` came off the roster; it must not drift back on.
+
+    It reads required keys from ``os.environ`` only (so a deployment whose
+    secret arrives as ``DJANGO_SECRET_KEY`` is refused despite a valid
+    ``settings.SECRET_KEY``) and finds its manifest by walking up from
+    ``Path.cwd()`` (so the verdict depends on the launch directory). Neither
+    property belongs in something that can refuse a worker. The check itself
+    stays registered for ``manage.py check``.
+    """
+    from django.core import checks as django_checks
+
+    assert "stapel_config" not in BOOT_GATE_TAGS
+    registered = {
+        tag
+        for check in django_checks.registry.registry.get_checks()
+        for tag in getattr(check, "tags", ())
+    }
+    assert "stapel_config" in registered
 
 
 def test_boot_gates_run_no_tag_outside_the_allowlist(monkeypatch):
@@ -247,7 +247,7 @@ def test_common_middleware_carries_the_gate_first():
     assert COMMON_MIDDLEWARE[0] == MIDDLEWARE_PATH
 
 
-def test_the_middleware_never_serves_a_request(config_keys_satisfied):
+def test_the_middleware_never_serves_a_request():
     """It is a boot gate, not a request hook; __call__ must be unreachable."""
     with override_settings(MIDDLEWARE=WITH_GATE, **CLEAN_CORS):
         from django.core.exceptions import MiddlewareNotUsed

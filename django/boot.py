@@ -58,6 +58,16 @@ logger = logging.getLogger(__name__)
 #: ``stapel_netintel``, ``stapel_secrets``, ``stapel_templates`` and
 #: ``stapel_blacklist`` are W-only, so they would never refuse a boot anyway
 #: and are better read from ``manage.py check``.
+#:
+#: ``stapel_config`` was on this roster and came off it: it resolves manifest
+#: keys out of ``os.environ`` alone, so a deployment that supplies its secret
+#: as ``DJANGO_SECRET_KEY`` and has a valid ``settings.SECRET_KEY`` is refused;
+#: and it discovers the manifest by walking up from ``Path.cwd()``, so the same
+#: image with the same environment answers differently depending on the
+#: directory the process started in. It stays registered for ``manage.py
+#: check`` / ``stapel_preflight``. It can return once required keys are
+#: resolved against the settings the process actually uses and the manifest is
+#: discovered explicitly rather than by cwd.
 BOOT_GATE_TAGS: tuple[str, ...] = (
     # E: a backend that overrides authenticate() without declaring that it
     # verifies a credential — the shape that turned a password login into
@@ -74,8 +84,6 @@ BOOT_GATE_TAGS: tuple[str, ...] = (
     "stapel_comm",
     # E: the configured bus backend's client library is not installed.
     "stapel_bus",
-    # E: a CONFIG.MD-declared required key with no value and no default.
-    "stapel_config",
     # E: a captcha backend is named but cannot be built — the shape that
     # silently degraded to "pass every token".
     "stapel_captcha",

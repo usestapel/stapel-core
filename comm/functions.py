@@ -89,6 +89,62 @@ def _custom_call(dotted: str, name: str, payload: dict, *, timeout: float | None
     return _custom_transport(name, payload, timeout=timeout)
 
 
+def function_unreachable_reason(name: str) -> str | None:
+    """Why :func:`call` cannot reach function *name* here, or None if it can.
+
+    "Is this seam wired" is a question about the transport this deployment
+    runs, and each transport addresses a function differently. This asks the
+    same question :func:`call` answers, branch for branch:
+
+    * ``inprocess`` — ``call()`` looks the name up in the process-local
+      registry, so a provider must be registered in this process;
+    * ``http`` — ``call()`` resolves a longest-prefix ``FUNCTION_ROUTES``
+      entry and ignores the registry entirely, so only a matching route makes
+      the function reachable — even in a process that also provides it;
+    * ``nats`` — the subject IS the function name and there is no route table
+      (``comm/nats.py``); a deployment whose provider runs
+      ``manage.py serve_functions`` is wired, and nothing here can (or should)
+      prove that provider is up. That is what the runtime timeout is for;
+    * a dotted path — a custom transport does its own addressing.
+
+    Anything else is a transport ``call()`` cannot dispatch at all: it raises
+    ``FunctionRouteNotConfigured`` on every call, so the seam is as
+    unreachable as an unwired one.
+
+    Never a liveness probe: it reads settings and the registry, nothing else.
+    Whether the transport's client library is importable is a separate
+    question, answered by ``stapel_preflight``'s transport-dependency check.
+    """
+    from .registry import function_registry
+
+    transport = str(comm_setting("FUNCTION_TRANSPORT", "inprocess") or "")
+    if transport == "inprocess":
+        try:
+            function_registry.get(name)
+        except FunctionNotRegistered:
+            return (
+                f"the transport is 'inprocess' and no provider for {name} is "
+                "registered in this process"
+            )
+        return None
+    if transport == "http":
+        try:
+            _route_for(name)
+        except FunctionRouteNotConfigured:
+            return (
+                "the transport is 'http' and no "
+                f"STAPEL_COMM['FUNCTION_ROUTES'] prefix matches {name}"
+            )
+        return None
+    if transport == "nats" or "." in transport:
+        return None
+    return (
+        f"STAPEL_COMM['FUNCTION_TRANSPORT'] is {transport!r}, which is not a "
+        "transport comm can dispatch on ('inprocess', 'nats', 'http', or a "
+        "dotted path to a transport callable)"
+    )
+
+
 def _route_for(name: str) -> str:
     routes: dict[str, str] = comm_setting("FUNCTION_ROUTES", {}) or {}
     best = ""

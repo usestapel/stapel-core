@@ -15,7 +15,7 @@ from stapel_core.comm import (
     subscribe_action,
 )
 from stapel_core.comm.exceptions import FunctionRouteNotConfigured
-from stapel_core.comm.functions import _route_for
+from stapel_core.comm.functions import _route_for, function_unreachable_reason
 from stapel_core.django.outbox.models import OutboxEvent
 from stapel_core.django.outbox.relay import dispatch_pending
 
@@ -78,6 +78,115 @@ def test_route_longest_prefix():
         assert _route_for("cdn.other") == "http://a"
         with pytest.raises(FunctionRouteNotConfigured):
             _route_for("billing.debit")
+
+
+# ---------------------------------------------------------------------------
+# function_unreachable_reason — "can call() reach this name here?"
+#
+# The seam question every "is module X wired" check must ask. Reading
+# FUNCTION_ROUTES instead (that table is http-only) reports a correctly wired
+# NATS fleet as unwired.
+# ---------------------------------------------------------------------------
+
+CDN_FN = "cdn.media_exists"
+
+
+def test_unreachable_reason_inprocess_with_provider():
+    register_function(CDN_FN, lambda p: {"exists": True})
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "inprocess"}):
+        assert function_unreachable_reason(CDN_FN) is None
+
+
+def test_unreachable_reason_inprocess_without_provider():
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "inprocess"}):
+        reason = function_unreachable_reason(CDN_FN)
+    assert reason is not None
+    assert "inprocess" in reason
+
+
+def test_unreachable_reason_inprocess_is_the_default_transport():
+    """No FUNCTION_TRANSPORT set at all behaves as 'inprocess', not as http."""
+    with override_settings(STAPEL_COMM={}):
+        assert function_unreachable_reason(CDN_FN) is not None
+        register_function(CDN_FN, lambda p: {"exists": True})
+        assert function_unreachable_reason(CDN_FN) is None
+
+
+def test_unreachable_reason_http_with_route():
+    with override_settings(STAPEL_COMM={
+        "FUNCTION_TRANSPORT": "http",
+        "FUNCTION_ROUTES": {"cdn.": "http://svc-cdn:8000/cdn"},
+    }):
+        assert function_unreachable_reason(CDN_FN) is None
+
+
+def test_unreachable_reason_http_without_route():
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "http"}):
+        reason = function_unreachable_reason(CDN_FN)
+    assert reason is not None
+    assert "FUNCTION_ROUTES" in reason
+
+
+def test_unreachable_reason_http_ignores_a_local_provider():
+    """Stricter, not weaker: call() never consults the registry under http.
+
+    A process that both provides the function and runs the http transport
+    still cannot call it — _call_http needs a route and there is none.
+    """
+    register_function(CDN_FN, lambda p: {"exists": True})
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "http"}):
+        assert function_unreachable_reason(CDN_FN) is not None
+        with pytest.raises(FunctionRouteNotConfigured):
+            call(CDN_FN, {"ref": "r"})
+
+
+def test_unreachable_reason_nats_needs_no_route_table():
+    """The subject IS the function name; there is no route table to consult."""
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "nats"}):
+        assert function_unreachable_reason(CDN_FN) is None
+        # ...and no provider registered in THIS process either.
+        assert CDN_FN not in function_registry.names()
+
+
+def test_unreachable_reason_custom_dotted_transport():
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "fake_rpc.echo"}):
+        assert function_unreachable_reason(CDN_FN) is None
+
+
+def test_unreachable_reason_undispatchable_transport():
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": "carrierpigeon"}):
+        reason = function_unreachable_reason(CDN_FN)
+    assert reason is not None
+    assert "FUNCTION_TRANSPORT" in reason
+
+
+def test_unreachable_reason_null_transport():
+    """An explicitly empty transport is undispatchable, not 'the default'."""
+    with override_settings(STAPEL_COMM={"FUNCTION_TRANSPORT": None}):
+        assert function_unreachable_reason(CDN_FN) is not None
+
+
+@pytest.mark.parametrize("comm_settings", [
+    {"FUNCTION_TRANSPORT": "inprocess"},
+    {"FUNCTION_TRANSPORT": "http"},
+    {"FUNCTION_TRANSPORT": "http", "FUNCTION_ROUTES": {"billing.": "http://b"}},
+    {"FUNCTION_TRANSPORT": "carrierpigeon"},
+])
+def test_unreachable_reason_agrees_with_call(comm_settings):
+    """The helper and call() answer the same question.
+
+    Restricted to configurations call() rejects (or accepts) without touching
+    the network, so the agreement is observed rather than mocked.
+    """
+    register_function(CDN_FN, lambda p: {"exists": True})
+    with override_settings(STAPEL_COMM=comm_settings):
+        reason = function_unreachable_reason(CDN_FN)
+        try:
+            call(CDN_FN, {"ref": "r"})
+            call_failed = False
+        except (FunctionNotRegistered, FunctionRouteNotConfigured):
+            call_failed = True
+    assert call_failed is (reason is not None), reason
 
 
 # ---------------------------------------------------------------------------

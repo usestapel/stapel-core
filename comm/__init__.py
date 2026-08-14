@@ -32,7 +32,10 @@ one provider per name.
 
 Transports are deployment configuration (STAPEL_COMM setting), not code:
 monolith runs both primitives in-process (no broker at all), microservices
-run Actions over the bus (Kafka/NATS) and Functions over internal HTTP.
+run Actions over the bus (Kafka/NATS) and Functions over NATS or internal
+HTTP. ``function_unreachable_reason`` answers "can call() reach this name
+here" for whichever transport is configured — never read FUNCTION_ROUTES
+directly to decide it, that table is http-only.
 See docs/module-communication.md in the stapel workspace for the design.
 """
 
@@ -56,7 +59,12 @@ from .exceptions import (
     ProjectionConfigError,
     ProjectionError,
 )
-from .functions import call, function, register_function
+from .functions import (
+    call,
+    function,
+    function_unreachable_reason,
+    register_function,
+)
 from .projections import (
     DriftReport,
     Projection,
@@ -83,6 +91,7 @@ __all__ = [
     "deliver",
     "call",
     "function",
+    "function_unreachable_reason",
     "register_function",
     "Projection",
     "projection_registry",
