@@ -524,6 +524,27 @@ So keys carry an **owner** and the canon is scoped by it:
   is therefore byte-neutral for `docs/errors.<lang>.md`, which is what makes
   the sweep safe to run across the fleet.
 
+**The two halves of the contract are gated against each other.** The registry
+export (`docs/errors.json`, instance-scoped: every code the deployment can
+emit, like schema.json) and the catalogs (ownership-scoped) are produced by
+different commands; the seam between them is where translated keys used to
+ship unreachable (gdpr) or registries declared codes no catalog carried:
+
+- every `errors.json` entry carries **`owner`** (`build_error_registry`) — the
+  package whose catalogs hold its translations, so a consumer pairs the two
+  without knowing the mount graph;
+- `generate_error_keys` runs `check_registry_catalog_pairing(entries)` before
+  writing: **E `untranslated`** (an owner ships the language but not the
+  declared code — emission refuses), **W `unshipped`** (an owner with declared
+  codes ships no catalogs in an otherwise translated instance);
+- `check_translation_catalogs` checks the reverse: **E `no_registry_export`**
+  (catalogs for owned keys, no `docs/errors.json` at the owner's top-level
+  package dir — `DOMAIN_EXPORTS["errors"]` resolves it) and **E `unexported`**
+  (a translated owned key the export does not declare). Injectable via
+  `export_resolver=` for unit tests;
+- core ships its own export (`docs/errors.json`, 41 keys), drift-gated by
+  `tests/test_error_registry_artifact.py`.
+
 `STAPEL_I18N` (`i18n/conf.py`): `LOCALES` (default `["en","ru"]`) — the single
 "project languages" knob; `STAPEL_FLOWS["DOC_LANGUAGES"]` delegates to it
 (`project_languages()`) unless a host sets it explicitly (doc languages may

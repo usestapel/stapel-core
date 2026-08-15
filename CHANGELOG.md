@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+### i18n — the two halves of the error contract can no longer drift apart
+
+One contract, two generators, two scopes: `generate_error_keys` exports the
+registry *instance-scoped* (every code the deployment can emit — correct, it
+is the API companion of schema.json), while `translate_catalogs` writes
+catalogs *ownership-scoped* (a package ships only the keys it owns — also
+correct). Nothing connected them. Measured result: stapel-auth's registry
+declared ten `error.*.gdpr.*` codes whose catalogs live in stapel-gdpr, which
+shipped no registry of its own — so a consumer pairing registries with
+catalogs rendered ten English sentences in a Russian UI, silently. Core was
+the same shape at larger scale: 41 translated keys in
+`django/translations/`, no `docs/errors.json`, reachable by no consumer.
+
+Both scopes stay. The seam is now explicit and gated from both sides:
+
+* every `errors.json` entry carries **`owner`** — the package whose
+  `translations/errors.<lang>.json` must carry the key
+  (`build_error_registry`). The registry is self-describing: a consumer finds
+  each code's catalogs without knowing the mount graph;
+* `generate_error_keys` refuses to emit a registry whose declared codes an
+  owner's shipped language does not translate
+  (`check_registry_catalog_pairing`, new): an ownership move that strips a
+  translation goes red at the next emission of every instance that mounts the
+  key. An owner that ships no catalogs at all in an otherwise translated
+  instance is a printed `unshipped` counter, not a blocker — no claimed
+  language, no contract to break;
+* `check_translation_catalogs` gains the reverse direction: a package
+  shipping catalogs for keys it owns must publish a registry export that
+  declares them — `no_registry_export` / `unexported` are E-level. The
+  export's canonical home is `<top-level package dir>/docs/errors.json`
+  (`DOMAIN_EXPORTS`), which package-data already carries in fleet wheels;
+* core now ships its own **`docs/errors.json`** (41 keys, all
+  `owner: stapel_core`), drift-gated by `tests/test_error_registry_artifact.py`
+  — downstream error-catalog compilers can drop their `registry: null`
+  special case for core.
+
+**Upgrade note:** the artifact shape grew a field, so every module's committed
+`docs/errors.json` drifts until regenerated
+(`STAPEL_REGEN_ERROR_KEYS=1 pytest tests/test_error_keys.py`, or
+`make contract` in triad repos); shape tests pinning the exact key set need
+`"owner"` added. That red is the migration, not collateral.
+
 ### Security — an authentication backend must check the secret it is handed
 
 `stapel_core.django.jwt.session.EmailAuthBackend` resolved a user by email and

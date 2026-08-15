@@ -76,6 +76,10 @@ def _check(out, **kw):
         "errors", out,
         source_texts=SOURCE, languages=["ru"],
         owners=OWNERS, owner_catalogs=_upstream,
+        # These tests pin ownership scoping; the registry-export gate has its
+        # own module (test_registry_catalog_pairing) — declare everything
+        # exported so it stays out of the frame here.
+        export_resolver=lambda owner: set(SOURCE),
         **kw,
     )
 

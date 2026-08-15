@@ -66,6 +66,46 @@ def _errors_owners() -> dict[str, str]:
     return error_owners()
 
 
+def _errors_export_codes(owner: str) -> set[str] | None:
+    """Codes *owner*'s shipped registry export declares, or None if it ships none.
+
+    The export lives at ``<top-level package dir>/docs/errors.json`` — the
+    ``generate_error_keys`` artifact, carried in the wheel by package-data.
+    ``None`` means "no export at all" (the gdpr/core failure shape: catalogs on
+    disk, registry nowhere, so no consumer can pair the two); an unreadable
+    file counts as an empty export rather than as absence, so a corrupt
+    artifact reads as "declares nothing" and every translated key goes red.
+    """
+    import json
+    import sys
+    from importlib.util import find_spec
+    from pathlib import Path
+
+    module = sys.modules.get(owner)
+    roots = list(getattr(module, "__path__", []) or [])
+    if not roots:
+        try:
+            spec = find_spec(owner)
+        except (ImportError, ValueError):
+            return None
+        roots = list(spec.submodule_search_locations or []) if spec else []
+    for root in roots:
+        path = Path(root) / "docs" / "errors.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return set()
+        if not isinstance(data, list):
+            return set()
+        return {
+            e["code"] for e in data
+            if isinstance(e, dict) and isinstance(e.get("code"), str)
+        }
+    return None
+
+
 #: domain → callable returning the canonical ``{key: source_text}`` map.
 DOMAIN_SOURCES: dict[str, Callable[[], dict[str, str]]] = {
     "errors": _errors_source,
@@ -78,6 +118,14 @@ DOMAIN_SOURCES: dict[str, Callable[[], dict[str, str]]] = {
 #: so adding ownership to one domain cannot disturb another.
 DOMAIN_OWNERS: dict[str, Callable[[], dict[str, str]]] = {
     "errors": _errors_owners,
+}
+
+#: domain → callable ``(owner) -> set of exported codes | None``. The registry
+#: export is the OTHER half of a package's i18n contract: catalogs say how a
+#: key reads, the export says the key exists. A domain without a resolver has
+#: no export artifact and the catalog gate skips the pairing check for it.
+DOMAIN_EXPORTS: dict[str, Callable[[str], "set[str] | None"]] = {
+    "errors": _errors_export_codes,
 }
 
 
@@ -97,9 +145,22 @@ def source_owners(domain: str) -> dict[str, str]:
     return resolver() if resolver else {}
 
 
+def export_codes(domain: str, owner: str) -> "set[str] | None":
+    """Codes *owner*'s registry export declares for *domain*.
+
+    ``None`` when the owner ships no export — or when the domain has no export
+    artifact at all, which callers must treat as "nothing to pair against",
+    not as a defect.
+    """
+    resolver = DOMAIN_EXPORTS.get(domain)
+    return resolver(owner) if resolver else None
+
+
 __all__ = [
+    "DOMAIN_EXPORTS",
     "DOMAIN_OWNERS",
     "DOMAIN_SOURCES",
+    "export_codes",
     "params_of",
     "source_owners",
     "source_texts",

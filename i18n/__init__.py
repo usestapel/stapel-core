@@ -47,13 +47,28 @@ from .catalogs import (
     load_catalog_file,
     module_catalog,
     owner_catalog,
+    owner_languages,
     owner_of_dir,
     resolve_catalog_dir,
     seed_origin,
 )
-from .check import CatalogIssue, check_translation_catalogs, owned_keys, summarize
+from .check import (
+    CatalogIssue,
+    check_registry_catalog_pairing,
+    check_translation_catalogs,
+    owned_keys,
+    summarize,
+)
 from .conf import i18n_settings, project_languages
-from .domains import DOMAIN_OWNERS, DOMAIN_SOURCES, params_of, source_owners, source_texts
+from .domains import (
+    DOMAIN_EXPORTS,
+    DOMAIN_OWNERS,
+    DOMAIN_SOURCES,
+    export_codes,
+    params_of,
+    source_owners,
+    source_texts,
+)
 from .translate import TranslateResult, translate_catalog
 
 __all__ = [
@@ -66,6 +81,7 @@ __all__ = [
     "CatalogDirError",
     "CatalogIssue",
     "CommDocTranslator",
+    "DOMAIN_EXPORTS",
     "DOMAIN_OWNERS",
     "DOMAIN_SOURCES",
     "DocTranslationCache",
@@ -74,9 +90,11 @@ __all__ = [
     "catalog_filename",
     "catalog_relpath",
     "catalog_search_dirs",
+    "check_registry_catalog_pairing",
     "check_translation_catalogs",
     "content_hash",
     "dump_catalog",
+    "export_codes",
     "i18n_settings",
     "is_curated",
     "is_reviewed",
@@ -86,6 +104,7 @@ __all__ = [
     "module_catalog",
     "owned_keys",
     "owner_catalog",
+    "owner_languages",
     "owner_of_dir",
     "params_of",
     "project_languages",

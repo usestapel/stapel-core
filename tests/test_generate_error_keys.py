@@ -25,7 +25,8 @@ def test_writes_sorted_valid_artifact(tmp_path):
     codes = [e["code"] for e in entries]
     assert codes == sorted(codes)
     for e in entries:
-        assert set(e) == {"code", "status", "params", "remediation", "en"}
+        assert set(e) == {"code", "status", "params", "remediation", "en", "owner"}
+        assert e["owner"] is None or isinstance(e["owner"], str)
 
 
 def test_force_imports_cross_cutting_verification_keys(tmp_path):

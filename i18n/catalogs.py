@@ -159,6 +159,33 @@ def owner_of_dir(path: Path | str) -> str | None:
     return None
 
 
+def owner_languages(owner: str, domain: str) -> set[str]:
+    """The languages *owner* ships *domain* catalogs in, over INSTALLED_APPS.
+
+    "Does the owner translate at all, and into what" — the fact the pairing
+    gate needs before it can demand a code from the owner's catalog: a package
+    that ships a language answers for every key it owns in that language,
+    while a package that ships nothing has made no translation claim to break.
+    """
+    langs: set[str] = set()
+    try:
+        pairs = _owner_app_dirs()
+    except Exception:
+        return langs
+    prefix = f"{domain}."
+    for pkg, app_dir in pairs:
+        if pkg != owner:
+            continue
+        catalog_dir = app_dir / CATALOG_DIRNAME
+        if not catalog_dir.is_dir():
+            continue
+        for path in catalog_dir.glob(f"{prefix}*.json"):
+            lang = path.name[len(prefix):-len(".json")]
+            if lang:
+                langs.add(lang)
+    return langs
+
+
 def owner_catalog(owner: str, domain: str, language: str) -> dict[str, str]:
     """Merge every catalog *owner* ships for *domain* / *language*.
 
@@ -604,6 +631,7 @@ __all__ = [
     "load_catalog_file",
     "module_catalog",
     "owner_catalog",
+    "owner_languages",
     "owner_of_dir",
     "resolve_catalog_dir",
     "seed_origin",
