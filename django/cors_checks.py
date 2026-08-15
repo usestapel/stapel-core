@@ -24,9 +24,19 @@ from __future__ import annotations
 
 from django.core import checks
 
+from stapel_core.django.check_guard import (
+    SecurityCriticalError,
+    declare_security_critical,
+)
 from stapel_core.security.cors import derive_allow_credentials  # noqa: F401
 
-E001_CREDENTIALS_WITH_ALL_ORIGINS = "stapel_core.cors.E001"
+#: The id IS its security-critical declaration, so no blanket
+#: SILENCED_SYSTEM_CHECKS line can mute it (stapel_core.django.check_guard).
+E001_CREDENTIALS_WITH_ALL_ORIGINS = declare_security_critical(
+    "stapel_core.cors.E001",
+    "allow-all origins with credentials lets any site the user visits read "
+    "authenticated responses from this service",
+)
 W002_CREDENTIALS_WITHOUT_ALLOWLIST = "stapel_core.cors.W002"
 
 
@@ -41,7 +51,7 @@ def check_cors_credentials(app_configs=None, **kwargs):
 
     errors = []
     if allow_all and credentials:
-        errors.append(checks.Error(
+        errors.append(SecurityCriticalError(
             "CORS_ALLOW_ALL_ORIGINS and CORS_ALLOW_CREDENTIALS are both on. "
             "django-cors-headers cannot answer that with a wildcard, so it "
             "reflects the caller's own Origin and marks the response "

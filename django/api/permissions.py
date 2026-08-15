@@ -4,7 +4,7 @@ Common DRF permission classes for Stapel services.
 These permissions enforce staff-only access to DRF API endpoints and Swagger documentation.
 """
 
-from rest_framework import permissions
+from rest_framework import exceptions, permissions
 
 #: Attribute a view sets to state, in its own source, what an *anonymous*
 #: (guest) session may do with it — the declaration the ``stapel_adoption``
@@ -187,4 +187,75 @@ class IsNotAnonymousUser(permissions.BasePermission):
         if getattr(request.user, 'is_anonymous', False):
             return False
         return True
+
+
+class MandateUnavailable(exceptions.APIException):
+    """503 — the mandate question could not be asked.
+
+    Not 403. "You hold no mandate" is a verdict about the user; "workspaces is
+    unreachable" is a fact about the deployment, and rendering the second as
+    the first is how a routing skew once told a workspace's own owner they
+    were Forbidden. The status separates them for the client, the logs and the
+    operator alike.
+    """
+
+    status_code = 503
+    default_detail = "Cannot verify workspace mandate right now."
+    #: Spelled out rather than imported: ``api.errors`` imports this module, so
+    #: the arrow cannot point back. ``ERR_503_MANDATE_UNAVAILABLE`` is the
+    #: registered half, and tests/test_mandate.py pins the two together.
+    default_code = "error.503.mandate_unavailable"
+
+
+class HasWorkspaceMandate(permissions.BasePermission):
+    """Requires an ACTIVE MANDATE, not merely a real account.
+
+    The third principal state, enforced. ``IsAuthenticated`` admits anyone
+    with a session; :class:`IsNotAnonymousUser` admits anyone with a real
+    account — including a registered user who belongs to no workspace at all,
+    which is precisely the guest state
+    (``stapel_workspaces.permissions.is_guest``). This class is the only one
+    of the three that asks whether the caller holds a mandate ANYWHERE.
+
+    Deliberately a new name rather than a widened ``IsNotAnonymousUser``: a
+    class that reads as "is a real user" must not quietly start meaning "holds
+    a mandate", and the confusion between those two readings is what made an
+    earlier fix miss. Both classes stay, and they mean different things.
+
+    Three answers, one refusal:
+
+    * anonymous → ``False`` (403, or 401 with an authentication class);
+    * mandate-less (guest) → ``False`` (403);
+    * mandated → ``True``;
+    * *could not ask* → raises :class:`MandateUnavailable` (503). An
+      authorization question with no answer degrades to refusal, and says so
+      honestly instead of impersonating a verdict.
+
+    Per-workspace authority is a different question with a different answer:
+    use ``stapel_core.django.workspaces.require_capability`` for "may X act in
+    workspace W". This one is the coarse door — "is this person part of any
+    organization at all" — which is what a chat operator flag, an unconditional
+    ``can()`` or a by-UUID read actually needed and never asked.
+
+    Usage::
+
+        class TaskListView(APIView):
+            permission_classes = [HasWorkspaceMandate]
+    """
+
+    #: The gate is explicit, so the adoption check has its answer already.
+    stapel_anonymous_access = ANONYMOUS_DENIED
+
+    def has_permission(self, request, view):
+        from stapel_core.django.mandate import (
+            MandateLookupUnavailable,
+            MandateState,
+            mandate_state,
+        )
+
+        try:
+            state = mandate_state(getattr(request, "user", None))
+        except MandateLookupUnavailable as exc:
+            raise MandateUnavailable() from exc
+        return state is MandateState.MANDATED
 

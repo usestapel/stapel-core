@@ -156,7 +156,19 @@ def test_boot_gate_tag_roster_is_pinned():
         "stapel_comm",
         "stapel_bus",
         "stapel_captcha",
+        "stapel_check_guard",
+        "stapel_prodguard",
     )
+
+
+def test_url_resolving_mandate_tag_is_not_in_the_roster():
+    """``stapel_mandate`` walks the URL surface — the re-entrancy trap.
+
+    Named individually, like the DB-touching tags below, so a future "the
+    mandate gate is security-critical, put it on the roster too" has to argue
+    with the reason rather than with an omission.
+    """
+    assert "stapel_mandate" not in BOOT_GATE_TAGS
 
 
 def test_cwd_dependent_and_environ_only_tags_are_not_in_the_roster():

@@ -44,6 +44,8 @@ missing secret before the guard even runs; the guard still covers the
 """
 from __future__ import annotations
 
+from stapel_core.django.check_guard import declare_security_critical
+
 MIN_SECRET_LENGTH = 50
 
 # Prefixes that mark a value as a known template placeholder rather than a
@@ -213,9 +215,187 @@ def guard_cookie_security(namespace: dict) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# System checks (tag ``stapel_prodguard``) — the guards, run without being called
+# ---------------------------------------------------------------------------
+#
+# Why the functions above were never adopted, precisely: they are *calls a
+# settings module has to make*. ``stapel-tools`` writes them into the prod tier
+# it generates (``_templates.py``, ``_minimal_templates.py``), so a project
+# scaffolded by ``stapel-create-project`` gets them — and every project that
+# was not, or that was scaffolded before the template grew them, gets nothing.
+# Nothing anywhere detects the absence: no check reads them, no gate asks for
+# them, and ``manage.py check`` cannot report an ImproperlyConfigured that a
+# settings module never raised. So a six-character SECRET_KEY boots.
+#
+# The fix is to stop requiring the memory. These checks CALL the same two
+# functions — one rule, not a second copy of it — from the check registry every
+# project already inherits by having ``stapel_core.django`` in INSTALLED_APPS,
+# and the tag rides the boot-gate roster so it reaches gunicorn, where the
+# settings-module call would have run and didn't.
+
+_PRODGUARD_SETTING = "STAPEL_PRODGUARD"
+
+#: Extra setting names to hold to :func:`guard_secret`, beyond ``SECRET_KEY``.
+#: A list of names, not values — the guard reads the resolved setting itself
+#: and nothing here ever logs or reports one.
+_PRODGUARD_SECRETS_SETTING = "STAPEL_PRODGUARD_SECRETS"
+
+AUTO, ENFORCE, OFF = "auto", "enforce", "off"
+
+#: Both ids ARE their security-critical declarations (``check_guard``): the
+#: marking travels with the constant, so no blanket SILENCED_SYSTEM_CHECKS
+#: line can mute them and no separate list can drift away from them.
+E001_WEAK_SECRET = declare_security_critical(
+    "stapel_core.prodguard.E001",
+    "a placeholder or short SECRET_KEY forges every session cookie and signed "
+    "token this service issues",
+)
+E002_WEAK_DB_PASSWORD = declare_security_critical(
+    "stapel_core.prodguard.E002",
+    "the shipped default database password is public knowledge",
+)
+W001_PRODGUARD_OFF = "stapel_core.prodguard.W001"
+
+
+def _under_test_runner() -> bool:
+    """Is this process a test run rather than a deployment?
+
+    A package's own test suite configures a short, obviously-fake SECRET_KEY
+    and no DEBUG — which is production-shaped to every signal Django exposes.
+    Enforcing there would turn every library's CI red over a value that is
+    correct for it, and a check that floods gets silenced wholesale on day one.
+    A deployed gunicorn worker does not import pytest.
+    """
+    import sys
+
+    return "pytest" in sys.modules or sys.argv[1:2] == ["test"]
+
+
+def prodguard_mode() -> str:
+    """``"enforce"`` | ``"off"``, after resolving :data:`_PRODGUARD_SETTING`.
+
+    ``"auto"`` (the default) enforces in any process that is not running with
+    ``DEBUG`` on and is not a test run — i.e. every real deployment, with no
+    settings edit and nothing for a product to remember. An unreadable value
+    means ``auto``: a typo in the switch must not silently disable the guard.
+    """
+    from django.conf import settings
+
+    raw = str(getattr(settings, _PRODGUARD_SETTING, AUTO) or AUTO).strip().lower()
+    if raw in (ENFORCE, OFF):
+        return raw
+    if getattr(settings, "DEBUG", False):
+        return OFF
+    if _under_test_runner():
+        return OFF
+    return ENFORCE
+
+
+def _guarded_secret_names() -> list[str]:
+    from django.conf import settings
+
+    extra = getattr(settings, _PRODGUARD_SECRETS_SETTING, None) or ()
+    names = ["SECRET_KEY"]
+    if isinstance(extra, (list, tuple, set)):
+        names.extend(str(name) for name in extra if str(name) != "SECRET_KEY")
+    return names
+
+
+def _default_db_wants_a_password() -> bool:
+    """Only engines that authenticate with one. SQLite has no password."""
+    from django.conf import settings
+
+    default = (getattr(settings, "DATABASES", None) or {}).get("default") or {}
+    engine = str(default.get("ENGINE", ""))
+    return bool(engine) and "sqlite" not in engine
+
+
+def check_production_secrets(app_configs=None, **kwargs):
+    """E001/E002/W001 — run the prod guards from the check registry.
+
+    Findings carry the guard's own message verbatim; none of them carries a
+    value. ``guard_secret`` reports "empty or a known placeholder" or a length,
+    which is everything an operator needs and nothing an attacker does.
+    """
+    from django.conf import settings
+    from django.core import checks
+    from django.core.exceptions import ImproperlyConfigured
+
+    from stapel_core.django.check_guard import SecurityCriticalError
+
+    mode = prodguard_mode()
+    if mode == OFF:
+        if str(getattr(settings, _PRODGUARD_SETTING, AUTO)).strip().lower() != OFF:
+            return []
+        return [checks.Warning(
+            f"{_PRODGUARD_SETTING}='off': the production secret guards do not "
+            f"run in this deployment. A placeholder or six-character "
+            f"SECRET_KEY boots without complaint.",
+            hint=f"Remove {_PRODGUARD_SETTING} (or set it to 'auto', the "
+                 f"default) once the values are real. Turning a gate down is "
+                 f"a legitimate stance; leaving it down silently is not, which "
+                 f"is why this reports itself at every boot.",
+            id=W001_PRODGUARD_OFF,
+        )]
+
+    findings = []
+    for name in _guarded_secret_names():
+        try:
+            guard_secret(name, getattr(settings, name, None))
+        except ImproperlyConfigured as exc:
+            findings.append(SecurityCriticalError(
+                str(exc),
+                hint="Generate a real value into the environment. "
+                     "stapel-create-project writes one; "
+                     "`python -c \"import secrets; print(secrets.token_urlsafe(48))\"` "
+                     "is the manual equivalent.",
+                id=E001_WEAK_SECRET,
+            ))
+
+    if _default_db_wants_a_password():
+        password = (
+            (getattr(settings, "DATABASES", None) or {}).get("default") or {}
+        ).get("PASSWORD")
+        try:
+            guard_db_password(password)
+        except ImproperlyConfigured as exc:
+            findings.append(SecurityCriticalError(
+                str(exc),
+                hint="Set POSTGRES_PASSWORD (or the DATABASES['default'] "
+                     "PASSWORD this deployment builds from it) to a generated "
+                     "value. The library default exists for local Docker "
+                     "Compose, which is not reachable from a network.",
+                id=E002_WEAK_DB_PASSWORD,
+            ))
+    return findings
+
+
+def register_checks() -> None:
+    """Register :func:`check_production_secrets` under ``stapel_prodguard``.
+
+    A function, not an import-time decorator: ``stapel-tools`` imports this
+    module to read ``_PLACEHOLDER_PREFIXES`` and a prod settings tier imports
+    it to call the guards, and neither should acquire a registered check as a
+    side effect. ``CommonDjangoConfig.ready()`` calls this.
+    """
+    from django.core import checks
+
+    checks.register("stapel_prodguard")(check_production_secrets)
+
+
 __all__ = [
+    "AUTO",
+    "ENFORCE",
+    "E001_WEAK_SECRET",
+    "E002_WEAK_DB_PASSWORD",
     "MIN_SECRET_LENGTH",
+    "OFF",
+    "W001_PRODGUARD_OFF",
+    "check_production_secrets",
     "guard_secret",
     "guard_db_password",
     "guard_cookie_security",
+    "prodguard_mode",
+    "register_checks",
 ]

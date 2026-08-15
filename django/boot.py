@@ -87,7 +87,22 @@ BOOT_GATE_TAGS: tuple[str, ...] = (
     # E: a captcha backend is named but cannot be built — the shape that
     # silently degraded to "pass every token".
     "stapel_captcha",
+    # E: a blanket SILENCED_SYSTEM_CHECKS line mutes a security-critical
+    # check. Settings-only, and it belongs here more than anywhere: the whole
+    # point is that the silencing route must not be the quiet one.
+    "stapel_check_guard",
+    # E: a placeholder or short SECRET_KEY, or the shipped default database
+    # password. Settings-only. This is the tag that closes prodguard's
+    # adoption gap — under gunicorn nothing else runs the guards, which is
+    # exactly where a settings module that forgot to call them is deployed.
+    "stapel_prodguard",
 )
+
+# Deliberately NOT on the roster, with the reason: `stapel_mandate` resolves
+# the URLconf to find the views that gate on a mandate, and loading the URLconf
+# from inside `load_middleware()` is the re-entrancy trap this list already
+# excludes `stapel_mounts`/`stapel_nav` for. `stapel_preflight` lifts it into
+# the deploy gate instead.
 
 #: ``"enforce"`` (default) | ``"warn"`` | ``"off"``.
 BOOT_GATES_SETTING = "STAPEL_BOOT_GATES"

@@ -39,5 +39,6 @@
   "error.423.verification_locked": "Demasiados intentos fallidos — verificación bloqueada",
   "error.429.rate_limit": "Demasiados intentos. Inténtalo de nuevo en {retry_after_minutes} minutos.",
   "error.429.too_many_requests": "Demasiadas solicitudes. Inténtalo de nuevo más tarde.",
-  "error.500.internal": "Algo salió mal"
+  "error.500.internal": "Algo salió mal",
+  "error.503.mandate_unavailable": "No se puede verificar el mandato del espacio de trabajo"
 }

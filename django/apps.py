@@ -118,6 +118,33 @@ class CommonDjangoConfig(AppConfig):
         # no cdn.* comm route is wired at all — the "half the stack is
         # modular, half isn't" design gap (cdn-modularity.md §0.1/§0.5).
         from stapel_core.django.cdn import checks as _cdn_checks  # noqa: F401
+        # Check-silencing guard (stapel_core.django.check_guard): E-level when
+        # a blanket SILENCED_SYSTEM_CHECKS line mutes a check a library
+        # declares security-critical, W-level listing everything else it
+        # mutes. Nothing in the fleet read that setting before this.
+        from stapel_core.django import check_guard as _check_guard  # noqa: F401
+        # Production secret guards as checks (stapel_core.django.prodguard):
+        # E-level for a placeholder/short SECRET_KEY or the shipped database
+        # password. The guards existed for years as functions a settings
+        # module had to call; registering them here is what makes adoption
+        # stop being something each product must remember.
+        from stapel_core.django.prodguard import (
+            register_checks as _register_prodguard_checks,
+        )
+        _register_prodguard_checks()
+        # Mandate seam (stapel_core.django.mandate): E-level when a view gates
+        # on HasWorkspaceMandate and this deployment can ask nobody whether a
+        # user holds one — such a view answers 503 for every request, and the
+        # deploy gate is a better place to find that out than production.
+        from stapel_core.django.mandate import (
+            register_checks as _register_mandate_checks,
+            subscribe_mandate_invalidation,
+        )
+        _register_mandate_checks()
+        # Revocation must reach the mandate cache: the workspaces Actions that
+        # take a mandate away drop the cached answer as they arrive, so the
+        # TTL bounds a bus failure rather than the normal path.
+        subscribe_mandate_invalidation()
         # Boot-gate checks (stapel_core.django.boot): W-level when the gate is
         # not enforcing, and W-level when a hand-rolled MIDDLEWARE never
         # picked up BootGateMiddleware — the second one is the only way a

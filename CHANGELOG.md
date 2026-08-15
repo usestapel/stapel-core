@@ -1,5 +1,146 @@
 # Changelog
 
+## [0.27.0] — 2026-08-15
+
+Three mechanisms that existed and reached nobody. A predicate with no
+consumers, a setting nothing read, and a guard nothing called.
+
+### The third principal state
+
+The fleet's authorization vocabulary has two words — anonymous and
+authenticated — and views treat the second as sufficient. It is not. A
+registered account with no accepted, unsuspended membership in any workspace
+is neither: it is a **guest**, and stapel-workspaces has said so since the
+mandate-model vardict (`permissions.is_guest` / `has_active_mandate`). That
+predicate had **zero consumers outside its own package**, and in a split
+deployment no sibling could reach it: the workspaces comm surface publishes
+`check_membership` and `check_capability`, both workspace-scoped, and neither
+answers "does this user hold a mandate anywhere".
+
+`stapel_core.django.mandate` is that missing word. `MandateState` has three
+values — `ANONYMOUS`, `GUEST`, `MANDATED` — and a fourth outcome that is not
+one of them: `MandateLookupUnavailable`, for a question that could not be
+asked. A failed lookup is never reported as `GUEST`. `HasWorkspaceMandate`
+(`django.api.permissions`) is the DRF gate: three answers, and a 503
+(`error.503.mandate_unavailable`) where a caller might have expected a 403,
+because an unanswerable authorization question degrades to refusal, not to a
+verdict about the user.
+
+**`IsNotAnonymousUser` is untouched and still means what it says.** Widening
+it was the option not taken: a class that reads as "is a real user" must not
+quietly start meaning "holds a mandate", and that exact confusion is why an
+earlier fix missed. The two classes stay two, and the surface index now says
+so (`instead_of` names the older one).
+
+The question travels over the comm Function `workspaces.check_mandate` —
+reachability decided by `function_unreachable_reason`, so it is right for
+every transport — and falls back to the in-process predicate when
+`stapel_workspaces` happens to be installed, which is what lets a monolith use
+this today. **The provider half belongs in stapel-workspaces** and is not in
+this release; `MANDATE_SCHEMA` / `MANDATE_RESULT_KEY` are the contract it
+implements.
+
+A deployment wired for neither refuses loudly: every mandated view answers
+503, `stapel_core.mandate.E001` names the views and the missing wiring at
+`manage.py check` / `stapel_preflight`, and the finding is security-critical
+so no blanket line mutes it. Not on the boot-gate roster — it resolves the
+URLconf, the re-entrancy trap that list already excludes `stapel_mounts` for.
+
+**Cache:** answers are cached per user for `STAPEL_MANDATE_CACHE_SECONDS`
+(default 30, `0` disables). Invalidation is not a TTL alone:
+`workspace.member_removed` and `workspace.member_suspended` drop the entry as
+they arrive, wired from `CommonDjangoConfig.ready()`. The TTL bounds the bus
+failing, not the normal path. Grants may lag by up to the TTL (that direction
+fails toward refusal); a non-answer is never cached at all.
+
+### `SILENCED_SYSTEM_CHECKS` becomes visible
+
+Nothing in the fleet read it. stapel-core, stapel-auth, stapel-workspaces and
+stapel-tools name it only in check hints ("silence with SILENCED_SYSTEM_CHECKS
+if ..."), so any project could mute any library's security check with one line
+and leave no signal for an operator, a reviewer or a gate.
+
+`stapel_core.django.check_guard` reports what is being silenced (W001) and
+refuses the blanket route for checks a library declares security-critical
+(E001). Two halves, and neither can drift from the other:
+
+* **the marking lives with the check** — `declare_security_critical(id, why)`
+  returns the id, so the module constant *is* the declaration;
+* **the finding refuses to go quiet** — `SecurityCriticalError` /
+  `SecurityCriticalWarning` override `is_silenced()`, so
+  `SILENCED_SYSTEM_CHECKS` does not apply to them.
+
+The route out is per-check, explicit and greppable, and carries a reason:
+
+```python
+STAPEL_SECURITY_CHECK_WAIVERS = {"stapel_auth.E004": "why this deployment is different"}
+```
+
+A waiver reports itself at every boot with its reason (W002); a blank reason
+waives nothing (E002); a waiver for a non-critical id says so (W003).
+
+**Breaking, on purpose:** four of core's own checks are now marked, so a
+deployment silencing any of them by the blanket route goes red —
+`stapel_core.cors.E001` (allow-all origins with credentials),
+`stapel_core.auth_backends.E003` (a backend that resolves a principal without
+checking a secret), `stapel_core.blacklist.W001` (the revocation fail-open
+hatch), plus the new `stapel_core.mandate.E001`.
+
+### `guard_secret` stops being a call somebody has to remember
+
+`django/prodguard.py` has shipped `guard_secret` (placeholder prefixes,
+`MIN_SECRET_LENGTH = 50`) and `guard_db_password` since 0.8.1, imported by
+exactly one thing: the prod settings tier stapel-tools *generates*. A project
+not scaffolded by `stapel-create-project`, or scaffolded before the template
+grew the call, gets nothing — and nothing detects the absence, because
+`manage.py check` cannot report an `ImproperlyConfigured` a settings module
+never raised. That is how a six-character `SECRET_KEY` boots production.
+
+The same two functions now run from the check registry every project already
+inherits (`stapel_core.django` in `INSTALLED_APPS`), on the boot-gate roster
+so they reach gunicorn, where the settings-module call would have run and
+didn't. The check *calls* the guards rather than restating their rules. No
+finding ever carries a value.
+
+`STAPEL_PRODGUARD` is `"auto"` (default) | `"enforce"` | `"off"`. Auto
+enforces in any process that is neither `DEBUG` nor a test run — a library's
+own suite configures a short fake `SECRET_KEY` and no `DEBUG`, and a check
+that turns every repo's CI red is a check that gets silenced wholesale on day
+one. `"off"` reports itself (W001); an unreadable value means auto, never off.
+`STAPEL_PRODGUARD_SECRETS` names further settings to hold to `guard_secret`.
+The database password is only asked for where the engine has one.
+
+### Added
+
+- `stapel_core.django.mandate`: `MandateState`, `mandate_state`,
+  `has_mandate`, `MandateLookupUnavailable`, `mandate_seam_unreachable_reason`,
+  `invalidate_mandate_cache`, `subscribe_mandate_invalidation`,
+  `MANDATE_FUNCTION` / `MANDATE_SCHEMA` / `MANDATE_RESULT_KEY`.
+- `django.api.permissions.HasWorkspaceMandate`, `MandateUnavailable`.
+- `stapel_core.django.check_guard`: `declare_security_critical`,
+  `SecurityCriticalError`, `SecurityCriticalWarning`, `security_critical_ids`,
+  `waivers`, `STAPEL_SECURITY_CHECK_WAIVERS`.
+- `django.prodguard.check_production_secrets`, `prodguard_mode`.
+- `error.503.mandate_unavailable` (+ ru/es catalogs).
+- Boot-gate roster: `stapel_check_guard`, `stapel_prodguard`.
+
+### Upgrade
+
+Two of these can refuse a worker, which is what a minor bump is for. Before
+deploying, run `manage.py check` (or `manage.py stapel_preflight`) on each
+service and read the findings:
+
+1. `stapel_core.prodguard.E001`/`E002` — a placeholder, empty or under-50
+   character `SECRET_KEY`, or the shipped database password. This is a real
+   finding about a real deployment; fix the value. `STAPEL_PRODGUARD="off"`
+   exists for a staged rollout and reports itself every boot.
+2. `stapel_core.check_guard.E001` — a `SILENCED_SYSTEM_CHECKS` entry that is
+   now security-critical. Either drop the silencing and fix the finding, or
+   move the id to `STAPEL_SECURITY_CHECK_WAIVERS` with a reason.
+
+Nothing else changes behaviour: `HasWorkspaceMandate` is opt-in per view, and
+`stapel_core.mandate.E001` is silent until a view uses it.
+
 ## [0.26.0] — 2026-08-15
 
 The error registry and the error catalogs are two halves of one contract, and

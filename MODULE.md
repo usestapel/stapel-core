@@ -739,8 +739,66 @@ DATABASES["default"]["PASSWORD"] = get_secret("POSTGRES_PASSWORD")  # fail-close
   HSTS says so with `STAPEL_TLS_TERMINATED_UPSTREAM = True`; one that
   overwrites `X-Forwarded-Proto` says so with
   `STAPEL_TRUST_PROXY_SSL_HEADER = True`.
+- **prodguard, automatic.** The two functions above are also a system check
+  (`stapel_prodguard`, E001/E002), registered from `CommonDjangoConfig.ready()`
+  and on the boot-gate roster. They were opt-in for years — imported only by
+  the prod tier stapel-tools GENERATES, so a project scaffolded elsewhere (or
+  before the template grew the call) had no guard and no way to notice, which
+  is how a six-character `SECRET_KEY` boots. The check CALLS the guards; it
+  does not restate them, and no finding carries a value. `STAPEL_PRODGUARD` =
+  `auto` (default: enforce unless `DEBUG` or a test run) | `enforce` | `off`
+  (W001, reported at every boot). `STAPEL_PRODGUARD_SECRETS` adds settings
+  names; the DB password is asked for only where the engine has one.
 - System checks (W-level, `stapel_secrets`): W001 unimportable provider, W002
   not a provider. The env default never trips them.
+
+### The third principal state — `django/mandate.py`
+
+Anonymous / **guest** / mandated, as three distinguishable answers plus a
+fourth outcome that is not an answer. A registered account with no active
+membership anywhere is not "authenticated enough": it is stapel-workspaces'
+guest (`permissions.is_guest`), a predicate that had zero consumers outside
+that package and that no sibling could reach in a split deployment — the
+workspaces comm surface publishes only workspace-scoped questions.
+
+| Name | What it is |
+|---|---|
+| `MandateState` | `ANONYMOUS` / `GUEST` / `MANDATED` — a `str` enum |
+| `mandate_state(user)` / `has_mandate(user)` | The predicate. Raises `MandateLookupUnavailable` rather than answering `GUEST` for a question it could not ask |
+| `HasWorkspaceMandate` (`api.permissions`) | The DRF gate. Mandated → allow; anonymous/guest → 403; could-not-ask → `MandateUnavailable`, 503 `error.503.mandate_unavailable` |
+| `MANDATE_FUNCTION` = `workspaces.check_mandate` | The seam. `MANDATE_SCHEMA` / `MANDATE_RESULT_KEY` are the contract the **stapel-workspaces** provider implements — it reads workspace tables, so it belongs there, not here |
+| `mandate_seam_unreachable_reason()` | Settings-and-registry only, never a liveness probe. `None` when this deployment can ask |
+| `stapel_core.mandate.E001` | Security-critical Error: views gate on a mandate and nothing here can answer. Not a boot gate (it resolves the URLconf); `stapel_preflight` lifts it |
+
+`IsNotAnonymousUser` is unchanged and still means "a real account" — widening
+it was the option not taken, because a name that reads as "is a real user"
+must not quietly start meaning "holds a mandate".
+
+Resolution order: the comm Function when `function_unreachable_reason` says it
+is reachable, then the in-process `stapel_workspaces` predicate (the monolith
+path, which is what makes this usable before the provider ships), then a loud
+refusal. Never an admission.
+
+**Cache.** Per user, `STAPEL_MANDATE_CACHE_SECONDS` (default 30, `0`
+disables). `workspace.member_removed` / `workspace.member_suspended` drop the
+entry as they arrive (subscribed from `ready()`), so the TTL bounds the bus
+failing rather than the normal path. A grant may lag by up to the TTL — that
+direction fails toward refusal. A non-answer is never cached.
+
+### Silenced checks — `django/check_guard.py`
+
+`SILENCED_SYSTEM_CHECKS` was a blanket line nothing in the fleet read: any
+project could mute any library's security check with no signal to anybody.
+
+| Name | What it is |
+|---|---|
+| `declare_security_critical(id, why)` | Returns the id, so the module constant IS the declaration — the marking lives with the check and cannot drift into a separate list |
+| `SecurityCriticalError` / `SecurityCriticalWarning` | Override `is_silenced()`: the blanket setting does not apply to them |
+| `STAPEL_SECURITY_CHECK_WAIVERS` | `{id: reason}`. The only route to quiet — per check, greppable, with a written reason, reported at every boot (W002). A blank reason waives nothing (E002); a waiver for a non-critical id is reported (W003) |
+| `stapel_check_guard` | E001 a critical id silenced by the blanket route; W001 lists everything else that is muted |
+
+Core marks its own: `cors.E001`, `auth_backends.E003`, `blacklist.W001`,
+`mandate.E001`, `prodguard.E001`/`E002`.
 
 ### NetIntel providers — `STAPEL_NETINTEL` (`netintel/`)
 

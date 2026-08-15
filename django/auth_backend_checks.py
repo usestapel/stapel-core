@@ -35,9 +35,19 @@ from __future__ import annotations
 from django.contrib.auth.backends import BaseBackend
 from django.core import checks
 
+from stapel_core.django.check_guard import (
+    SecurityCriticalError,
+    declare_security_critical,
+)
+
 E001_BACKEND_UNIMPORTABLE = "stapel_core.auth_backends.E001"
 E002_UNDECLARED_CREDENTIAL_HANDLING = "stapel_core.auth_backends.E002"
-E003_DOES_NOT_VERIFY_CREDENTIALS = "stapel_core.auth_backends.E003"
+#: The id IS its security-critical declaration (stapel_core.django.check_guard).
+E003_DOES_NOT_VERIFY_CREDENTIALS = declare_security_critical(
+    "stapel_core.auth_backends.E003",
+    "a backend that resolves a principal without checking a secret turns "
+    "password login into 'any nonempty string'",
+)
 E004_AUTHORIZATION_ONLY_OVERRIDES_AUTHENTICATE = "stapel_core.auth_backends.E004"
 
 
@@ -136,7 +146,7 @@ def check_authentication_backends(app_configs=None, **kwargs):
         if declared is True:
             continue
         if declared is False:
-            errors.append(checks.Error(
+            errors.append(SecurityCriticalError(
                 f"AUTHENTICATION_BACKENDS entry {path!r} declares "
                 "verifies_credentials = False, so django.contrib.auth."
                 "authenticate() would accept any password it is given for a "

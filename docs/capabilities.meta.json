@@ -99,6 +99,13 @@
         "rest_framework.permissions.IsAuthenticated"
       ]
     },
+    "HasWorkspaceMandate": {
+      "intent": "The gate for the THIRD principal state: passes only a caller who holds an active mandate (an accepted, unsuspended workspace membership) somewhere. IsAuthenticated admits any session and IsNotAnonymousUser admits any real account — including a registered user who belongs to no workspace at all, which is exactly stapel-workspaces' guest. Reach for it wherever a view meant 'is this person part of an organization' and settled for 'is this person logged in'. A lookup that cannot be answered raises 503, never a 403: an unanswerable authorization question degrades to refusal, not to a verdict about the user.",
+      "instead_of": [
+        "rest_framework.permissions.IsAuthenticated",
+        "stapel_core.django.api.permissions.IsNotAnonymousUser"
+      ]
+    },
     "IsStaffUser": {
       "intent": "Staff-or-superuser gate — the one to put on the browsable API, Swagger and any back-office endpoint; also the intended DEFAULT_PERMISSION_CLASSES for a service whose API is internal."
     },

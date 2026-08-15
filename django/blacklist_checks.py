@@ -19,7 +19,19 @@ from __future__ import annotations
 
 from django.core import checks
 
-W001_BLACKLIST_FAIL_OPEN = "stapel_core.blacklist.W001"
+from stapel_core.django.check_guard import (
+    SecurityCriticalWarning,
+    declare_security_critical,
+)
+
+#: Security-critical although it is only a Warning: the whole value of
+#: this finding is that a stated escape hatch stays visible, and a blanket
+#: silencing line is exactly how it stops being.
+W001_BLACKLIST_FAIL_OPEN = declare_security_critical(
+    "stapel_core.blacklist.W001",
+    "with the hatch open, revoked tokens and banned users are accepted "
+    "whenever the store is unreachable",
+)
 W002_BLACKLIST_LOCMEM = "stapel_core.blacklist.W002"
 
 #: The one cache backend that cannot hold a fleet-wide revocation.
@@ -33,7 +45,7 @@ def check_blacklist_fail_open(app_configs=None, **kwargs):
     if not getattr(settings, "STAPEL_BLACKLIST_FAIL_OPEN", False):
         return []
 
-    return [checks.Warning(
+    return [SecurityCriticalWarning(
         "STAPEL_BLACKLIST_FAIL_OPEN is on: when the blacklist store is "
         "unreachable, revoked tokens and banned users are accepted instead "
         "of rejected. Ban and force-logout are advisory in this deployment.",

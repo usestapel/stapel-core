@@ -123,8 +123,8 @@ def test_every_surface_entry_is_explained_and_typed(emitted):
         assert entry["path"], entry
 
 
-def test_the_six_permission_classes_are_indexed(emitted):
-    """`IsNotAnonymousUser` and its five neighbours were indexed NOWHERE — not
+def test_the_permission_classes_are_indexed(emitted):
+    """`IsNotAnonymousUser` and its neighbours were indexed NOWHERE — not
     in JSON, not in YAML, not even in prose — which is how a product ended up
     writing its own gate next to a ready one."""
     names = {e["name"] for e in emitted["surface"] if e["kind"] == "permission_class"}
@@ -135,7 +135,23 @@ def test_the_six_permission_classes_are_indexed(emitted):
         "ReadOnlyOrStaff",
         "IsServiceRequest",
         "IsNotAnonymousUser",
+        "HasWorkspaceMandate",
     }
+
+
+def test_the_three_principal_states_are_three_distinct_gates(emitted):
+    """The index must not let the third state hide behind the second.
+
+    `IsNotAnonymousUser` and `HasWorkspaceMandate` answer different questions
+    — "is this a real account" and "does this account hold a mandate" — and a
+    reader picking a gate off this list has to be able to see that. So the
+    newer one declares the older one among the things it displaces.
+    """
+    entry = next(e for e in emitted["surface"] if e["name"] == "HasWorkspaceMandate")
+    assert (
+        "stapel_core.django.api.permissions.IsNotAnonymousUser"
+        in entry["instead_of"]
+    )
 
 
 def test_is_not_anonymous_user_declares_what_it_displaces():

@@ -44,6 +44,7 @@ ERR_400_EXPECTED_LIST = "error.400.expected_list"
 ERR_400_INVALID_AD_ID = "error.400.invalid_ad_id"
 ERR_404_AD_NOT_FOUND = "error.404.ad_not_found"
 ERR_500_INTERNAL = "error.500.internal"
+ERR_503_MANDATE_UNAVAILABLE = "error.503.mandate_unavailable"
 
 # =============================================================================
 # Standard Error Keys
@@ -87,6 +88,11 @@ COMMON_ERRORS = {
     "error.400.field.unique": "{field} must be unique",
     # 5xx Server Errors
     ERR_500_INTERNAL: "Something went wrong",
+    # The mandate question could not be asked. Never 403: "you hold no
+    # mandate" is a verdict about the caller, this is a fact about the
+    # deployment, and a client that cannot tell them apart retries the wrong
+    # one. See stapel_core.django.mandate.
+    ERR_503_MANDATE_UNAVAILABLE: "Cannot verify workspace mandate right now",
 }
 
 

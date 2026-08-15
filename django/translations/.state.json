@@ -163,6 +163,10 @@
     "error.500.internal": {
       "hash": "ab827e3fe17da220",
       "origin": "seed:stapel-builtin"
+    },
+    "error.503.mandate_unavailable": {
+      "hash": "9d762b0f6e823291",
+      "origin": "imported"
     }
   },
   "errors.ru": {
@@ -329,6 +333,10 @@
     "error.500.internal": {
       "hash": "ab827e3fe17da220",
       "origin": "seed:stapel-builtin"
+    },
+    "error.503.mandate_unavailable": {
+      "hash": "9d762b0f6e823291",
+      "origin": "imported"
     }
   }
 }

@@ -1,13 +1,16 @@
-# stapel-core 0.26.0
+# stapel-core 0.27.0
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
-Contract: surface 17 · extension points 14 · error codes 41.
+Contract: surface 18 · extension points 14 · error codes 42.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Usage surface — call these before writing your own
 This is the answer to "does Stapel already have something for X?". `instead of` names the outside symbol this one displaces.
 ### permission_class
+- HasWorkspaceMandate — stapel_core.django.api.permissions.HasWorkspaceMandate
+  instead of: rest_framework.permissions.IsAuthenticated, stapel_core.django.api.permissions.IsNotAnonymousUser
+  The gate for the THIRD principal state: passes only a caller who holds an active mandate (an accepted, unsuspended workspace membership) somewhere. IsAuthenticated admits any session and IsNotAnonymousUser admits any real account — including a registered user who belongs to no workspace at all, which is exactly stapel-workspaces' guest. Reach for it wherever a view meant 'is this person part of an organization' and settled for 'is this person logged in'. A lookup that cannot be answered raises 503, never a 403: an unanswerable authorization question degrades to refusal, not to a verdict about the user.
 - IsNotAnonymousUser — stapel_core.django.api.permissions.IsNotAnonymousUser
   instead of: rest_framework.permissions.IsAuthenticated
   The write-gate for any endpoint that needs a REAL account: rejects the anonymous/guest sessions that stapel-auth's AUTH_ANONYMOUS axis issues. Reach for this, not DRF's IsAuthenticated, on anything that creates or owns user content — an anonymous session IS authenticated and sails straight through IsAuthenticated.
@@ -79,7 +82,7 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 - gdpr_registry [in_process_registry]
   GDPRProvider implementations a module registers for export/erasure; microservices mode consumes the same providers through GDPRServiceConsumerCommand.
 
-## Error codes (41) — the StapelError envelope
+## Error codes (42) — the StapelError envelope
 Render `t(code, params)`; branch UX on the remediation. Localized text lives in docs/errors.<lang>.md, not here.
 - error.400.bad_request [400] fix_input
 - error.400.captcha_invalid [400] retry
@@ -122,3 +125,4 @@ Render `t(code, params)`; branch UX on the remediation. Localized text lives in 
 - error.429.rate_limit [429] wait_and_retry {retry_after_minutes}
 - error.429.too_many_requests [429] wait_and_retry
 - error.500.internal [500] contact_support
+- error.503.mandate_unavailable [503] retry
