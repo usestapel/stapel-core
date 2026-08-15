@@ -2,7 +2,7 @@
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
-Contract: surface 18 · extension points 14 · error codes 42.
+Contract: surface 23 · extension points 14 · error codes 42.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Usage surface — call these before writing your own
@@ -31,26 +31,37 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 - liveness_probe — stapel_core.django.monitoring.health.liveness_probe
   Is the process alive at all — deliberately dependency-free, so an orchestrator does NOT restart a healthy container just because an outbound dependency is down. Pair with readiness_probe; do not point a liveness probe at health_check.
 - prometheus_metrics — stapel_core.django.monitoring.health.prometheus_metrics
-  The service's single Prometheus scrape endpoint, including stapel_dependency_up per registered dependency plus whatever register_metrics_exporter contributed. One scrape target per service is the contract; do not stand up a second.
+  The service's single Prometheus scrape endpoint, including stapel_dependency_probe_ok and stapel_dependency_up per registered dependency plus whatever register_metrics_exporter contributed. One scrape target per service is the contract; do not stand up a second.
 - readiness_probe — stapel_core.django.monitoring.health.readiness_probe
-  Should this instance receive traffic — checks the dependencies it cannot serve without. This is the one an orchestrator uses to pull an instance out of rotation, as opposed to killing it.
+  Should this instance receive traffic — checks the dependencies it cannot serve without. This is the one an orchestrator uses to pull an instance out of rotation, as opposed to killing it. Only a DETERMINED critical failure pulls it: a probe that could not ask leaves the instance in rotation, because every replica loses the same probe at the same moment and a 503 would turn a blip into a full outage.
+- reset_schema_state — stapel_core.django.monitoring.schema_health.reset_schema_state
+  Drop the cached schema verdict. For tests, and for a post-migrate hook in a process that migrates itself and should stop reporting the pre-migration answer for the rest of the TTL.
 ### template
 - admin/base_site.html — django/templates/admin/base_site.html
   The admin shell that renders the cross-service navigation: STAPEL_SERVICES, the NAV_LINKS sections and the introspection-gated Swagger link. A project that ships its own admin/base_site.html instead of extending this one silently loses all three and gets no error — override blocks, do not replace the file.
 ### predicate
+- schema_probe — stapel_core.django.monitoring.schema_health.schema_probe
+  The register_dependency_check-shaped view of schema_state: True at head, False behind, None when the probe could not ask. This is what the framework registers; call it directly only if you are mounting the probe somewhere else.
+- schema_state — stapel_core.django.monitoring.schema_health.schema_state
+  AT_HEAD, BEHIND or UNKNOWN for the running code's schema — three states deliberately, because the two-valued predecessor mapped 'could not reach the database' onto 'the schema is behind' and made every database restart look like drift. Read this if you need the verdict in your own code; a determined verdict is cached for 30s and a non-answer is never cached.
 - strong_factors — stapel_core.verification.factors.strong_factors
   The strict 'does this user really have 2FA' predicate — ids of STRONG factors the user can actually complete. Any require_mfa policy or mfa_status endpoint must branch on this and not on 'has any factor': an email code alone is not a second factor, it only proves reach to the channel that resets the password.
+- unapplied_migrations — stapel_core.django.monitoring.schema_health.unapplied_migrations
+  Migrations on disk the database has not applied — the same definition as `manage.py migrate --check`, deliberately, so the boot gate, the deploy gate and the health probe cannot disagree about what 'behind' means. Use it in a management command or a boot gate; do not re-derive the migration plan yourself.
 ### factory
 - get_health_urls — stapel_core.django.monitoring.health.get_health_urls
   The urlpatterns for the whole health/metrics family — include() this in a service's root urls.py instead of wiring the four views by hand, so every service in the fleet answers the same paths and a deployment's probes are portable between them.
 - load_configured_factors — stapel_core.verification.factors.load_configured_factors
   Boot-time loader that turns STAPEL_VERIFICATION['EXTRA_FACTORS'] from a declaration into registrations (pinned, so host ids beat library ones whatever the INSTALLED_APPS order). CommonDjangoConfig.ready() calls it since 0.16.1 — a host app must NOT call it from its own AppConfig any more; before 0.16.1 it had no caller anywhere in the framework and the setting was decorative, which is exactly the failure this whole section exists to make impossible.
 - register_dependency_check — stapel_core.django.monitoring.health.register_dependency_check
-  Register a probe for an OUTBOUND dependency (LiveKit, an STT provider, a payment gateway) so its state shows up as checks.<name> on /api/health/ and stapel_dependency_up{dependency="<name>"} on /api/metrics/. Reach for this whenever you wrap a network call in a best-effort try/except: the wrapper is fine, the wrapper WITHOUT a registered check is how meettoday's host-kick and room-PIN silently did nothing in production for a day. Canon: swallowed exception + logger.error + register_dependency_check, never the first alone.
+  Register a probe for an OUTBOUND dependency (LiveKit, an STT provider, a payment gateway) so its state shows up as checks.<name> on /api/health/ and stapel_dependency_up{dependency="<name>"} on /api/metrics/. Reach for this whenever you wrap a network call in a best-effort try/except: the wrapper is fine, the wrapper WITHOUT a registered check is how meettoday's host-kick and room-PIN silently did nothing in production for a day. Canon: swallowed exception + logger.error + register_dependency_check, never the first alone. The probe has THREE answers, not two — True, False, and None for 'I could not ask'. Return None rather than a guess: an undetermined dependency renders as checks.<name>="unknown", omits its stapel_dependency_up sample instead of dropping it to 0, and never takes the process out of rotation.
 - register_factor — stapel_core.verification.factors.register_factor
   Register a step-up verification factor (instance or dotted path) from an AppConfig.ready() — the fork-free way for a library or a host to add OTP/TOTP/passkey-shaped proof of presence. A host that only has a dotted path should use the EXTRA_FACTORS setting instead and let the boot loader do this.
 - register_metrics_exporter — stapel_core.django.monitoring.health.register_metrics_exporter
   Contribute additional Prometheus lines to /api/metrics/ from a module or a product, without forking the view. Use it instead of standing up a second metrics endpoint — one scrape target per service is the contract deployments are built against.
+- register_schema_check — stapel_core.django.monitoring.schema_health.register_schema_check
+  instead of: a product-local schema_health.py copied into every service directory
+  Put the schema-drift probe on /api/health/ and /api/metrics/. CommonDjangoConfig.ready() already calls it, so a service that installs stapel_core.django gets it without wiring anything — call it yourself ONLY from a process that does not install that app config. A product carrying its own copy of this module (ironmemo's iron-*/core/schema_health.py) should delete the copy and rely on this: the answer is the same in every Django service, and a per-service duplicate is a per-service place to drift.
 
 ## Extension points — what a product replaces, fork-free
 - AUTH_USER_MODEL [swappable_model]

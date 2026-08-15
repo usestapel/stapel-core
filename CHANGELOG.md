@@ -2,6 +2,54 @@
 
 ## [0.27.0] — 2026-08-15
 
+### The layer that lied
+
+A live stand ran twelve hours against an unmigrated schema while reporting
+healthy, because every layer was allowed to stay silent. Three of the classes
+behind that are closed here.
+
+**The schema probe belongs in the framework.** `stapel_core.django.monitoring
+.schema_health` answers "is the running code's schema at head" — lifted from a
+product-local copy that was duplicated per service because there was nothing
+to import from. `CommonDjangoConfig.ready()` registers it, so a service gets
+the answer without wiring anything, and a product carrying its own copy can
+delete it. Its earned properties are the point and are pinned by tests: a
+determined verdict is cached for 30s while a **non-answer is never cached** (a
+pinned "I could not tell" makes a two-second blip outlive itself); a database
+error is a `warning` with **no stack** and anything else gets one; and
+`schema_at_head` is **omitted** when undetermined rather than dropped to zero,
+so a drift alert has nothing to fire on when nobody could ask. Registered
+non-critical: drift must not pull every backend out of rotation during a
+normal rolling migration.
+
+**The dependency-check contract has a third state.** `register_dependency_check`
+did `ok = bool(probe())`, so a sentinel meaning "unknown" coerced to `True`
+and rendered as healthy — a third state was not merely unsupported, it was
+silently wrong. A probe may now return `None`. `/api/health/` reports it as
+`"unknown"`, distinct from `"error"`; `stapel_dependency_up` is **omitted**
+for that dependency while the always-emitted `stapel_dependency_probe_ok`
+drops to `0`; and — the part that matters most — `readiness_probe` does
+**not** 503 on an undetermined critical dependency. An inability to ask is not
+proof the dependency is down, and taking a service out of rotation on it
+converts a blip into an outage, since every replica loses the same probe at
+the same instant. A probe that *raises* is still an error, deliberately: "I
+could not ask" is said on purpose, by returning `None`, so it can never be
+confused with a bug in the probe.
+
+**A settings list from the environment is refused, not silently mangled.**
+`AppSettings._raw` returned `os.environ.get(key)` as a raw string with no
+parsing, so `DATA_OWNERS=auth,profiles` was iterated character by character
+into thirteen owners named `a`, `u`, `t`, `h`, `,` — every one of them a
+`str`, so the type checks passed and erasure was certified against nonsense.
+Any key whose declared default is a `list`/`tuple`/`set`/`frozenset`/`dict` now
+raises `ImproperlyConfigured` naming the key, the shape and the reason, and
+the new `stapel_core.conf.E002` system check finds it at `manage.py check`
+time instead of at whatever first read happens in production. Refusing beats
+parsing: `DATA_OWNERS` entries are legally a bare name *or* a dict, so any
+format chosen here is right for some values and lossy for others. Scalars are
+untouched — the environment is what they are for.
+
+
 Three mechanisms that existed and reached nobody. A predicate with no
 consumers, a setting nothing read, and a guard nothing called.
 

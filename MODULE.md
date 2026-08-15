@@ -1497,7 +1497,27 @@ mechanism; the `stapel_mounts` private names re-export from there unchanged.
   not take the rest of the product's surface down with it (the same blast-
   radius argument as the nginx upstream gate, §2 of that document);
   `critical=True` is for a dependency this process cannot serve its purpose
-  without, and flips readiness to 503.
+  without, and flips readiness to 503 — but only on a **determined** failure.
+- **Do not answer a question you could not ask.** A dependency probe has
+  three answers: `True`, `False`, and `None` for "I could not ask". Returning
+  a truthy sentinel for the third one is the defect that let a stand run
+  twelve hours on an unmigrated schema while reporting healthy — `ok =
+  bool(probe())` coerced "unknown" to "ok". An undetermined dependency is
+  rendered as `"unknown"` in `checks{}` (distinct from `"error"`), **omits**
+  its `stapel_dependency_up` sample rather than dropping it to `0` (a series
+  falling to zero because nobody could ask is a false verdict an alert would
+  fire on) while `stapel_dependency_probe_ok` goes to `0` so the silence is
+  itself alertable, and does **not** take the process out of rotation: an
+  inability to ask is not proof the dependency is down, and every replica
+  loses the same probe at the same instant.
+- **Do not supply a container-shaped setting from a bare environment
+  variable.** `AppSettings` refuses it (`ImproperlyConfigured`, plus
+  `stapel_core.conf.E002` at `manage.py check` time) for every key whose
+  declared default is a `list`/`tuple`/`set`/`dict`. `DATA_OWNERS=auth,profiles`
+  read as a string iterates character by character into a dozen owners named
+  `a`, `u`, `t`, `h`, `,` — each of them a `str`, so every downstream type
+  check passes and GDPR erasure gets certified against nonsense. The value's
+  home is the `STAPEL_<MOD>` dict in the settings module.
 - **Do not read `getattr(settings, ...)` ad hoc in a stapel package** — expose
   an `AppSettings` namespace so keys, defaults and dotted-path seams stay
   discoverable.

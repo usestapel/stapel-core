@@ -26,6 +26,13 @@ _custom_metrics_exporters = []
 # register_dependency_check() below.
 _dependency_checks = []
 
+# The three answers a dependency probe can give. UNKNOWN is a first-class
+# state, not an absence: "could not ask" is neither "reachable" nor "down",
+# and collapsing it into either one is how a health endpoint lies.
+DEP_OK = 'ok'
+DEP_ERROR = 'error'
+DEP_UNKNOWN = 'unknown'
+
 
 def register_metrics_exporter(exporter):
     """
@@ -56,18 +63,41 @@ def register_dependency_check(name, probe, *, critical=False):
     production is invisible by construction) and (b) a
     ``register_dependency_check`` on this same probe.
 
-    ``probe`` is a zero-argument callable returning ``True`` (dependency
-    reachable) or ``False`` (unreachable) — never raising; a probe that
-    raises is treated as unreachable and logged, never allowed to break the
-    health endpoint itself (the same "a broken exporter must not break
+    ``probe`` is a zero-argument callable returning one of THREE answers:
+
+    * ``True``  — the dependency answered and is reachable/correct;
+    * ``False`` — positively determined to be unreachable/wrong;
+    * ``None``  — the probe could not ask (the database was restarting, DNS
+      blipped, a timeout hit before any answer came back).
+
+    The third one is not decoration. This function used to do
+    ``ok = bool(probe())``, so a sentinel meaning "unknown" coerced to
+    ``True`` and rendered as ``ok`` — a probe that could not ask reported a
+    healthy dependency, which is not merely unsupported but silently wrong.
+    An UNKNOWN is now carried through end to end: ``checks{}`` says
+    ``"unknown"`` (distinct from ``"error"``), ``stapel_dependency_up`` is
+    OMITTED for that dependency for the scrape (a series that drops to 0
+    because nobody could ask is the false verdict this exists to avoid), and
+    the always-emitted ``stapel_dependency_probe_ok`` goes to 0 so the
+    inability to ask is itself something an alert can fire on.
+
+    A probe that RAISES is a broken probe, not an unknown: it is logged with
+    a stack and counted as unreachable, never allowed to break the health
+    endpoint itself (the same "a broken exporter must not break
     ``/api/metrics/``" posture ``register_metrics_exporter`` already has).
-    Any timeout is the probe's own responsibility.
+    "I could not ask" is said by returning ``None``, deliberately, so it can
+    never be confused with a bug in the probe. Any timeout is the probe's
+    own responsibility.
 
     ``critical=True`` means this dependency is load-bearing for the WHOLE
-    process's readiness: its failure flips ``/api/health/`` and
+    process's readiness: a DETERMINED failure flips ``/api/health/`` and
     ``readiness_probe()`` to HTTP 503 (an orchestrator should stop routing
-    traffic here). ``critical=False`` (default) — the process stays healthy
-    (200) but the failure is named in ``checks{}`` and in
+    traffic here). An UNDETERMINED critical dependency does NOT: an inability
+    to ask is not proof the dependency is down, and pulling the process out
+    of rotation on it converts a two-second blip into an outage — every
+    replica loses the same probe at the same moment, so the whole service
+    leaves rotation together. ``critical=False`` (default) — the process
+    stays healthy (200) but the failure is named in ``checks{}`` and in
     ``stapel_dependency_up`` so monitoring sees it without an LB pulling a
     backend that serves everything else fine. This is deliberately NOT a
     Django boot-time check: a dependency like LiveKit can go down long after
@@ -94,19 +124,25 @@ def register_dependency_check(name, probe, *, critical=False):
 
 
 def _run_dependency_checks():
-    """(checks dict, any_critical_down) — never raises; a probe exception is
-    treated as a failed/unreachable dependency, same posture as a probe that
-    plainly returns False."""
+    """``(checks dict, any_critical_determined_down)`` — never raises.
+
+    Each entry is ``{"state": OK|ERROR|UNKNOWN, "critical": bool}``. Only a
+    DETERMINED failure of a critical dependency sets the second element: see
+    ``register_dependency_check`` on why an undetermined one must not take
+    the process out of rotation.
+    """
     checks = {}
     critical_down = False
     for name, probe, critical in _dependency_checks:
         try:
-            ok = bool(probe())
+            answer = probe()
         except Exception:
             logger.exception("Dependency check %s failed", name)
-            ok = False
-        checks[name] = {"ok": ok, "critical": critical}
-        if not ok and critical:
+            state = DEP_ERROR
+        else:
+            state = DEP_UNKNOWN if answer is None else (DEP_OK if answer else DEP_ERROR)
+        checks[name] = {"state": state, "critical": critical}
+        if state is DEP_ERROR and critical:
             critical_down = True
     return checks, critical_down
 
@@ -132,14 +168,18 @@ def health_check(request):
     version = getattr(settings, 'APP_VERSION_NUMBER', 'unknown')
 
     dep_checks, critical_down = _run_dependency_checks()
-    non_critical_down = any(not c['ok'] and not c['critical'] for c in dep_checks.values())
+    any_down = any(c['state'] is DEP_ERROR for c in dep_checks.values())
 
     healthy = db_ok and not critical_down
-    status = 'healthy' if (healthy and not non_critical_down) else 'degraded'
+    # 'degraded' is reserved for a DETERMINED failure. An undetermined
+    # dependency is named in checks{} as 'unknown' and carried by
+    # stapel_dependency_probe_ok; calling it degraded would make every
+    # database restart look like a product outage.
+    status = 'healthy' if (healthy and not any_down) else 'degraded'
 
-    checks = {'database': 'ok' if db_ok else 'error'}
+    checks = {'database': DEP_OK if db_ok else DEP_ERROR}
     for name, c in dep_checks.items():
-        checks[name] = 'ok' if c['ok'] else 'error'
+        checks[name] = c['state']
 
     return JsonResponse({
         'status': status,
@@ -157,10 +197,17 @@ def readiness_probe(request):
     Returns 200 if service is ready to accept traffic. Checks database
     connectivity and every dependency registered with
     ``critical=True`` via ``register_dependency_check`` — a critical
-    dependency down means this process cannot serve its purpose, so an
-    orchestrator should stop routing traffic here (same status code either
-    way; unlike ``health_check`` this probe has no room for a body — it is
-    ok/not-ready only).
+    dependency DETERMINED down means this process cannot serve its purpose,
+    so an orchestrator should stop routing traffic here (same status code
+    either way; unlike ``health_check`` this probe has no room for a body —
+    it is ok/not-ready only).
+
+    A critical dependency whose probe returned ``None`` (could not ask) does
+    NOT take this process out of rotation. An inability to ask is not proof
+    the dependency is down, and every replica loses the same probe at the
+    same moment, so a 503 here turns a blip into a full outage — the exact
+    "fail-closed on environment errors is the wrong answer" argument the rest
+    of this module is built on.
     """
     try:
         with connection.cursor() as cursor:
@@ -170,7 +217,10 @@ def readiness_probe(request):
 
     _checks, critical_down = _run_dependency_checks()
     if critical_down:
-        down = [name for name, c in _checks.items() if not c['ok'] and c['critical']]
+        down = [
+            name for name, c in _checks.items()
+            if c['state'] is DEP_ERROR and c['critical']
+        ]
         return HttpResponse(f"Not Ready: critical dependency down: {', '.join(down)}", status=503)
 
     return HttpResponse("OK", status=200)
@@ -234,15 +284,33 @@ def prometheus_metrics(request):
     # per dependency so an unreachable best-effort-wrapped call (the
     # meettoday LiveKit twirp incident: kick/PIN silently no-op'd in prod)
     # lights up in monitoring instead of nowhere.
+    #
+    # Two series, because there are three states. `dependency_probe_ok` is
+    # emitted ALWAYS (0 = the probe could not ask), so "nobody could tell" is
+    # itself alertable. `dependency_up` carries the verdict and is OMITTED
+    # for an undetermined dependency: a series that drops to 0 because the
+    # network blipped is a false "it is down", and an alert would fire saying
+    # something untrue.
     if _dependency_checks:
         dep_checks, _critical_down = _run_dependency_checks()
-        metrics.append(f'# HELP {mp}dependency_up Registered dependency reachability')
-        metrics.append(f'# TYPE {mp}dependency_up gauge')
+        metrics.append(
+            f'# HELP {mp}dependency_probe_ok Whether the dependency state could be determined'
+        )
+        metrics.append(f'# TYPE {mp}dependency_probe_ok gauge')
         for name, c in dep_checks.items():
             metrics.append(
-                f'{mp}dependency_up{{service="{service_name}",dependency="{name}"}} '
-                f'{1 if c["ok"] else 0}'
+                f'{mp}dependency_probe_ok{{service="{service_name}",dependency="{name}"}} '
+                f'{0 if c["state"] is DEP_UNKNOWN else 1}'
             )
+        determined = {n: c for n, c in dep_checks.items() if c['state'] is not DEP_UNKNOWN}
+        if determined:
+            metrics.append(f'# HELP {mp}dependency_up Registered dependency reachability')
+            metrics.append(f'# TYPE {mp}dependency_up gauge')
+            for name, c in determined.items():
+                metrics.append(
+                    f'{mp}dependency_up{{service="{service_name}",dependency="{name}"}} '
+                    f'{1 if c["state"] is DEP_OK else 0}'
+                )
 
     # Append custom metrics from registered exporters
     for exporter in _custom_metrics_exporters:

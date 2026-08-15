@@ -44,6 +44,32 @@ from typing import Any, Iterable
 
 _EMPTY = object()
 
+# Declared shapes an environment string cannot carry. ``str``/``bytes`` are
+# sequences too and are deliberately absent: a scalar IS what the environment
+# is for.
+#
+# Why REFUSE rather than parse a declared format. ``_raw`` used to hand back
+# ``os.environ.get(key)`` untouched, so ``DATA_OWNERS=auth,profiles`` was
+# iterated character by character — a dozen owners named "a", "u", "t", "h",
+# ",", every one of them a str, so the type checks passed and GDPR erasure was
+# certified against nonsense. Two ways out, and only one of them is honest.
+#
+# A parser has to pick a format, and the format is wrong for the values these
+# keys legally hold: ``DATA_OWNERS`` entries are a bare name OR a dict
+# (``{"name": "cdn", "kind": "remote"}``), which no comma-split can express.
+# Choosing comma-split would accept ``auth,profiles`` today and silently
+# truncate the dict form tomorrow — the same class of defect, one layer up.
+# JSON-in-env would express it, but then the same variable means two different
+# things depending on the key's declared shape, and a typo produces a parse
+# error at first read in production.
+#
+# A structured value has a correct home already: the ``STAPEL_<MOD>`` dict in
+# the settings module, which the scaffold emits from the module's declared
+# required settings. So the environment step is refused for these keys, loudly
+# and by name — a refusal is a fact an operator can act on, where a lenient
+# parse is a guess nobody reviews.
+_STRUCTURED_TYPES = (list, tuple, set, frozenset, dict)
+
 # Every AppSettings ever built, in construction order. The instances are
 # per-module singletons living in ``<package>/conf.py`` modules that core
 # cannot enumerate — siblings declare their own namespaces and core has no
@@ -215,6 +241,49 @@ class AppSettings:
             if name in os.environ
         ]
 
+    def structured_keys(self) -> list[str]:
+        """Keys whose DECLARED SHAPE is a container, sorted.
+
+        The shape is the type of the declared default: a key that defaults to
+        ``[]`` is a list of things, and no bare environment string is one.
+        """
+        return sorted(
+            key for key, default in self.defaults.items()
+            if isinstance(default, _STRUCTURED_TYPES)
+        )
+
+    def structured_env_vars(self) -> list[tuple[str, str]]:
+        """``(key, env var name)`` pairs that are SET on a container-shaped key.
+
+        The boot-time half of the refusal in :meth:`_raw` — the process-wide
+        walk a system check reports, so the misconfiguration is found at
+        deploy rather than the first time some code path happens to read the
+        key.
+        """
+        return [
+            (key, name)
+            for key in self.structured_keys()
+            if self._env_allowed(key)
+            for name in self.env_var_names(key)
+            if name in os.environ
+        ]
+
+    def _refuse_structured_env(self, key: str, name: str, raw: str):
+        from django.core.exceptions import ImproperlyConfigured
+
+        shape = type(self.defaults[key]).__name__
+        raise ImproperlyConfigured(
+            f'{self.namespace}["{key}"] is declared as a {shape}, and the '
+            f"environment variable {name}={raw!r} is a bare string. Reading it "
+            f"as the value would iterate it CHARACTER BY CHARACTER: "
+            f'"auth,profiles" becomes thirteen entries named "a", "u", "t", '
+            '"h", ",", … — each of them a str, so every downstream type check '
+            "passes and the result is certified nonsense. Put the value in "
+            f"the {self.namespace} dict in your settings module (the "
+            "scaffold emits that block from the module's declared required "
+            f"settings), or unset {name}."
+        )
+
     def _connect_reload(self) -> None:
         try:
             from django.test.signals import setting_changed
@@ -243,6 +312,8 @@ class AppSettings:
             for name in self.env_var_names(key):
                 env = os.environ.get(name)
                 if env is not None:
+                    if isinstance(self.defaults.get(key), _STRUCTURED_TYPES):
+                        self._refuse_structured_env(key, name, env)
                     return env
         if key in self.defaults:
             return self.defaults[key]

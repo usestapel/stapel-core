@@ -150,6 +150,15 @@ class CommonDjangoConfig(AppConfig):
         # picked up BootGateMiddleware — the second one is the only way a
         # non-conforming project learns its E-gates never run under gunicorn.
         from stapel_core.django import boot as _boot_checks  # noqa: F401
+        # Schema-drift probe on /api/health/ + /api/metrics/
+        # (stapel_core.django.monitoring.schema_health). A stand ran twelve
+        # hours on an unmigrated schema while reporting healthy because
+        # nothing in the process ever asked. Registering here is what makes
+        # the answer exist without every product remembering to wire it;
+        # nothing queries the database until the first scrape.
+        from stapel_core.django.monitoring.schema_health import register_schema_check
+
+        register_schema_check()
 
         # Verification factors declared by the host in
         # STAPEL_VERIFICATION["EXTRA_FACTORS"] (#145). MODULE.md documents the
