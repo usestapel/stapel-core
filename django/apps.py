@@ -123,6 +123,12 @@ class CommonDjangoConfig(AppConfig):
         # declares security-critical, W-level listing everything else it
         # mutes. Nothing in the fleet read that setting before this.
         from stapel_core.django import check_guard as _check_guard  # noqa: F401
+        # Deployment-posture coherence (stapel_core.django.presets): E-level
+        # when a security-relevant value of the declared preset is not what
+        # this deployment runs. The preset is the convenience; this check is
+        # the contract — a posture nobody re-derives goes stale the first time
+        # a settings module overrides one line.
+        from stapel_core.django import presets as _presets  # noqa: F401
         # Production secret guards as checks (stapel_core.django.prodguard):
         # E-level for a placeholder/short SECRET_KEY or the shipped database
         # password. The guards existed for years as functions a settings
