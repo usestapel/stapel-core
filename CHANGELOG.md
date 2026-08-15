@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.26.0] — 2026-08-15
+
+The error registry and the error catalogs are two halves of one contract, and
+nothing connected them. An ownership move stripped ten GDPR keys from a
+service's catalogs while its registry kept declaring them; the codes existed,
+no catalog carried them, and a Russian user read English sentences. No gate
+went red anywhere. This release makes that shape impossible.
+
+### The two scopes both stay — they answer different questions
+
+`generate_error_keys` is instance-scoped and stays that way: its companion is
+`schema.json`, and a consumer of a service needs every code that service can
+emit, including codes owned by co-mounted modules. `translate_catalog` is
+ownership-scoped and stays that way: that scoping is what removed 410
+duplicated entries. The defect was never either scope. It was that no artifact
+and no gate joined them.
+
+### `owner` per registry entry
+
+`build_error_registry()` now emits `owner` alongside `code`, `status`,
+`params`, `remediation` and `en`. A consumer can pair a code with the owning
+package's catalogs without knowing the mount graph — that implicit knowledge
+is what broke.
+
+**Breaking:** the registry shape changed, so every repo's drift gate goes red
+until `docs/errors.json` is regenerated. That is deliberate: the gates carry
+the migration.
+
+### Two gates, one per direction
+
+`generate_error_keys` refuses to write when a declared code's owner ships a
+language that lacks the key. An owner with declared codes and no catalogs at
+all is a printed counter, not an error — an owner that never claimed a
+language has coverage debt, not a broken translation contract, and blocking it
+would make i18n adoption a precondition of declaring error codes.
+
+`check_translation_catalogs` gains the reverse: catalogs for owned keys with
+no registry export, and a translated owned key the export omits.
+
+### stapel-core ships its own registry export
+
+41 keys, all owned by core. The common errors moved here by the ownership fix
+reached no consumer in any locale, in any repo — any consumer written the
+obvious way skipped core entirely, because core published only one half.
+
+### Fixed: registration by import side effect
+
+`stapel_attributes` registered its 12 keys only when a serializer happened to
+be imported, so registry emission depended on whether the schema was built
+first. The embedding apps force the registration; command-only emission is now
+byte-identical to the full pipeline.
+
 ## [0.25.0] — 2026-08-15
 
 The hardening wave: every item here is a mechanism that already existed and
