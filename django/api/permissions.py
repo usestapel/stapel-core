@@ -259,3 +259,50 @@ class HasWorkspaceMandate(permissions.BasePermission):
             raise MandateUnavailable() from exc
         return state is MandateState.MANDATED
 
+
+class HasWorkspaceMandateIfScoped(permissions.BasePermission):
+    """:class:`HasWorkspaceMandate` for a view a SINGLE-TENANT host also runs.
+
+    Same three answers, one difference: a deployment where nothing can answer
+    the mandate question — no ``workspaces.check_mandate`` route, no
+    ``stapel_workspaces`` in the process — has no mandates for anyone to hold,
+    so the guest state does not exist in it and this gate admits. The strict
+    class refuses there instead (503), and ``stapel_core.mandate.E001`` calls
+    that out at ``manage.py check``; correct for a product view whose author
+    knows the deployment, wrong for a library view that ships to both shapes.
+
+    Which to pick:
+
+    * a PRODUCT view, in a service you know embeds or routes to workspaces →
+      :class:`HasWorkspaceMandate`. Fail closed; E001 tells you if you wired
+      it wrong, before the first 503.
+    * a LIBRARY view (stapel-calendar, stapel-chat, …) that a single-tenant
+      host also mounts → this one. The single-tenant host keeps working; the
+      multi-tenant host gets the third state enforced, and the module's own
+      ``SCOPE_PROVIDER`` check errors if it is also still running a
+      single-scope provider.
+
+    "Standalone" is settings-and-registry only, never a liveness probe: a
+    seam that IS wired and then fails to answer still raises
+    :class:`MandateUnavailable` (503). Unreachable-by-configuration and
+    unreachable-right-now are different facts and only the first is a
+    deployment shape.
+    """
+
+    #: The gate is explicit, so the adoption check has its answer already.
+    stapel_anonymous_access = ANONYMOUS_DENIED
+
+    def has_permission(self, request, view):
+        from stapel_core.django.scope import deployment_is_standalone
+
+        user = getattr(request, "user", None)
+        # An anonymous session is refused in every deployment shape: it is
+        # the one state that needs no lookup to recognise.
+        if not getattr(user, "is_authenticated", False) or getattr(
+            user, "is_anonymous", False
+        ):
+            return False
+        if deployment_is_standalone():
+            return True
+        return HasWorkspaceMandate().has_permission(request, view)
+

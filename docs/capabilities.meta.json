@@ -110,6 +110,13 @@
         "stapel_core.django.api.permissions.IsNotAnonymousUser"
       ]
     },
+    "HasWorkspaceMandateIfScoped": {
+      "intent": "HasWorkspaceMandate for a LIBRARY view that a single-tenant host also runs. Same three answers, one difference: where nothing can answer the mandate question at all, nobody holds one, so the guest state does not exist and this admits — the strict class 503s everyone there. A seam that IS wired and then fails still raises 503.",
+      "instead_of": [
+        "rest_framework.permissions.IsAuthenticated",
+        "stapel_core.django.api.permissions.IsNotAnonymousUser"
+      ]
+    },
     "IsStaffUser": {
       "intent": "Staff-or-superuser gate — the one to put on the browsable API, Swagger and any back-office endpoint; also the intended DEFAULT_PERMISSION_CLASSES for a service whose API is internal."
     },

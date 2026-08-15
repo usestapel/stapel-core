@@ -136,6 +136,7 @@ def test_the_permission_classes_are_indexed(emitted):
         "IsServiceRequest",
         "IsNotAnonymousUser",
         "HasWorkspaceMandate",
+        "HasWorkspaceMandateIfScoped",
     }
 
 
