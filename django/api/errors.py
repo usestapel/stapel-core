@@ -288,12 +288,18 @@ def default_remediation(code: str, status: int, params: list) -> str:
 def build_error_registry() -> list:
     """Project the global error registry into the ``errors.json`` structure.
 
-    Returns a list of ``{code, status, params, remediation, en}`` dicts, sorted
-    by ``code`` (byte-stable for a drift gate). ``status`` is parsed from the
-    key (``error.<status>.<name>``), ``params`` from the ``en`` template, and
-    ``remediation`` is the explicit declaration or :func:`default_remediation`.
-    Matches the array shape the frontend ``gen-errors.mjs`` already emits, so the
-    frontend can migrate onto this artifact without a format change.
+    Returns a list of ``{code, status, params, remediation, en, owner}`` dicts,
+    sorted by ``code`` (byte-stable for a drift gate). ``status`` is parsed from
+    the key (``error.<status>.<name>``), ``params`` from the ``en`` template,
+    ``remediation`` is the explicit declaration or :func:`default_remediation`,
+    and ``owner`` is the package responsible for the key's *translations*
+    (:data:`_OWNER_REGISTRY`; ``null`` when nobody claimed it).
+
+    The registry stays instance-scoped — the set of codes this deployment can
+    emit, the API-contract companion of schema.json. ``owner`` is the
+    per-entry provenance that lets a consumer (and the pairing gate) find each
+    code's catalogs without knowing the mount graph: the code is declared
+    here, its ``translations/errors.<lang>.json`` live with its owner.
     """
     entries = []
     for code, en in _GLOBAL_REGISTRY.items():
@@ -312,6 +318,7 @@ def build_error_registry() -> list:
                 "params": params,
                 "remediation": remediation,
                 "en": en,
+                "owner": _OWNER_REGISTRY.get(code),
             }
         )
     entries.sort(key=lambda e: e["code"])

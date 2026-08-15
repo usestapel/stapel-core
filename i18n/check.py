@@ -17,7 +17,12 @@ catalog directory, verify each shipped locale:
   (``origin: llm``), curated corpus (``origin: seed:<label>`` — paid for, still
   machine-made), imported with unknown authorship, or with no sidecar entry at
   all. A *counter*, not a release blocker (§5, open question #3), and it counts
-  what has not been READ, not what came from a poor source.
+  what has not been READ, not what came from a poor source;
+* **E** no registry export / unexported — the package ships catalogs for keys
+  it owns but no ``docs/errors.json`` (or a stale one): its codes are
+  invisible to every consumer that pairs registries with catalogs. The other
+  direction of the same contract is :func:`check_registry_catalog_pairing`,
+  run at ``generate_error_keys`` emission time.
 
 **Ownership scoping.** ``source_texts`` for the ``errors`` domain is the whole
 in-process registry — core's cross-cutting keys included. Requiring every
@@ -51,16 +56,18 @@ from .catalogs import (
     is_reviewed,
     load_catalog_file,
     owner_catalog,
+    owner_languages,
     owner_of_dir,
 )
-from .domains import params_of, source_owners
+from .domains import DOMAIN_EXPORTS, params_of, source_owners
 
 
 @dataclass
 class CatalogIssue:
     level: str  # "error" | "warning"
     # "missing" | "stale" | "params" | "unstable" | "unreviewed" | "orphan"
-    # | "foreign" | "vacuous_override"
+    # | "foreign" | "vacuous_override" | "no_registry_export" | "unexported"
+    # | "untranslated" | "unshipped"
     code: str
     language: str
     message: str
@@ -96,6 +103,7 @@ def check_translation_catalogs(
     owners: dict[str, str] | None = None,
     owner_catalogs: Callable[[str, str, str], dict[str, str]] | None = None,
     undeclared_overrides: str = "error",
+    export_resolver: "Callable[[str], set[str] | None] | None" = None,
 ) -> list[CatalogIssue]:
     """Gate the *domain* catalogs in the *out_dir* ``translations`` dir.
 
@@ -125,6 +133,44 @@ def check_translation_catalogs(
         owner_catalogs = owner_catalog
     canon = owned_keys(source_texts, owners, owner)
     foreign_level = "warning" if undeclared_overrides == "warn" else "error"
+
+    # The registry export is the other half of this package's contract: a
+    # catalog says how an owned key reads, the export (docs/errors.json —
+    # generate_error_keys) says the key exists. A translated key with no
+    # export entry is a string no consumer can ever render — the shape that
+    # let gdpr's ten codes and core's forty-one keys ship invisible.
+    if owner and owners and (export_resolver or DOMAIN_EXPORTS.get(domain)):
+        resolver = export_resolver or DOMAIN_EXPORTS[domain]
+        strictly_owned = {k for k in source_texts if owners.get(k) == owner}
+        if strictly_owned:
+            exported = resolver(owner)
+            if exported is None:
+                issues.append(CatalogIssue(
+                    "error", "no_registry_export", "*",
+                    f"{owner!r} ships {domain} catalogs and owns "
+                    f"{len(strictly_owned)} key(s) but publishes no registry "
+                    f"export (docs/errors.json) — its codes are invisible to "
+                    f"every consumer; run `generate_error_keys` and ship the "
+                    f"artifact",
+                ))
+            else:
+                translated: set[str] = set()
+                for lang in languages:
+                    if lang == source_language:
+                        continue
+                    translated.update(
+                        load_catalog_file(out / catalog_filename(domain, lang))
+                    )
+                unexported = sorted(
+                    (translated & strictly_owned) - exported
+                )
+                if unexported:
+                    issues.append(CatalogIssue(
+                        "error", "unexported", "*",
+                        f"{len(unexported)} translated key(s) missing from "
+                        f"{owner!r}'s registry export (docs/errors.json is "
+                        f"stale — regenerate it): {unexported[:8]}",
+                    ))
 
     for lang in languages:
         if lang == source_language:
@@ -220,6 +266,75 @@ def check_translation_catalogs(
     return issues
 
 
+def check_registry_catalog_pairing(
+    entries: list[dict],
+    *,
+    domain: str = "errors",
+    languages_of: Callable[[str, str], "set[str]"] | None = None,
+    owner_catalogs: Callable[[str, str, str], dict[str, str]] | None = None,
+) -> list[CatalogIssue]:
+    """Every declared code must be translated wherever its owner translates.
+
+    Run at ``generate_error_keys`` emission time, over the registry the
+    instance is about to export. *entries* is ``build_error_registry()``
+    output — each with its ``owner`` provenance. For every owner that ships
+    the domain in some language (over INSTALLED_APPS), every code it owns must
+    be present in that language's catalog:
+
+    * **E** ``untranslated`` — the registry declares a code, its owner ships
+      the language, and the owner's catalog does not carry it. This is the
+      auth/gdpr incident shape made impossible: an ownership move that strips
+      a translation goes red at the next emission of EVERY instance that
+      mounts the key, not at a user's screen.
+    * **W** ``unshipped`` — an owner with declared codes ships no catalog in
+      any language while some other package in the instance does: its codes
+      render as English fallbacks in an otherwise translated deployment. A
+      counter, not a blocker — a package that never claimed a language has no
+      translation contract to break, only coverage debt to see.
+
+    Pure over injectable *languages_of* / *owner_catalogs* (defaulted from
+    INSTALLED_APPS like the catalog gate), so a unit test needs no apps.
+    """
+    if languages_of is None:
+        languages_of = owner_languages
+    if owner_catalogs is None:
+        owner_catalogs = owner_catalog
+
+    by_owner: dict[str, list[str]] = {}
+    for entry in entries:
+        pkg = entry.get("owner")
+        if isinstance(pkg, str) and pkg:
+            by_owner.setdefault(pkg, []).append(entry["code"])
+
+    shipped = {pkg: sorted(languages_of(pkg, domain)) for pkg in by_owner}
+    anyone_ships = any(shipped.values())
+
+    issues: list[CatalogIssue] = []
+    for pkg in sorted(by_owner):
+        langs = shipped[pkg]
+        if not langs:
+            if anyone_ships:
+                issues.append(CatalogIssue(
+                    "warning", "unshipped", "*",
+                    f"{pkg!r} owns {len(by_owner[pkg])} declared code(s) but "
+                    f"ships no {domain} catalog in any language — they will "
+                    f"render as English fallbacks in a translated deployment",
+                ))
+            continue
+        for lang in langs:
+            catalog = owner_catalogs(pkg, domain, lang)
+            for code in by_owner[pkg]:
+                if code not in catalog:
+                    issues.append(CatalogIssue(
+                        "error", "untranslated", lang,
+                        f"{code!r} is declared by this registry and owned by "
+                        f"{pkg!r}, which ships {lang} — but its {lang} catalog "
+                        f"does not carry the key; translate it (or the "
+                        f"ownership move that stripped it lost a string)",
+                    ))
+    return issues
+
+
 def summarize(issues: list[CatalogIssue]) -> tuple[int, int]:
     """(#errors, #warnings)."""
     errors = sum(1 for i in issues if i.level == "error")
@@ -228,6 +343,7 @@ def summarize(issues: list[CatalogIssue]) -> tuple[int, int]:
 
 __all__ = [
     "CatalogIssue",
+    "check_registry_catalog_pairing",
     "check_translation_catalogs",
     "owned_keys",
     "summarize",

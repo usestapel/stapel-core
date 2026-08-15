@@ -555,7 +555,8 @@ class TestBuildErrorRegistry:
         codes = [e["code"] for e in entries]
         assert codes == sorted(codes)
         entry = next(e for e in entries if e["code"] == "error.400.artifact_key")
-        assert set(entry) == {"code", "status", "params", "remediation", "en"}
+        assert set(entry) == {"code", "status", "params", "remediation", "en", "owner"}
+        assert entry["owner"]  # inferred from the registering caller
         assert entry["status"] == 400
         assert entry["params"] == ["field"]
         assert entry["remediation"] in REMEDIATION_VOCAB
