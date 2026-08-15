@@ -50,6 +50,39 @@ format chosen here is right for some values and lossy for others. Scalars are
 untouched — the environment is what they are for.
 
 
+### i18n — a monolith's own app can satisfy the registry gate honestly
+
+The pairing gate resolved a package's registry export at `<top-level package
+dir>/docs/errors.json` and nowhere else. A monolith's local apps have no such
+place: `accounts`, `rooms`, `calendar_app` are apps inside one project, not
+wheels with a `docs/` of their own, so a product's four apps produced four
+E `no_registry_export` findings for doing nothing wrong. A gate an entire
+supported topology cannot satisfy is not a gate, it is a tax.
+
+Where the export lives now follows what the package **is**. A distributable
+still carries it inside its wheel — the only place a consumer who installed it
+can look — and that is what the resolver reads first. A package with no
+installed distribution, living inside the project root, is declared instead by
+the project's own export: `<BASE_DIR>/docs/errors.json`, or
+`STAPEL_I18N["REGISTRY_EXPORT"]` where a project keeps it elsewhere. That is
+the artifact `generate_error_keys` already writes and projects already commit,
+so a monolith satisfies the gate with the file it has, not with an exemption.
+
+Both reasons the gate exists survive intact. A library shipping catalogs with
+no registry export is still red **inside a project whose export declares every
+one of its codes** — something that ships as a wheel carries its own export or
+it has none, and no project export stands in for it (pinned against a real
+installed distribution, dist-info and all). And the project export answers for
+a code only where it attributes that code to that app: it cannot become a
+place to launder a neighbour's keys, and a translated key the export does not
+claim for its owner is `unexported`. An entry that attributes nothing still
+counts — a pre-`owner` artifact declares its codes, exactly as an un-attributed
+key counts as owned in `owned_keys`.
+
+`STAPEL_I18N["REGISTRY_EXPORT"]` is env-closed: it decides which file the gate
+accepts as a project's declaration of its codes, and a stray variable of that
+generic name would turn a red into a green from outside the repo.
+
 Three mechanisms that existed and reached nobody. A predicate with no
 consumers, a setting nothing read, and a guard nothing called.
 

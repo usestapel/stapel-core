@@ -578,10 +578,21 @@ ship unreachable (gdpr) or registries declared codes no catalog carried:
   declared code — emission refuses), **W `unshipped`** (an owner with declared
   codes ships no catalogs in an otherwise translated instance);
 - `check_translation_catalogs` checks the reverse: **E `no_registry_export`**
-  (catalogs for owned keys, no `docs/errors.json` at the owner's top-level
-  package dir — `DOMAIN_EXPORTS["errors"]` resolves it) and **E `unexported`**
-  (a translated owned key the export does not declare). Injectable via
+  (catalogs for owned keys and no export at all) and **E `unexported`** (a
+  translated owned key the export does not declare). Injectable via
   `export_resolver=` for unit tests;
+- **where the export lives follows what the package is**
+  (`DOMAIN_EXPORTS["errors"]`). A distributable carries it in its wheel, at
+  `<top-level package>/docs/errors.json` — the only place a consumer who
+  installed it can look. A project's own app (a monolith's `accounts`,
+  `rooms`, …) is not a wheel and has no `docs/` to put anything in, so its
+  codes are declared by the project's export: `<BASE_DIR>/docs/errors.json`, or
+  `STAPEL_I18N["REGISTRY_EXPORT"]`. Two conditions keep that from becoming a
+  way out of the gate — the package must have no installed distribution
+  (something that ships as a wheel must carry its own export; a project export
+  never stands in for it) and must live inside the project root — and the
+  project export answers for a code only where it attributes it to that app,
+  so it cannot vouch for a neighbour's keys;
 - core ships its own export (`docs/errors.json`, 41 keys), drift-gated by
   `tests/test_error_registry_artifact.py`.
 
@@ -591,7 +602,10 @@ ship unreachable (gdpr) or registries declared codes no catalog carried:
 differ from product languages). `EXTRA_CATALOG_DIRS` adds catalog roots outside
 the apps. `TRANSLATOR` / `SOURCE_LANGUAGE` are the domain-agnostic
 machine-translation seam (the `llm.translate` comm Function by name, default).
-`UNDECLARED_OVERRIDES` (`"error"` default, `"warn"`) is the one policy switch:
+`REGISTRY_EXPORT` names the project's own registry export when it is not at the
+`<BASE_DIR>/docs/errors.json` default (env-closed — it decides which file the
+pairing gate accepts). `UNDECLARED_OVERRIDES` (`"error"` default, `"warn"`) is
+the one policy switch:
 the escape hatch for a host onboarding a legacy catalog it did not write.
 Fleet libraries run the default.
 

@@ -20,9 +20,12 @@ catalog directory, verify each shipped locale:
   what has not been READ, not what came from a poor source;
 * **E** no registry export / unexported — the package ships catalogs for keys
   it owns but no ``docs/errors.json`` (or a stale one): its codes are
-  invisible to every consumer that pairs registries with catalogs. The other
-  direction of the same contract is :func:`check_registry_catalog_pairing`,
-  run at ``generate_error_keys`` emission time.
+  invisible to every consumer that pairs registries with catalogs. Where that
+  export lives follows what the package IS: a distributable carries it in its
+  wheel, a project's own app has no wheel and is declared by the project's
+  export (:func:`domains._errors_export_codes`). The other direction of the
+  same contract is :func:`check_registry_catalog_pairing`, run at
+  ``generate_error_keys`` emission time.
 
 **Ownership scoping.** ``source_texts`` for the ``errors`` domain is the whole
 in-process registry — core's cross-cutting keys included. Requiring every
@@ -151,7 +154,9 @@ def check_translation_catalogs(
                     f"{len(strictly_owned)} key(s) but publishes no registry "
                     f"export (docs/errors.json) — its codes are invisible to "
                     f"every consumer; run `generate_error_keys` and ship the "
-                    f"artifact",
+                    f"artifact: inside the package for a distributable, at "
+                    f"<BASE_DIR>/docs/errors.json (STAPEL_I18N"
+                    f"[\"REGISTRY_EXPORT\"]) for a project's own app",
                 ))
             else:
                 translated: set[str] = set()

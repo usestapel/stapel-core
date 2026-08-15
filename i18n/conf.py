@@ -27,6 +27,13 @@ i18n_settings = AppSettings(
         # The language of the in-code canonical literals / registry texts
         # passed to the translator as the source language.
         "SOURCE_LANGUAGE": "en",
+        # Where THIS project publishes its registry export — the artifact that
+        # declares the codes its own (non-distributable) apps own, since an app
+        # inside a project has no wheel to carry a `docs/errors.json` of its
+        # own. Unset means the convention `generate_error_keys` writes:
+        # `<BASE_DIR>/docs/errors.json`. A distributable package is never read
+        # from here; its export ships inside it.
+        "REGISTRY_EXPORT": None,
         # How `check_translation_catalogs` treats a catalog entry for a key
         # another package owns and already ships in that language, with no
         # `override` declaration in `.state.json`: "error" (the default — a
@@ -44,7 +51,11 @@ i18n_settings = AppSettings(
         "TRANSLATOR": "stapel_core.i18n.catalogs.CommDocTranslator",
     },
     import_strings=("TRANSLATOR",),
-    no_env=("TRANSLATOR",),
+    # REGISTRY_EXPORT decides which file the pairing gate accepts as a
+    # project's declaration of its codes — a stray env var of that generic
+    # name would point the gate at a file that says anything, turning a red
+    # into a green from outside the repo. It is repo layout, not deployment.
+    no_env=("TRANSLATOR", "REGISTRY_EXPORT"),
 )
 
 

@@ -17,6 +17,7 @@ Two resolvers ship:
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Callable
 
 #: ``{name}`` interpolation slots in a template, de-duped, first-seen order.
@@ -66,44 +67,147 @@ def _errors_owners() -> dict[str, str]:
     return error_owners()
 
 
-def _errors_export_codes(owner: str) -> set[str] | None:
-    """Codes *owner*'s shipped registry export declares, or None if it ships none.
+#: Where a registry export sits inside the unit that publishes it: a package
+#: directory for a distributable, the project root for a monolith.
+EXPORT_RELPATH = ("docs", "errors.json")
 
-    The export lives at ``<top-level package dir>/docs/errors.json`` — the
-    ``generate_error_keys`` artifact, carried in the wheel by package-data.
-    ``None`` means "no export at all" (the gdpr/core failure shape: catalogs on
-    disk, registry nowhere, so no consumer can pair the two); an unreadable
-    file counts as an empty export rather than as absence, so a corrupt
-    artifact reads as "declares nothing" and every translated key goes red.
+
+def _read_export(path: Path, owner: str | None = None) -> set[str] | None:
+    """Codes the export at *path* declares — for *owner* only, when given.
+
+    ``None`` when there is no such file. An unreadable or mis-shaped file
+    counts as an empty export rather than as absence, so a corrupt artifact
+    reads as "declares nothing" and every translated key goes red. With
+    *owner*, an entry attributed to a DIFFERENT package is skipped: an export
+    vouches for a package's codes, never for its neighbour's. An entry that
+    names nobody counts (a pre-``owner`` artifact), exactly as an un-attributed
+    key counts as owned in :func:`owned_keys`.
     """
     import json
+
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(data, list):
+        return set()
+    codes: set[str] = set()
+    for entry in data:
+        if not isinstance(entry, dict) or not isinstance(entry.get("code"), str):
+            continue
+        declared = entry.get("owner")
+        if owner is not None and isinstance(declared, str) and declared:
+            if declared != owner:
+                continue
+        codes.add(entry["code"])
+    return codes
+
+
+def _package_roots(owner: str) -> list[str]:
+    """Directories the *owner* package occupies, or [] when it is unimportable."""
     import sys
     from importlib.util import find_spec
-    from pathlib import Path
 
     module = sys.modules.get(owner)
     roots = list(getattr(module, "__path__", []) or [])
-    if not roots:
-        try:
-            spec = find_spec(owner)
-        except (ImportError, ValueError):
-            return None
-        roots = list(spec.submodule_search_locations or []) if spec else []
+    if roots:
+        return roots
+    try:
+        spec = find_spec(owner)
+    except (ImportError, ValueError):
+        return []
+    return list(spec.submodule_search_locations or []) if spec else []
+
+
+def _is_distributed(package: str) -> bool:
+    """True when an installed distribution provides the top-level *package*.
+
+    "Does this package ship to anybody" — the question that decides where its
+    registry export has to live. A distribution travels as a wheel, so its
+    export must travel inside it; a project's own app travels nowhere.
+    """
+    from importlib.metadata import packages_distributions
+
+    try:
+        return package in packages_distributions()
+    except Exception:
+        return False
+
+
+def _project_export() -> tuple[Path, Path] | None:
+    """``(project root, project export path)``, or None outside a project.
+
+    ``STAPEL_I18N["REGISTRY_EXPORT"]`` wins; otherwise the convention that
+    mirrors the package one — ``<BASE_DIR>/docs/errors.json``, the artifact
+    ``generate_error_keys`` writes.
+    """
+    from django.conf import settings
+
+    try:
+        base = getattr(settings, "BASE_DIR", None)
+    except Exception:  # settings not configured
+        return None
+    from .conf import i18n_settings
+
+    try:
+        configured = i18n_settings.REGISTRY_EXPORT
+    except Exception:
+        configured = None
+    if configured:
+        export = Path(configured)
+        return (Path(base) if base else export.parent.parent), export
+    if not base:
+        return None
+    return Path(base), Path(base).joinpath(*EXPORT_RELPATH)
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        resolved, base = path.resolve(), root.resolve()
+    except OSError:
+        return False
+    return resolved == base or base in resolved.parents
+
+
+def _errors_export_codes(owner: str) -> set[str] | None:
+    """Codes *owner*'s registry export declares, or None if it publishes none.
+
+    A distributable package carries its own export at
+    ``<top-level package dir>/docs/errors.json`` — the ``generate_error_keys``
+    artifact, kept in the wheel by package-data. That is the only place a
+    consumer who installed the package can look, so that is where the gate
+    looks first. ``None`` means "no export at all": the gdpr/core failure shape
+    (catalogs on disk, registry nowhere, so no consumer can pair the two).
+
+    A monolith's local app is not a wheel and has no ``docs/`` of its own to
+    put anything in. Its codes are declared by the export of the project it IS
+    part of (:func:`_project_export`) — the artifact the project already
+    generates and commits. Two conditions keep that from becoming a way out of
+    the gate: the package must be *undistributed* (an installed distribution
+    has a wheel of its own to carry its export, and no project export stands in
+    for it — otherwise a library shipping catalogs with no registry export goes
+    green inside any project that generates one), and it must live inside the
+    project root that publishes the export. And the project export answers for
+    a code only where it attributes it to that app, so it cannot vouch for keys
+    another package owns.
+    """
+    roots = _package_roots(owner)
     for root in roots:
-        path = Path(root) / "docs" / "errors.json"
-        if not path.is_file():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return set()
-        if not isinstance(data, list):
-            return set()
-        return {
-            e["code"] for e in data
-            if isinstance(e, dict) and isinstance(e.get("code"), str)
-        }
-    return None
+        codes = _read_export(Path(root).joinpath(*EXPORT_RELPATH))
+        if codes is not None:
+            return codes
+
+    if not roots or _is_distributed(owner):
+        return None
+    project = _project_export()
+    if project is None:
+        return None
+    root_dir, export = project
+    if not any(_within(Path(r), root_dir) for r in roots):
+        return None
+    return _read_export(export, owner=owner)
 
 
 #: domain → callable returning the canonical ``{key: source_text}`` map.
