@@ -107,7 +107,7 @@ def test_a_standalone_deployment_keeps_single_tenant_semantics():
 # ---------------------------------------------------------------------------
 
 
-def _check(provider_value):
+def _check(provider_value, **kwargs):
     return check_shipped_scope_provider(
         setting="STAPEL_X['SCOPE_PROVIDER']",
         provider=provider_value,
@@ -115,6 +115,7 @@ def _check(provider_value):
         error_id="stapel_x.E900",
         warning_id="stapel_x.W900",
         isolates="widget",
+        **kwargs,
     )
 
 
@@ -195,3 +196,54 @@ def test_scoped_gate_still_503s_when_a_wired_seam_cannot_answer(provider):
     provider["raises"] = RuntimeError("workspaces is down")
     with pytest.raises(MandateUnavailable):
         _gate(FakeUser())
+
+
+# ---------------------------------------------------------------------------
+# An unmounted surface: the provider is configured open and consulted by
+# nothing (2026-08-16, stapel_video.E009 against meettoday).
+# ---------------------------------------------------------------------------
+
+
+def test_an_unmounted_surface_warns_instead_of_refusing_boot(provider):
+    """The finding is about a decision, and here nothing decides.
+
+    A module installed for its provider seam and its subscribers, with its own
+    urls left unmounted, has no route to the code that consults SCOPE_PROVIDER.
+    Erroring there refuses boot over a hole the deployment does not have, and
+    the host's only way out is a provider that provably never runs.
+    """
+    msgs = _check(ShippedProvider, surface_mounted=False)
+    assert [type(m) for m in msgs] == [checks.Warning]
+    assert msgs[0].id == "stapel_x.W900"
+    assert "not mounted" in msgs[0].msg
+
+
+def test_the_warning_says_what_changes_when_the_surface_is_mounted(provider):
+    """Warning, not silence: the measurement knows its own limit.
+
+    A URLconf walk cannot see the host calling the module's services from its
+    own Python, so the hint has to carry the obligation forward.
+    """
+    hint = _check(ShippedProvider, surface_mounted=False)[0].hint
+    assert "Before mounting" in hint
+    assert "services" in hint
+
+
+def test_a_mounted_surface_is_still_an_error(provider):
+    """The default and the explicit True agree, and both still refuse."""
+    for msgs in (_check(ShippedProvider), _check(ShippedProvider, surface_mounted=True)):
+        assert [type(m) for m in msgs] == [checks.Error]
+        assert msgs[0].id == "stapel_x.E900"
+
+
+def test_an_unmounted_surface_does_not_resurrect_the_standalone_case():
+    """Standalone keeps its own warning — same level, different sentence."""
+    msgs = _check(ShippedProvider, surface_mounted=False)
+    assert [type(m) for m in msgs] == [checks.Warning]
+    assert "single-tenant" in msgs[0].msg
+
+
+def test_a_real_swap_is_silent_however_the_surface_is_mounted(provider):
+    """Unmounted is not a licence to stop looking at the provider itself."""
+    assert _check(UnrelatedProvider(), surface_mounted=False) == []
+    assert _check(UnrelatedProvider(), surface_mounted=True) == []

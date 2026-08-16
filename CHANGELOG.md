@@ -1432,6 +1432,41 @@ working.
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-08-16
+
+### A configured seam that nothing routes to is not a hole
+
+`check_shipped_scope_provider` takes `surface_mounted` (keyword-only, default
+`True`, so callers that have not started measuring keep today's behaviour). When
+it is `False` the finding degrades from Error to Warning.
+
+The case is real and the fleet uses it on purpose: a module installed for its
+provider seam and its subscribers, with its own URL surface left unmounted,
+because the host owns the rooms/boards and the library owns a provider or two.
+There the shipped scope provider decides nothing — nothing routes to the code
+that would consult it. Refusing that boot demands a provider that provably never
+runs. meettoday hit exactly this on 2026-08-16: `stapel_video.E009` kept the
+sandbox backend down over a tenancy hole the deployment does not have, while the
+same file's `E008` was already gating on a URLconf walk and passing.
+
+Warning rather than silence, because the measurement is honest about its own
+limit: a URLconf walk cannot see a host calling the module's `services` from its
+own Python. The reading is "configured open, consulted by nothing today, and
+that changes the day you mount it" — and the hint says so.
+
+### `module_urls_mounted` — the walk itself moves into core
+
+`stapel_core.django.mounts.module_urls_mounted("stapel_x")` answers whether any
+view from a module is reachable in this deployment's URLconf. Walked, not
+reversed: a host may mount an include under any prefix and namespace, and a
+`reverse()` by name would read that as "not mounted". An unloadable URLconf
+answers `True` — Django's own url checks report that, and a caller must not turn
+one defect into two.
+
+It was a private helper copied inside stapel-video. Every module that ships a
+scope seam needs the same question, so the mechanism belongs one layer down
+rather than re-copied per library.
+
 ## [0.18.0] — 2026-08-03
 
 ### Added

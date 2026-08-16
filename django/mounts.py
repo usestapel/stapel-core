@@ -282,6 +282,49 @@ def admin_index_url() -> str:
 
 
 #: Lazy variants for settings modules — evaluated per use, after the URLconf
+def module_urls_mounted(module: str) -> bool:
+    """Is any view from ``module`` reachable in this deployment's URLconf?
+
+    Walked, not reversed: a host is free to mount an include under any prefix
+    and any namespace, and a ``reverse()`` by name would read that as "not
+    mounted". An unloadable URLconf answers True — Django's own url checks
+    report that, and a caller of this must not turn one defect into two.
+
+    This is the measurement a boot-time check needs before it calls a
+    configured-but-unreachable seam a hole. A module installed for its provider
+    seam and its subscribers, with its own views left unmounted, cannot decide
+    anything at runtime: nothing routes to the code that would ask. Saying so
+    out loud is not the same as saying nothing — see
+    :func:`stapel_core.django.scope.check_shipped_scope_provider`, which
+    degrades an Error to a Warning on exactly this reading, because a host
+    calling the module's services from its own Python is not measurable here.
+    """
+    try:
+        from django.urls import get_resolver
+
+        return _tree_has_module(get_resolver().url_patterns, module)
+    except Exception:
+        return True
+
+
+def _tree_has_module(patterns, module: str) -> bool:
+    prefix = module + "."
+    for pattern in patterns:
+        nested = getattr(pattern, "url_patterns", None)
+        if nested is not None:
+            if _tree_has_module(nested, module):
+                return True
+            continue
+        callback = getattr(pattern, "callback", None)
+        view_class = getattr(callback, "view_class", None) or getattr(
+            callback, "cls", None
+        )
+        owner = getattr(view_class or callback, "__module__", "") or ""
+        if owner == module or owner.startswith(prefix):
+            return True
+    return False
+
+
 #: exists: ``LOGIN_URL = lazy_admin_login_url()``.
 lazy_admin_login_url = lazy(admin_login_url, str)
 lazy_admin_index_url = lazy(admin_index_url, str)
@@ -300,4 +343,5 @@ __all__ = [
     "lazy_admin_index_url",
     "MODULE_RESERVED_SUFFIXES",
     "reserved_paths",
+    "module_urls_mounted",
 ]

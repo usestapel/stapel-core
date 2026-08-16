@@ -121,6 +121,7 @@ def check_shipped_scope_provider(
     error_id: str,
     warning_id: str,
     isolates: str,
+    surface_mounted: bool = True,
 ):
     """One check body for "the deployment is still running the shipped provider".
 
@@ -131,12 +132,30 @@ def check_shipped_scope_provider(
         error_id / warning_id: the module's check ids for the two levels.
         isolates: what a real provider would separate, in the module's own
             words ("boards and cards", "conversations", "rooms").
+        surface_mounted: is the module's own URL surface reachable here? Pass
+            ``stapel_core.django.mounts.module_urls_mounted("stapel_x")``.
+            Defaults True, which is the old behaviour for callers that have not
+            started measuring.
 
     A host that swapped the provider is silent. A host still on the shipped one
     gets an ERROR when this deployment can ask about mandates (workspaces is
     installed or the seam is routed — i.e. it is multi-tenant and the shipped
     provider cannot name a tenant), and a WARNING otherwise, because
     single-tenant is a legitimate shape the default is honestly documented for.
+
+    The third case is ``surface_mounted=False``, and it is why this takes the
+    argument at all. A module can be installed for its provider seam and its
+    subscribers with its own views left unmounted — a shape the fleet uses on
+    purpose, where the host owns the rooms/boards and the library owns a
+    provider or two. There the shipped scope provider decides nothing: nothing
+    routes to the code that would consult it. Erroring there refuses boot over
+    a hole the deployment does not have, and the host's only way out is to
+    write a provider that provably never runs.
+
+    It is a WARNING rather than silence because the measurement is honest about
+    its own limit: a URLconf walk cannot see the host calling the module's
+    ``services`` from its own Python. So the reading is "configured open, not
+    currently consulted, and that changes the day you mount it".
     """
     from django.core import checks
 
@@ -152,6 +171,22 @@ def check_shipped_scope_provider(
             f"nothing here can answer 'does this user hold a mandate'.",
             hint=f"If this host is multi-tenant, point {setting} at a "
                  f"workspace-aware provider and install/route stapel_workspaces.",
+            id=warning_id,
+        )]
+
+    if not surface_mounted:
+        return [checks.Warning(
+            f"{setting} is the shipped single-scope provider and this "
+            f"deployment has workspaces — but the module's own URL surface is "
+            f"not mounted here, so nothing routes to the code that would "
+            f"consult it. It is deciding nothing today.",
+            hint=f"No action needed while the surface stays unmounted (a host "
+                 f"that owns its own {isolates} and installs this module for "
+                 f"its provider seam is the intended shape). Before mounting "
+                 f"the module's urls — or calling its services from your own "
+                 f"code, which this check cannot see — point {setting} at a "
+                 f"workspace-aware provider, or every mandated member of any "
+                 f"workspace reaches every {isolates} of every other one.",
             id=warning_id,
         )]
 
