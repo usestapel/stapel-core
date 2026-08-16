@@ -302,13 +302,22 @@ def _guarded_secret_names() -> list[str]:
     return names
 
 
+#: Backends that hold no credential to be weak. SQLite authenticates with the
+#: filesystem; Django's `dummy` backend cannot open a connection at all, which
+#: is what a boot-smoke tier configures on purpose to prove that loading an
+#: app needs no database. Asking either for a password is asking a question
+#: that has no subject — a different thing from a deployment shipping the
+#: public default, which is what E002 exists to stop.
+_PASSWORDLESS_DB_ENGINES = ("sqlite", "dummy")
+
+
 def _default_db_wants_a_password() -> bool:
-    """Only engines that authenticate with one. SQLite has no password."""
+    """Only engines that authenticate with one — see _PASSWORDLESS_DB_ENGINES."""
     from django.conf import settings
 
     default = (getattr(settings, "DATABASES", None) or {}).get("default") or {}
     engine = str(default.get("ENGINE", ""))
-    return bool(engine) and "sqlite" not in engine
+    return bool(engine) and not any(e in engine for e in _PASSWORDLESS_DB_ENGINES)
 
 
 def check_production_secrets(app_configs=None, **kwargs):

@@ -235,3 +235,38 @@ def test_the_original_functions_are_untouched():
     with pytest.raises(ImproperlyConfigured):
         guard_secret("SECRET_KEY", "abc123")
     guard_secret("SECRET_KEY", GOOD_SECRET)
+
+
+class TestDummyBackendHasNoPasswordToBeWeak:
+    """E002 must not fire on Django's `dummy` database backend.
+
+    ``_default_db_wants_a_password`` already states the rule it means to
+    apply — "Only engines that authenticate with one. SQLite has no
+    password." — and excludes sqlite for exactly that reason. The dummy
+    backend authenticates with even less: it cannot open a connection at
+    all, so there is no password for an attacker to guess and nothing the
+    check can meaningfully assert.
+
+    This is not a hole in the guard. It is the difference between "this
+    deployment ships a public default password" and "this configuration has
+    no database", which is the same distinction the whole prodguard tier
+    rests on. Generated projects' boot-smoke tier swaps DATABASES for the
+    dummy backend on purpose (proving app loading needs no database), and
+    without this it goes red on a credential that does not exist — pushing
+    every generated project to carry a workaround for a predicate that
+    simply forgot a backend.
+    """
+
+    def test_dummy_backend_is_not_asked_for_a_password(self, settings):
+        from stapel_core.django.prodguard import _default_db_wants_a_password
+
+        settings.DATABASES = {"default": {"ENGINE": "django.db.backends.dummy"}}
+        assert _default_db_wants_a_password() is False
+
+    def test_postgres_is_still_asked(self, settings):
+        from stapel_core.django.prodguard import _default_db_wants_a_password
+
+        settings.DATABASES = {
+            "default": {"ENGINE": "django.db.backends.postgresql", "PASSWORD": "x"}
+        }
+        assert _default_db_wants_a_password() is True
