@@ -1432,6 +1432,15 @@ working.
 
 ## [Unreleased]
 
+## [0.30.1] — 2026-08-16
+
+### Fixed — the contract artifacts, which 0.30.0 shipped stale
+
+0.30.0 was tagged with  still saying 0.29.0: the version
+was bumped without re-running `make contract`. Four contract tests caught it in
+CI and the release never published. No code differs from 0.30.0; this is the
+artifacts catching up. Tracker #169, verbatim.
+
 ## [0.30.0] — 2026-08-16
 
 ### A configured seam that nothing routes to is not a hole
