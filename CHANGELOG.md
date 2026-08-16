@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.28.0] — 2026-08-16
+
+### A one-time code is not a row
+
+`stapel_core.verification.codes.OneTimeCodeStore` — the TTL-scoped, hashed
+store an OTP flow keeps its codes in instead of a table. It joins the challenge
+and grant stores already in this package: the mechanism lives here, the policy
+(lifetime, attempt budget, code length, delivery) stays with the caller and is
+passed in on every call.
+
+Two defects of the table are closed by construction. **The code no longer rests
+in the clear**: what is stored is an HMAC-SHA256 digest keyed by `SECRET_KEY`
+and salted per entry, so a reader of the store holds nothing replayable, and a
+six-digit code's million preimages cannot be swept offline without the app
+secret — which is what would have made a bare digest decorative. The
+identifier is hashed into the key too: cache keys are readable to anything that
+can `SCAN` the instance, and a plain one would publish who is signing in right
+now. **Expired entries no longer need a sweeper**: the entry's TTL *is* the
+code's lifetime, so nothing accumulates and no host has to remember a beat
+schedule for it.
+
+**Absence and wrongness are different facts**, and `check()` refuses to fold
+one into the other. `NOT_FOUND` means the wait expired — aged out, already
+spent, or the cache restarted — and the honest answer is an invitation to start
+over, not "invalid code". `MISMATCH` means the digits were wrong. Telling a
+user they made a mistake when the system merely stopped waiting is the same
+defect as rendering "we could not ask" as "you may not".
+
+**The attempt budget lives inside the entry**, not beside it: one record, one
+TTL, one death. A counter outliving its code re-blocks a fresh request; a code
+outliving its counter hands back an unlimited guessing budget. The block is
+deliberately a separate key with its own lifetime, because a block must survive
+the code it killed. A wrong guess bumps the counter without touching the
+deadline — guessing must not extend the wait.
+
+**Everything fails closed.** An unreachable cache yields `UNAVAILABLE` from
+`check()` and raises `StoreUnavailable` from the write paths; it never yields
+`OK`, and `send_wait()` refuses to read an outage as "no limit applies".
+
+Redis is not durable and this is a deliberate acceptance, not an oversight: a
+restart drops every pending code, the user requests another, and because a
+dropped entry is indistinguishable from an aged-out one, the "the wait expired,
+ask again" message is already true for that case.
+
 ## [0.27.0] — 2026-08-15
 
 ### The layer that lied

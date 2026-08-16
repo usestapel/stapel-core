@@ -18,6 +18,10 @@ one of them completes the challenge. Factor implementations are registered
 by stapel-auth (or a host project) via ``register_factor``; the mechanism —
 challenge store, grant store, decorator, OpenAPI annotation — lives here.
 
+The same package owns :class:`OneTimeCodeStore` (``codes.py``): the TTL-scoped,
+hashed store an OTP flow keeps its codes in instead of a database table. It is
+storage only — lifetimes, attempt budgets and delivery stay with the caller.
+
 Client cycle: 403 with ``verification`` → run the factor UI against the
 auth service's verification endpoints → retry the original request (the
 grant is stored server-side per user+scope; stateless clients may instead
@@ -26,6 +30,13 @@ send the X-Verification-Token returned on completion).
 See docs: flows-and-verification.md in the stapel workspace.
 """
 
+from .codes import (
+    CodeCheck,
+    CodeOutcome,
+    IssuedCode,
+    OneTimeCodeStore,
+    StoreUnavailable,
+)
 from .decorators import VERIFICATION_LEVELS, requires_verification
 from .factors import (
     FACTOR_STRENGTHS,
@@ -50,6 +61,11 @@ from .policy import (
 
 __all__ = [
     "requires_verification",
+    "CodeCheck",
+    "CodeOutcome",
+    "IssuedCode",
+    "OneTimeCodeStore",
+    "StoreUnavailable",
     "VERIFICATION_LEVELS",
     "FACTOR_STRENGTHS",
     "VerificationFactor",
