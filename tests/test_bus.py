@@ -32,10 +32,32 @@ class TestEvent:
         assert e2.event_type == "x"
         assert e2.payload == {"n": 42}
 
-    def test_key_not_serialised(self):
+    def test_key_is_serialised(self):
+        # Regression: to_json() used to pop "key" before serialising, so a
+        # keyed event lost its routing key on any round trip through a
+        # storage/wire boundary (the outbox: event_json = event.to_json(),
+        # later re-hydrated via Event.from_json() for delivery). On Kafka,
+        # KafkaBus.publish() falls back to event_id for the partition key
+        # once event.key is None, so same-key events scatter across
+        # partitions instead of landing on one — per-key ordering silently
+        # degrades to round-robin. NATS never noticed: it partitions by
+        # subject, not by this field.
         e = Event(event_type="e", service="s", key="routing-key")
         d = json.loads(e.to_json())
-        assert "key" not in d
+        assert d["key"] == "routing-key"
+
+    def test_key_round_trips_through_json(self):
+        e = Event(event_type="e", service="s", key="listing-42")
+        e2 = Event.from_json(e.to_json())
+        assert e2.key == "listing-42"
+
+    def test_from_json_without_key_field_defaults_to_none(self):
+        # Additive change: payloads written before this fix (or by any
+        # producer that never set a key) must still deserialize cleanly.
+        e2 = Event.from_json(
+            json.dumps({"event_type": "a", "service": "b"})
+        )
+        assert e2.key is None
 
     def test_to_bytes_is_utf8_json(self):
         e = Event(event_type="t", service="s")
@@ -171,3 +193,55 @@ class TestPublishHelper:
         e = Event(event_type="x", service="s")
         publish("t", e)
         assert received == [e]
+
+
+# ---------------------------------------------------------------------------
+# KafkaBus.publish() partition key — the outbox round-trip end to end
+# ---------------------------------------------------------------------------
+
+class _FakeKafkaProducer:
+    def __init__(self):
+        self.produced: list[dict] = []
+
+    def produce(self, topic, key=None, value=None, callback=None):
+        self.produced.append({"topic": topic, "key": key, "value": value})
+
+    def poll(self, timeout):
+        pass
+
+
+class TestKafkaBusPartitionKey:
+    def test_publish_uses_event_key_for_the_partition(self):
+        from stapel_core.bus.backends.kafka import KafkaBus
+
+        bus = KafkaBus()
+        fake = _FakeKafkaProducer()
+        bus._producer = fake
+
+        event = Event(event_type="listing.published", service="s", key="listing-42")
+        bus.publish("listing.published", event)
+
+        assert fake.produced[0]["key"] == b"listing-42"
+
+    def test_outbox_round_trip_preserves_the_partition_key(self):
+        """The exact defect: an event serialized for the outbox (event_json
+        = event.to_json()) and later re-hydrated for delivery
+        (Event.from_json(row.event_json)) must still carry its key all the
+        way to the Kafka producer — otherwise KafkaBus.publish() falls back
+        to the random event_id and same-key events land on different
+        partitions, breaking per-key ordering."""
+        from stapel_core.bus.backends.kafka import KafkaBus
+
+        original = Event(event_type="listing.published", service="s", key="listing-42")
+
+        # Stand-in for OutboxEvent.event_json + the relay's Event.from_json().
+        stored_json = original.to_json()
+        rehydrated = Event.from_json(stored_json)
+
+        bus = KafkaBus()
+        fake = _FakeKafkaProducer()
+        bus._producer = fake
+        bus.publish("listing.published", rehydrated)
+
+        assert fake.produced[0]["key"] == b"listing-42"
+        assert fake.produced[0]["key"] != original.event_id.encode("utf-8")

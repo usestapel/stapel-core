@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.33.1] — 2026-08-22
+
+### Fix — `Event.to_json()` dropped the partition key
+
+`to_json()` popped `key` before serialising, so a keyed event lost its
+routing key on any round trip through a storage/wire boundary — the
+transactional outbox is exactly that: `event_json = event.to_json()` on
+write, `Event.from_json(row.event_json)` on delivery (`django/outbox/models.py`,
+`django/outbox/relay.py`). Once `event.key` came back `None`,
+`KafkaBus.publish()` fell back to `event.event_id` — a fresh random UUID
+per message — for the producer partition key. Same-key events (e.g. every
+`listing.published` for one listing) landed on different Kafka partitions
+instead of one, so per-key ordering silently degraded to round-robin.
+Direct publishes (no outbox — `OUTBOX_ENABLED=False`, or the in-memory/NATS
+transports) never round-tripped through JSON with the key attached, which
+is why nothing caught it: NATS partitions by subject, not by this field.
+
+Fix is additive: `key` is now included in the envelope JSON, and
+`Event.from_bytes`/`from_json` read it back with `d.get("key")`, so
+payloads written before this release (no `key` field at all) still
+deserialize with `key=None`, unchanged from today's behavior.
+
+Also noted while reading this path, filed as a separate concern rather
+than fixed here: the outbox table (`OutboxEvent`) has no retention/purge —
+dispatched rows accumulate forever. Tracked in
+`stapel-realtime-design.md` §11.5's adjacent-defects note; no GitHub issue
+exists in `usestapel/stapel-core` yet.
+
 ## [0.33.0] — 2026-08-22
 
 ### Signal — the fourth comm primitive
