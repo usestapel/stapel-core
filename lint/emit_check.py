@@ -19,13 +19,28 @@ gate. Rules:
 - **EMIT004** — emit inside a callback passed to ``transaction.on_commit``:
   the outbox row would be written *after* commit; a crash in between loses
   the event.
+- **EMIT005** — a module-level ``emit_*`` helper (e.g.
+  ``def emit_listing_updated(listing): ...``) with zero call sites anywhere
+  in the scanned tree. Declared-but-unwired: the motivating defect was
+  ``stapel_listings/events.py``'s ``emit_listing_updated`` — a fully written,
+  schema-backed emit helper that nothing in the package ever called, so the
+  event it promises never actually fires. Cross-file: the call site is
+  usually in a different module than the ``events.py`` declaration (a
+  view/service importing and calling it), so this check pools every ``def``
+  and every call name across all files given to one invocation before
+  comparing.
 
 What counts as an emit call: any call to a name (or attribute) that is
 ``emit`` or starts with ``emit_`` — the stapel convention for outbox emit
-helpers (``events.emit_listing_published`` etc.).
+helpers (``events.emit_listing_published`` etc.). EMIT005 is narrower: it
+only *declares* on ``emit_*`` (the underscore-suffixed wrapper convention),
+never on bare ``emit`` — ``emit`` itself is the library primitive
+(``stapel_core.comm.emit``), meant to be called by every consumer of this
+package, not from within it.
 
 Suppression: append ``# emit-check: ok — <reason>`` to the flagged line
-(e.g. when the caller provably holds the atomic block).
+(e.g. when the caller provably holds the atomic block, or — for EMIT005 —
+when the helper is genuinely wired only from outside this repo).
 
 KNOWN LIMITATIONS (by design — this is a pragmatic AST pass, not data-flow
 analysis):
@@ -34,10 +49,19 @@ analysis):
   ``transaction.atomic()`` (suppress with the pragma), nor that a callee
   opens one internally;
 - name-based: an emit wrapper not named ``emit``/``emit_*`` (e.g.
-  ``publish_category_changed``) is invisible to EMIT003/EMIT004 unless the
-  call site also matches;
+  ``publish_category_changed``) is invisible to EMIT003/EMIT004/EMIT005
+  unless the call site also matches;
 - EMIT003 only checks that the *emit* is inside an atomic construct, not
-  that every ORM write shares it.
+  that every ORM write shares it;
+- EMIT005 only looks at module-level (top-level) ``def``/``async def``
+  nodes — a nested function or a class method named ``emit_*`` is invisible
+  to it (invisible in both directions: neither declared nor countable as a
+  call target beyond its literal name), and it only counts *calls*
+  (``ast.Call``) — a helper only ever passed by reference
+  (``signal.connect(events.emit_foo)``) reads as unwired and needs the
+  pragma; it also has no cross-repo/import-graph model, so a helper legitimately
+  called only from a sibling package (not visible in this invocation's file
+  set) needs the pragma too.
 
 The runtime guards in ``stapel_core.comm.emit`` (EMIT_OUTSIDE_ATOMIC mode +
 rollback-only marking on emit failure) cover what this static pass cannot.
@@ -269,6 +293,66 @@ def check_source(source: str, path: Path) -> list[_Finding]:
     return findings
 
 
+def _collect_call_names(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = _call_name(node)
+            if name is not None:
+                names.add(name)
+    return names
+
+
+def _collect_emit_helper_defs(
+    tree: ast.Module,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    # Module-level only ("модульный хелпер" — the events.py convention).
+    # Excludes bare "emit" (the library primitive, called by every
+    # consumer, never from inside this package) and excludes nested/class
+    # defs (see KNOWN LIMITATIONS).
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("emit_")
+    ]
+
+
+def check_unwired_emits(sources: dict[Path, str]) -> list[_Finding]:
+    """EMIT005 — module-level ``emit_*`` helpers with no call site anywhere
+    in ``sources`` (the package, as given to one invocation of this tool).
+    """
+    trees: dict[Path, ast.Module] = {}
+    for path, source in sources.items():
+        try:
+            trees[path] = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+
+    called_names: set[str] = set()
+    for tree in trees.values():
+        called_names |= _collect_call_names(tree)
+
+    findings: list[_Finding] = []
+    for path, tree in trees.items():
+        lines = sources[path].splitlines()
+        for node in _collect_emit_helper_defs(tree):
+            if node.name in called_names:
+                continue
+            line = lines[node.lineno - 1] if 0 < node.lineno <= len(lines) else ""
+            if PRAGMA in line:
+                continue
+            findings.append(_Finding(
+                path, node.lineno, "EMIT005",
+                f"'{node.name}' is declared but has no call site anywhere in "
+                f"this package — an event nobody emits is a contract the "
+                f"consumer waits on forever. If it's wired only from "
+                f"outside this repo, append '# {PRAGMA} — <reason>' to "
+                f"this line",
+            ))
+    return findings
+
+
 def iter_python_files(paths: list[Path]):
     for root in paths:
         if root.is_file() and root.suffix == ".py":
@@ -287,12 +371,16 @@ def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     roots = [Path(a) for a in args] or [Path(".")]
     findings: list[_Finding] = []
+    sources: dict[Path, str] = {}
     for path in iter_python_files(roots):
         try:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        sources[path] = source
         findings.extend(check_source(source, path))
+    findings.extend(check_unwired_emits(sources))
+    findings.sort(key=lambda f: (str(f.path), f.line, f.code))
     for f in findings:
         print(f)
     if findings:

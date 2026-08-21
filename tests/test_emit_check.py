@@ -2,7 +2,12 @@
 import textwrap
 from pathlib import Path
 
-from stapel_core.lint.emit_check import check_source, iter_python_files, main
+from stapel_core.lint.emit_check import (
+    check_source,
+    check_unwired_emits,
+    iter_python_files,
+    main,
+)
 
 
 def _check(src: str):
@@ -196,6 +201,109 @@ def test_emit_in_on_commit_lambda_flagged():
 
 
 # ---------------------------------------------------------------------------
+# EMIT005 — declared emit_* helper with no call site in the package
+# ---------------------------------------------------------------------------
+
+
+def test_unwired_emit_helper_flagged(tmp_path):
+    (tmp_path / "events.py").write_text(
+        "def emit_listing_updated(listing) -> None:\n"
+        "    emit('listing.updated', {})\n"
+    )
+    findings = check_unwired_emits(
+        {p: p.read_text() for p in tmp_path.glob("*.py")}
+    )
+    assert [f.code for f in findings] == ["EMIT005"]
+    assert "emit_listing_updated" in findings[0].message
+
+
+def test_emit_helper_called_in_same_file_not_flagged(tmp_path):
+    (tmp_path / "events.py").write_text(
+        "def emit_listing_updated(listing) -> None:\n"
+        "    emit('listing.updated', {})\n"
+        "\n"
+        "\n"
+        "def republish(listing):\n"
+        "    emit_listing_updated(listing)\n"
+    )
+    findings = check_unwired_emits(
+        {p: p.read_text() for p in tmp_path.glob("*.py")}
+    )
+    assert findings == []
+
+
+def test_emit_helper_called_from_another_file_not_flagged(tmp_path):
+    # The realistic shape: the helper lives in events.py, the call site is
+    # in a service/view module elsewhere in the same package.
+    (tmp_path / "events.py").write_text(
+        "def emit_listing_updated(listing) -> None:\n"
+        "    emit('listing.updated', {})\n"
+    )
+    (tmp_path / "services.py").write_text(
+        "from . import events\n"
+        "\n"
+        "\n"
+        "def publish(listing):\n"
+        "    events.emit_listing_updated(listing)\n"
+    )
+    findings = check_unwired_emits(
+        {p: p.read_text() for p in tmp_path.glob("*.py")}
+    )
+    assert findings == []
+
+
+def test_bare_emit_primitive_not_flagged(tmp_path):
+    # "emit" itself is the library primitive — not an emit_* wrapper — and
+    # is expected to have zero in-package call sites (every caller is an
+    # external consumer of this package).
+    (tmp_path / "actions.py").write_text(
+        "def emit(topic, payload, *, key=None):\n"
+        "    ...\n"
+    )
+    findings = check_unwired_emits(
+        {p: p.read_text() for p in tmp_path.glob("*.py")}
+    )
+    assert findings == []
+
+
+def test_nested_and_method_emit_defs_not_flagged():
+    # KNOWN LIMITATION, asserted: EMIT005 only looks at module-level defs —
+    # a nested function or a class method named emit_* is invisible to it,
+    # in either direction (not declared, so not flagged).
+    src = textwrap.dedent("""
+        def outer():
+            def emit_inner():
+                emit("x.y", {})
+            return emit_inner
+
+        class Publisher:
+            def emit_via_method(self):
+                emit("x.y", {})
+    """)
+    findings = check_unwired_emits({Path("mod.py"): src})
+    assert findings == []
+
+
+def test_unwired_emit_helper_pragma_suppressed(tmp_path):
+    (tmp_path / "events.py").write_text(
+        "def emit_listing_updated(listing) -> None:  # emit-check: ok — consumed by the search indexer bridge\n"
+        "    emit('listing.updated', {})\n"
+    )
+    findings = check_unwired_emits(
+        {p: p.read_text() for p in tmp_path.glob("*.py")}
+    )
+    assert findings == []
+
+
+def test_main_reports_emit005_across_files(tmp_path):
+    (tmp_path / "events.py").write_text(
+        "def emit_listing_updated(listing) -> None:\n"
+        "    emit('listing.updated', {})\n"
+    )
+    assert main([str(tmp_path)]) == 1
+
+
+# ---------------------------------------------------------------------------
 # Suppression pragma + file iteration + CLI
 # ---------------------------------------------------------------------------
 
@@ -227,7 +335,14 @@ def test_iter_python_files_skips_tests_and_migrations(tmp_path):
 
 def test_main_exit_codes(tmp_path, capsys):
     clean = tmp_path / "clean.py"
-    clean.write_text("def emit_x():\n    emit('a.b', {})\n")
+    clean.write_text(
+        "def emit_x():\n"
+        "    emit('a.b', {})\n"
+        "\n"
+        "\n"
+        "def trigger():\n"
+        "    emit_x()\n"
+    )
     assert main([str(tmp_path)]) == 0
 
     dirty = tmp_path / "dirty.py"

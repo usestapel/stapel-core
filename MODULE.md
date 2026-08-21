@@ -213,9 +213,12 @@ Mechanical guards behind it (they also protect plain `emit()`):
   callbacks) is flagged per `EMIT_OUTSIDE_ATOMIC` above;
 - `python -m stapel_core.lint.emit_check .` — static CI gate for the same
   classes (EMIT001 emit in except, EMIT002 swallowed emit, EMIT003
-  mutation+emit without shared atomic, EMIT004 emit in on_commit). Lexical
-  only; suppress a proven false positive with `# emit-check: ok — <reason>`.
-  Module repos run it in pre-commit/CI next to ruff.
+  mutation+emit without shared atomic, EMIT004 emit in on_commit, EMIT005 a
+  module-level `emit_*` helper with zero call sites anywhere in the scanned
+  package — declared-but-unwired, the `stapel_listings.events.
+  emit_listing_updated` defect). Lexical only; suppress a proven false
+  positive with `# emit-check: ok — <reason>`. Module repos run it in
+  pre-commit/CI next to ruff.
 
 Review checklist for data-holding modules: every emit is atomic with its
 mutation, and a `test_failing_emit_rolls_back`-class test exists (see
@@ -1480,6 +1483,11 @@ mechanism; the `stapel_mounts` private names re-export from there unchanged.
   a shared atomic block, `try/except` around `emit`, and `emit` inside
   `on_commit` callbacks are all flagged by the emit-check gate and the
   `EMIT_OUTSIDE_ATOMIC` runtime guard.
+- **Do not leave a declared `emit_*` helper uncalled.** A schema'd
+  `events.emit_foo` nobody in the package ever calls is a contract the
+  consumer waits on forever (EMIT005); wire it or delete it, or suppress
+  with a named reason if it is genuinely triggered only from outside the
+  repo.
 - **Do not hardcode transports in module code.** `ACTION_TRANSPORT`,
   `FUNCTION_TRANSPORT`, `TASK_DISPATCH`, `STAPEL_BUS_BACKEND` are deployment
   configuration; module code must work identically in monolith (inprocess)

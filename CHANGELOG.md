@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.32.0] — 2026-08-21
+
+### emit-check gains EMIT005 — a declared `emit_*` helper nobody calls
+
+`stapel_listings/events.py`'s `emit_listing_updated` was fully written and
+schema-backed, and had zero call sites anywhere in the package: an event the
+module promised but never actually fired, invisible to CI because the
+existing emit-check rules (EMIT001-004) only look at how an emit call is
+*wrapped*, never at whether the wrapper itself is *used*. The stapel-search
+design doc's contract gate (`stapel-search-design.md` §11) names this the
+same "declared ⇒ unwired" disease its own index-lint layer guards against,
+and asks for the fix to land in the emit gate directly, ahead of any
+stapel-search code.
+
+`lint/emit_check.py` now also flags **EMIT005**: a module-level `emit_*`
+function (never bare `emit` — that name is the library primitive, meant to
+be called by every *consumer* of a package, not from within it) with no
+call site anywhere in the files given to one invocation of the tool. The
+check pools every declaration and every call name across the whole scanned
+tree first, since the realistic shape is cross-file — the helper lives in
+`events.py`, the call site is in a service or view module elsewhere in the
+same package. Suppress a helper that is genuinely wired only from outside
+the repo with the same `# emit-check: ok — <reason>` pragma the other four
+rules already use, appended to the `def` line.
+
+Known limitation, by the same pragmatic-AST-pass design as EMIT001-004: only
+module-level `def`/`async def` nodes are seen (a nested function or a class
+method named `emit_*` is invisible in both directions), and only actual
+`ast.Call` sites count — a helper only ever passed by reference (e.g.
+`signal.connect(events.emit_foo)`) reads as unwired and needs the pragma.
+
 ## [0.31.0] — 2026-08-21
 
 ### `request_notification` gains `telegram_chat_id`, the third direct address
