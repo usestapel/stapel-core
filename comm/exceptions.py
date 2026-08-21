@@ -90,6 +90,31 @@ class ProjectionConfigError(CommError):
     app-ready validation — a misdeclared read-model never silently drifts."""
 
 
+class SignalError(CommError):
+    """Base class for Signal-primitive contract violations.
+
+    Raised for a malformed address only. Delivery failures are never raised:
+    a Signal is a courtesy to a live observer whose loss is legal by contract
+    (stapel-realtime-design §3.2), so it must not break the caller.
+    """
+
+
+class InvalidStreamKey(SignalError):
+    """A stream key is not ``<mod>:<scope_type>:<scope_id>[:<topic>]``.
+
+    The scope is part of the name so that a group physically cannot cross a
+    workspace/conversation — a free-form key would put that guarantee back in
+    the hands of whoever writes the f-string. Raised even with no transport
+    configured: the no-op default still gates the canon.
+    """
+
+
+class InvalidSignalType(SignalError):
+    """A signal type is malformed, or claims a reserved wire-protocol frame
+    type (hello/welcome/replay/live/ephemeral/ping/pong/resync/kick/error) —
+    a consumer would read the courtesy frame as protocol."""
+
+
 class EmitOutsideAtomicError(CommError):
     """emit() was called outside transaction.atomic() while the outbox is on.
 

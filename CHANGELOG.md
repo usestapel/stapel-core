@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.33.0] — 2026-08-22
+
+### Signal — the fourth comm primitive
+
+Action, Function and Task all address **code**. The meaning none of them
+covers is the one every module ends up wanting: *"show this to a live
+observer, if one is watching."* `stapel-realtime-design.md` §3 names it and
+this release lands the emitter half:
+
+```python
+from stapel_core.comm import signal
+
+signal(f"recordings:ws:{workspace_id}", "recording.status",
+       {"recording_id": str(rec.pk), "status": rec.status})
+```
+
+At-most-once and ephemeral: delivery only to whoever is connected at the
+moment of the emit, ordering only within one stream key, never ahead of the
+transaction it describes (`transaction.on_commit`, no outbox row). Nothing
+else is promised — a lost frame is correct behaviour, because the truth stays
+in the DB behind REST and a signal is a reason to refetch, not the state
+itself. That is exactly what separates it from an Action: an Action is a debt
+to the system (outbox, at-least-once, subscribers obliged to handle it), a
+Signal is a courtesy to a screen. The canonical bridge runs the useful way
+round — an `@on_action` handler turning a committed fact into a `signal()`.
+
+Addressing is canonical and validated on every emit:
+`<mod>:<scope_type>:<scope_id>[:<topic>]`, built with `stream_key()`. The
+scope is *part of the name*, so a group physically cannot cross a workspace;
+a malformed key raises `InvalidStreamKey` even with delivery switched off, so
+the no-op default still gates the canon. The wire v1 envelope is
+`{"v", "type", "stream", "payload"}` — `stream` optional in the schema but
+populated from day one (that field is what makes a multiplexed socket
+possible later without breaking the envelope), and deliberately no `seq`:
+frame kind is structural, so an ephemeral frame can never be persisted as
+journal state.
+
+Delivery is an axis, `STAPEL_COMM["SIGNAL_TRANSPORT"]`, closed by default.
+Core ships the emitter only — stdlib, no channels, no redis, no ASGI —
+because pulling Channels into core would tax 26 libraries for a surface three
+modules have and no host mounts, while putting the emitter in the delivery
+library would make `recordings` depend on Channels for one call. Emitting has
+to be free or modules quietly stop signalling. The separate `stapel-realtime`
+library registers itself into the seam with
+`register_signal_transport("channels", …)`; the contract is
+`transport(stream_key, frame)`, called after commit, allowed to fail (the
+frame is dropped and logged — a courtesy to an observer must never break the
+caller). A misconfigured axis would otherwise be the perfect silent failure,
+so it is boot-gated: system check **`stapel_core.comm.E003`** fails a host
+whose `SIGNAL_TRANSPORT` names nothing importable and callable.
+
+### realtime-check — the border that stops the fifth WebSocket stack
+
+The fleet already has four independent realtime implementations (video lobby,
+chat, studio-dialog, runner-protocol); three of them re-invent the same 80% —
+JWT on the socket, close codes, resume protocol, group fan-out — and no host
+mounts any of the three. CI never noticed, because every library is green in
+isolation. Per the canon, the fix is a mechanism, not a paragraph:
+`python -m stapel_core.lint.realtime_check .` (wired into CI next to
+emit-check) draws the border by asking who is on the other side of the
+socket. A human in a browser → `stapel-realtime`, emitting through
+`comm.signal()`. Our own process → a named application protocol
+(`stapel-runner-protocol`) that owes an answer to "why not a Function/Task".
+
+Errors: **RT001** a Channels consumer, **RT002** hand-rolled socket auth
+middleware (the fleet has one home, `stapel_core.django.jwt.channels`),
+**RT003** a raw `websockets.serve()` server. Warnings: **RT004** a
+hand-rolled SSE endpoint, **RT005** direct channel-layer fan-out instead of
+`comm.signal()`. Escape hatch for a genuine one-off:
+`# realtime-check: ok — <reason>`. The four existing implementations are
+grandfathered by an allowlist qualified by distribution name (the fleet's
+flat layout makes a bare `consumers.py` suffix meaningless), where every
+entry names the migration phase that deletes it — a debt register that
+shrinks and never grows.
+
 ## [0.32.0] — 2026-08-21
 
 ### emit-check gains EMIT005 — a declared `emit_*` helper nobody calls

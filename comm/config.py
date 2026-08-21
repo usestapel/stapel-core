@@ -45,6 +45,14 @@ _DEFAULTS: dict[str, Any] = {
     #   inline — start() executes the task synchronously (tests/scripts).
     # Orthogonal to TASK_EXECUTOR, which is HOW the worker runs the handler.
     "TASK_DISPATCH": "action",
+    # Signal delivery backend: "none" (default — signal() is a silent no-op,
+    # the correct configuration for every HTTP-only host), a name registered
+    # via comm.register_signal_transport() ("channels", registered by
+    # stapel-realtime), or a dotted path to transport(stream_key, frame).
+    # Closed by default on purpose: emitting must cost nothing for the 26
+    # libraries that never serve a WebSocket. The future "bus" value carries
+    # signals over NATS stapel.ws.* in microservice mode — same seam.
+    "SIGNAL_TRANSPORT": "none",
     # Service name stamped into emitted events; falls back to SERVICE_NAME.
     "SERVICE": None,
 }

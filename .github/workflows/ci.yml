@@ -31,6 +31,9 @@ jobs:
       - name: emit-check (outbox atomicity gate)
         run: python lint/emit_check.py .
 
+      - name: realtime-check (the realtime border, stapel-realtime-design §2.3)
+        run: python lint/realtime_check.py .
+
       - name: migration-lint (expand/contract gate, release-management.md §3)
         run: |
           pip install "stapel-tools>=0.24.0,<1" --quiet

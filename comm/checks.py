@@ -23,6 +23,7 @@ from django.core import checks
 
 E001_VALIDATOR_MISSING = "stapel_core.comm.E001"
 W002_VALIDATION_DISABLED = "stapel_core.comm.W002"
+E003_SIGNAL_TRANSPORT_UNRESOLVABLE = "stapel_core.comm.E003"
 
 
 @checks.register("stapel_comm")
@@ -57,8 +58,67 @@ def check_schema_validation(app_configs=None, **kwargs):
     return []
 
 
+@checks.register("stapel_comm")
+def check_signal_transport(app_configs=None, **kwargs):
+    """A configured Signal transport must resolve at boot.
+
+    ``signal()`` swallows everything downstream of address validation — losing
+    a frame is legal by contract, so it must never break a request. That makes
+    a typo in ``SIGNAL_TRANSPORT`` the perfect silent failure: the host looks
+    configured for realtime and delivers nothing, forever. The operator learns
+    it here, not from a user reporting a screen that never updates.
+
+    Not configuring a transport at all is the DEFAULT and never reported: an
+    HTTP-only host with signals as no-ops is the supported configuration.
+    """
+    from .config import comm_setting
+    from .signals import _transports
+
+    value = comm_setting("SIGNAL_TRANSPORT", "none")
+    if not value or value == "none" or callable(value):
+        return []
+    if isinstance(value, str) and (value in _transports or "." in value):
+        if value in _transports:
+            return []
+        try:
+            from django.utils.module_loading import import_string
+
+            resolved = import_string(value)
+        except ImportError as exc:
+            return [checks.Error(
+                f'STAPEL_COMM["SIGNAL_TRANSPORT"] = {value!r} cannot be '
+                f"imported ({exc}). Every signal on this host is dropped "
+                f"silently.",
+                hint="Point it at a callable transport(stream_key, frame), "
+                     'use a registered name (e.g. "channels" from '
+                     'stapel-realtime), or set "none" to state that this '
+                     "host serves no live observers.",
+                id=E003_SIGNAL_TRANSPORT_UNRESOLVABLE,
+            )]
+        if not callable(resolved):
+            return [checks.Error(
+                f'STAPEL_COMM["SIGNAL_TRANSPORT"] = {value!r} resolves to '
+                f"{type(resolved).__name__}, which is not callable. Every "
+                f"signal on this host is dropped silently.",
+                hint="The transport contract is transport(stream_key, frame).",
+                id=E003_SIGNAL_TRANSPORT_UNRESOLVABLE,
+            )]
+        return []
+    return [checks.Error(
+        f'STAPEL_COMM["SIGNAL_TRANSPORT"] = {value!r} is neither "none", a '
+        f"registered transport name, nor a dotted path. Every signal on this "
+        f"host is dropped silently.",
+        hint="Registered names: "
+             + (", ".join(sorted(_transports)) or "(none — install and add "
+                "the app that registers one, e.g. stapel-realtime)"),
+        id=E003_SIGNAL_TRANSPORT_UNRESOLVABLE,
+    )]
+
+
 __all__ = [
     "E001_VALIDATOR_MISSING",
     "W002_VALIDATION_DISABLED",
+    "E003_SIGNAL_TRANSPORT_UNRESOLVABLE",
     "check_schema_validation",
+    "check_signal_transport",
 ]

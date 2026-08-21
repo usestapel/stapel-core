@@ -1,7 +1,7 @@
 {
   "module": "stapel-core",
-  "version": "0.32.0",
-  "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
+  "version": "0.33.0",
+  "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
   "axes": [],
   "extension_points": [
     {
@@ -32,7 +32,7 @@
     {
       "name": "STAPEL_COMM",
       "kind": "transport_map",
-      "summary": "Per-name transport for Actions/Functions/Tasks (in-process, bus, HTTP) — the seam that makes 'monolith or microservices' deployment configuration rather than code."
+      "summary": "Per-name transport for Actions/Functions/Tasks (in-process, bus, HTTP) plus SIGNAL_TRANSPORT for Signal delivery — the seam that makes 'monolith or microservices' deployment configuration rather than code."
     },
     {
       "name": "STAPEL_BUS_BACKEND",

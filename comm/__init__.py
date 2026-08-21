@@ -1,7 +1,7 @@
 """
-stapel_core.comm — Action/Function inter-module communication.
+stapel_core.comm — Action/Function/Task/Signal inter-module communication.
 
-Two primitives, one loose-coupling rule: modules never import each other —
+Four primitives, one loose-coupling rule: modules never import each other —
 both sides only know a string name and a payload schema.
 
 Action — fire-and-forget fact ("user.deleted"). At-least-once, async,
@@ -30,6 +30,16 @@ one provider per name.
 
     result = call("cdn.media_exists", {"ref": ref}, timeout=2.0)
 
+Signal — "show this to a live observer, if one is watching"
+("recordings:ws:42"). At-most-once, ephemeral; the addressee is a human's
+screen, not code. Losing it is correct — the truth stays in the DB behind
+REST. Silent no-op without a delivery transport (see ``comm/signals.py``).
+
+    from stapel_core.comm import signal
+
+    signal(f"recordings:ws:{workspace_id}", "recording.status",
+           {"recording_id": str(rec.pk), "status": rec.status})
+
 Transports are deployment configuration (STAPEL_COMM setting), not code:
 monolith runs both primitives in-process (no broker at all), microservices
 run Actions over the bus (Kafka/NATS) and Functions over NATS or internal
@@ -56,8 +66,20 @@ from .exceptions import (
     FunctionNotRegistered,
     FunctionPayloadTooLarge,
     FunctionRouteNotConfigured,
+    InvalidSignalType,
+    InvalidStreamKey,
     ProjectionConfigError,
     ProjectionError,
+    SignalError,
+)
+from .signals import (
+    SIGNAL_ENVELOPE_VERSION,
+    RESERVED_FRAME_TYPES,
+    SignalTransport,
+    register_signal_transport,
+    signal,
+    signal_transport,
+    stream_key,
 )
 from .functions import (
     call,
@@ -101,10 +123,20 @@ __all__ = [
     "RebuildResult",
     "DriftReport",
     "ProjectionStatus",
+    "signal",
+    "stream_key",
+    "signal_transport",
+    "register_signal_transport",
+    "SignalTransport",
+    "SIGNAL_ENVELOPE_VERSION",
+    "RESERVED_FRAME_TYPES",
     "action_registry",
     "function_registry",
     "comm_setting",
     "CommError",
+    "SignalError",
+    "InvalidStreamKey",
+    "InvalidSignalType",
     "EmitOutsideAtomicError",
     "FunctionCallError",
     "FunctionNotRegistered",

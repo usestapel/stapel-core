@@ -4,4 +4,6 @@ echo "Running ruff lint check..."
 ruff check . --select E,F,W --ignore E501
 echo "Running emit-check (outbox atomicity)..."
 python3 lint/emit_check.py .
+echo "Running realtime-check (the realtime border)..."
+python3 lint/realtime_check.py .
 echo "Lint check passed."

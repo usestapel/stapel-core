@@ -1,6 +1,6 @@
-# stapel-core 0.32.0
+# stapel-core 0.33.0
 
-The Django substrate every Stapel module sits on: comm (Action/Function/Task/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
+The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
 Contract: surface 24 · extension points 14 · error codes 42.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
@@ -76,7 +76,7 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 - STAPEL_CAPTCHA [dotted_path]
   CaptchaVerifier backend (turnstile / recaptcha / hcaptcha / noop) plus the tiered challenge policy driven by the client's network class.
 - STAPEL_COMM [transport_map]
-  Per-name transport for Actions/Functions/Tasks (in-process, bus, HTTP) — the seam that makes 'monolith or microservices' deployment configuration rather than code.
+  Per-name transport for Actions/Functions/Tasks (in-process, bus, HTTP) plus SIGNAL_TRANSPORT for Signal delivery — the seam that makes 'monolith or microservices' deployment configuration rather than code.
 - STAPEL_EVENTSTORE["BACKEND"] [dotted_path]
   Append-only stream backend behind append/query/rollup/purge — Postgres with time partitions by default, ClickHouse the documented scale-out point.
 - STAPEL_GATEWAY [merge_registry]

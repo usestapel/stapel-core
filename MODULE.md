@@ -11,9 +11,11 @@ points below; a generic fix or gap belongs **upstream** (see
 - `comm` — inter-module communication primitives: **Action** (`emit` /
   `@on_action`, transactional fire-and-forget via the outbox), **Function**
   (`call` / `@function`, synchronous RPC by name), **Task** (`start` /
-  `status` / `@task_handler`, long-running work with persistent state) and
-  **Projection** (`Projection` subclass, event-carried read-models over
-  Action with generated idempotency and first-class rebuild).
+  `status` / `@task_handler`, long-running work with persistent state),
+  **Signal** (`signal`, at-most-once ephemeral delivery to a live observer's
+  screen — silent no-op without a delivery transport) and **Projection**
+  (`Projection` subclass, event-carried read-models over Action with
+  generated idempotency and first-class rebuild).
   Modules never import each other — both sides know only a string name and a
   payload schema; transports are deployment configuration, not code.
 - `bus` — transport-agnostic message bus (`publish`, `get_bus`, `Event`,
@@ -171,6 +173,7 @@ class. A key reached through a namespace's own alias route (media's
 | `VALIDATE_SCHEMAS` | `True` | Validate payloads against schemas from `@function` / `@on_action`. On everywhere, `DEBUG` included and excluded; set `False` to opt out explicitly |
 | `TASK_EXECUTOR` | `"inline"` | How a worker runs a claimed task: `inline` \| `celery` \| dotted path to `callable(task_id)` |
 | `TASK_DISPATCH` | `"action"` | How `task.requested` reaches the worker: `action` (rides `ACTION_TRANSPORT`) \| `bus` (task.\* events go straight to the bus) \| `inline` (synchronous, tests only) |
+| `SIGNAL_TRANSPORT` | `"none"` | Signal delivery: `none` (silent no-op — the right setting for every HTTP-only host) \| a name registered with `register_signal_transport()` (`"channels"`, from `stapel-realtime`) \| dotted path to `transport(stream_key, frame)`. Boot-gated by `stapel_core.comm.E003` |
 | `SERVICE` | `None` | Service name stamped into emitted events; falls back to `SERVICE_NAME` |
 
 `comm_setting()` also reads `HTTP_CONNECT_RETRIES` (2), `HTTP_POOL_CONNECTIONS`
@@ -223,6 +226,80 @@ Mechanical guards behind it (they also protect plain `emit()`):
 Review checklist for data-holding modules: every emit is atomic with its
 mutation, and a `test_failing_emit_rolls_back`-class test exists (see
 `tests/test_emit_atomicity.py` here for the reference shapes).
+
+### Signal — the observer-facing primitive (`comm/signals.py`)
+
+Action, Function and Task all address **code**. Signal addresses a **human's
+screen**: *"show this to a live observer, if one is watching."*
+
+```python
+from stapel_core.comm import mutate_and_emit, signal
+
+with mutate_and_emit() as emit_event:
+    recording.status = "ready"
+    recording.save(update_fields=["status"])
+    emit_event("recording.completed", {...})           # the fact — durable
+    signal(f"recordings:ws:{workspace_id}",             # the screen — ephemeral
+           "recording.status",
+           {"recording_id": str(recording.pk), "status": recording.status})
+```
+
+Guaranteed: delivery only to subscribers connected at the moment of the emit;
+ordering within one stream key; never ahead of the transaction it describes
+(scheduled through `transaction.on_commit`, no outbox row). NOT guaranteed:
+delivery at all, ordering across streams, redelivery, any history. Losing a
+frame is correct behaviour — the truth stays in the DB behind REST, and a
+signal is a reason to refetch, never the state itself. Durability, where a
+module needs it (chat), belongs to that module's own model.
+
+- **Addressing** — `<mod>:<scope_type>:<scope_id>[:<topic>]`, built with
+  `stream_key("recordings", "ws", workspace_id)` and validated on every emit
+  (`InvalidStreamKey`). The scope is part of the name so a group physically
+  cannot cross a workspace; the name is not a secret, subscription is
+  authorized separately and fail-closed by the substrate.
+- **Envelope (wire v1)** — `{"v": 1, "type", "stream", "payload"}`. `stream`
+  is optional in the schema (a v1 socket serves one stream) but always
+  populated: it is what makes a multiplexed socket possible later without a
+  v2 envelope. There is deliberately no `seq` — frame kind is structural, so
+  an ephemeral frame can never be mistaken for, or persisted as, journal
+  state. Frame types reserved by the wire protocol (`hello`, `welcome`,
+  `ping`, `kick`, …) are refused (`InvalidSignalType`).
+- **Transport seam** — `STAPEL_COMM["SIGNAL_TRANSPORT"]`, closed by default.
+  Core carries the emitter only (stdlib; no channels, no redis, no ASGI):
+  emitting has to be free for the libraries that never serve a socket, or
+  modules quietly stop signalling. Delivery — consumers, per-stream
+  authorization, revoke/kick — is the separate `stapel-realtime` library,
+  which calls `register_signal_transport("channels", …)` from its
+  `AppConfig.ready()`. Contract: `transport(stream_key, frame)`, called after
+  commit, may raise (the frame is dropped and logged; a courtesy to an
+  observer must never break the caller).
+- **Not an Action in the browser.** Signals never ride the outbox:
+  at-least-once with 300s of retries would deliver "typing…" five minutes
+  late into a table with no retention, and an Action's subscriber is a module
+  obliged to handle it, while a Signal's subscribers are 0..N browsers whose
+  absence is normal. The canonical bridge is the opposite direction and is
+  encouraged: an `@on_action` handler turns a committed fact into a
+  `signal()`.
+
+### Realtime border — realtime-check (`lint/realtime_check.py`)
+
+Four independent realtime implementations already exist in the fleet (video
+lobby, chat, studio-dialog, runner-protocol) and three of them re-invent the
+same 80% — none mounted by any host, all green in isolation. `python -m
+stapel_core.lint.realtime_check .` is the border that stops the fifth, drawn
+by asking who is on the other side of the socket: **a human in a browser →
+`stapel-realtime`, emitting through `comm.signal()`; our own process → a
+named application protocol (`stapel-runner-protocol`) that owes an answer to
+"why not a Function/Task"**.
+
+RT001 Channels consumer, RT002 hand-rolled socket auth middleware (the one
+home is `stapel_core.django.jwt.channels`, G14), RT003 raw
+`websockets.serve()` — errors; RT004 hand-rolled SSE endpoint, RT005 direct
+channel-layer fan-out instead of `comm.signal()` — warnings. Suppress a
+genuine one-off with `# realtime-check: ok — <reason>`; the four existing
+implementations are grandfathered by an in-code allowlist where every entry
+names the migration phase that deletes it. That list is a debt register: it
+shrinks, never grows.
 
 ### Projections — event-carried read-models (`comm/projections.py`, `django/projections/`)
 
