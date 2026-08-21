@@ -9,6 +9,7 @@
     "user_id":           { "type": ["string", "null"] },
     "email":             { "type": ["string", "null"] },
     "phone":             { "type": ["string", "null"] },
+    "telegram_chat_id":  { "type": ["string", "null"] },
     "language":          { "type": ["string", "null"] },
     "variables":         { "type": "object" },
     "content_html":      { "type": "string" },

@@ -17,6 +17,7 @@ def request_notification(
     variables: dict = None,
     email: str = None,
     phone: str = None,
+    telegram_chat_id: str = None,
     language: str = None,
     source_service: str = "",
     content_html: str = None,
@@ -39,6 +40,9 @@ def request_notification(
         variables: Template variables (e.g. {'code': '1234', 'expiry_minutes': 10})
         email: Direct email (for unauthenticated flows like OTP)
         phone: Direct phone (for unauthenticated flows like OTP)
+        telegram_chat_id: Direct Telegram chat id (for flows that know the
+            destination chat without a registered user, e.g. a form-configured
+            chat)
         language: Language from accept-language header of the originating request
         source_service: Name of the calling service (for tracing)
         content_html: Raw HTML body (escape hatch: rendered inside the base
@@ -57,8 +61,11 @@ def request_notification(
         if arg is not None and not isinstance(arg, str):
             raise ValueError(f"request_notification: {arg_name} must be a string or None")
 
-    if not (user_id or email or phone):
-        logger.error("request_notification called without user_id, email, or phone")
+    if not (user_id or email or phone or telegram_chat_id):
+        logger.error(
+            "request_notification called without user_id, email, phone, "
+            "or telegram_chat_id"
+        )
         return False
 
     payload = {
@@ -66,6 +73,7 @@ def request_notification(
         "user_id": user_id,
         "email": email,
         "phone": phone,
+        "telegram_chat_id": telegram_chat_id,
         "language": language,
         "variables": variables or {},
     }
@@ -81,7 +89,7 @@ def request_notification(
                 event_type=EventType.NOTIFICATION_REQUESTED,
                 service=source_service or "unknown",
                 payload=payload,
-                key=user_id or email or phone,
+                key=user_id or email or phone or telegram_chat_id,
             ),
         )
         return True

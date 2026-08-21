@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.31.0] — 2026-08-21
+
+### `request_notification` gains `telegram_chat_id`, the third direct address
+
+stapel-notifications 0.13.0 made telegram a fourth delivery channel, and its
+consumer already reads `telegram_chat_id` off the `notification.requested`
+payload alongside `email` and `phone`. Nothing could put it there: the core
+producer helper had no such argument, and the emit schema is
+`additionalProperties: false`, so a producer publishing the event by hand was
+the only way through. The direct-address family was two thirds of the way
+across the seam.
+
+`telegram_chat_id` now behaves exactly like the two addresses beside it — a
+`str | None` keyword, always present on the payload, `["string", "null"]` in
+`notifications/schemas/emits/notification.requested.json`, counted by the
+recipient guard (a telegram-only request publishes instead of returning
+`False`) and usable as the partition key when it is the only address given.
+
+Additive on both sides: the new schema property is optional, an older
+producer's payload still validates, and a consumer that ignores the key sees
+what it saw before. The immediate caller is stapel-forms' resend-to-telegram
+path, where the destination chat comes from the form's own configuration
+rather than from a `UserContact` row.
+
 ## [0.30.1] — 2026-08-16
 
 ### Fixed — the contract artifacts, which 0.30.0 shipped stale

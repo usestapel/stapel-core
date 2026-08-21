@@ -30,6 +30,7 @@ def test_publishes_declared_payload_shape():
         "user_id": None,
         "email": "dest@example.com",
         "phone": None,
+        "telegram_chat_id": None,
         "language": "de",
         "variables": {"code": "1234"},
     }
@@ -67,18 +68,34 @@ def test_non_string_content_raises_early(kwargs):
     assert _published_payloads() == []
 
 
+def test_telegram_chat_id_is_a_direct_address_like_email_and_phone():
+    assert request_notification(
+        "form.submission",
+        telegram_chat_id="123456789",
+        variables={"form": "contact"},
+    ) is True
+    (payload,) = _published_payloads()
+    assert payload["telegram_chat_id"] == "123456789"
+    assert payload["user_id"] is None
+    assert payload["email"] is None
+    assert payload["phone"] is None
+
+
 def test_missing_recipient_returns_false_without_publishing():
     assert request_notification("otp_code") is False
     assert _published_payloads() == []
 
 
-def test_payload_matches_committed_schema():
-    """The emitted payload validates against the declared emit schema."""
-    jsonschema = pytest.importorskip("jsonschema")
-    schema = json.loads(
+def _emit_schema():
+    return json.loads(
         (Path(__file__).parent.parent / "notifications" / "schemas" / "emits"
          / "notification.requested.json").read_text()
     )
+
+
+def test_payload_matches_committed_schema():
+    """The emitted payload validates against the declared emit schema."""
+    jsonschema = pytest.importorskip("jsonschema")
     request_notification(
         "otp_code",
         user_id="8f9e6a2c-0000-0000-0000-000000000001",
@@ -86,4 +103,25 @@ def test_payload_matches_committed_schema():
         content_text="fallback",
     )
     (payload,) = _published_payloads()
-    jsonschema.validate(payload, schema)
+    jsonschema.validate(payload, _emit_schema())
+
+
+@pytest.mark.parametrize("chat_id", ["123456789", None])
+def test_schema_accepts_telegram_chat_id_present_or_absent(chat_id):
+    """Additive: a payload carrying the new address validates, and so does one
+    from a producer that never sets it."""
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = _emit_schema()
+    jsonschema.validate(
+        {"notification_type": "otp_code", "telegram_chat_id": chat_id}, schema
+    )
+    jsonschema.validate({"notification_type": "otp_code"}, schema)
+
+
+def test_schema_still_rejects_an_unknown_property():
+    jsonschema = pytest.importorskip("jsonschema")
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {"notification_type": "otp_code", "telegram_chat": "123"},
+            _emit_schema(),
+        )
