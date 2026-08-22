@@ -177,7 +177,9 @@ def test_invalid_stream_key_is_a_signal_error():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("type_", ["welcome", "ping", "resync", "kick", "error"])
+@pytest.mark.parametrize(
+    "type_", ["welcome", "ping", "resync", "kick", "error", "replay_done"]
+)
 def test_reserved_wire_protocol_types_are_refused(type_):
     with pytest.raises(InvalidSignalType):
         signal("chat:conv:7", type_)

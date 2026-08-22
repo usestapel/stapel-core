@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.33.2] — 2026-08-22
+
+### Fix — `replay_done` was missing from `RESERVED_FRAME_TYPES`
+
+`stapel_core.comm.signals.RESERVED_FRAME_TYPES` was meant to mirror every
+frame type the `stapel-realtime` wire protocol owns, so that `signal()`
+refuses a module that tries to name a courtesy frame after one of them. The
+substrate's `REPLAY_DONE` (`"replay_done"`, sent to mark the end of a
+resumable client's catch-up window) was never added to the core's set —
+`stapel-realtime`'s own cross-package test
+(`tests/test_envelope.py::TestCoreAgreement::test_the_protocol_owns_exactly_the_names_the_core_reserves`)
+pinned this exact gap as `extra == {"replay_done"}`. Left unfixed, a module
+could legally `signal(stream, "replay_done", …)`, and a resuming client
+would misread that courtesy frame as the end of its own replay.
+
+`replay_done` is now reserved alongside the other ten protocol frame types
+(`hello`, `welcome`, `replay`, `live`, `ephemeral`, `ping`, `pong`,
+`resync`, `kick`, `error`); `signal()` raises `InvalidSignalType` for it,
+matching the other reserved names.
+
 ## [0.33.1] — 2026-08-22
 
 ### Fix — `Event.to_json()` dropped the partition key

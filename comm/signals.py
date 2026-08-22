@@ -100,7 +100,7 @@ _STREAM_KEY_RE = re.compile(rf"^{_SEGMENT}:{_SEGMENT}:{_SEGMENT}(:{_SEGMENT})?$"
 # Frame types owned by the stapel-realtime wire protocol. A signal may not
 # claim one: the consumer would read a courtesy frame as protocol.
 RESERVED_FRAME_TYPES = frozenset({
-    "hello", "welcome", "replay", "live", "ephemeral",
+    "hello", "welcome", "replay", "replay_done", "live", "ephemeral",
     "ping", "pong", "resync", "kick", "error",
 })
 _TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$")

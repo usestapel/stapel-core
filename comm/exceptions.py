@@ -111,8 +111,8 @@ class InvalidStreamKey(SignalError):
 
 class InvalidSignalType(SignalError):
     """A signal type is malformed, or claims a reserved wire-protocol frame
-    type (hello/welcome/replay/live/ephemeral/ping/pong/resync/kick/error) —
-    a consumer would read the courtesy frame as protocol."""
+    type (hello/welcome/replay/replay_done/live/ephemeral/ping/pong/resync/
+    kick/error) — a consumer would read the courtesy frame as protocol."""
 
 
 class EmitOutsideAtomicError(CommError):
