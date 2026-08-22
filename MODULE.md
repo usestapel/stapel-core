@@ -420,6 +420,21 @@ durable name), and reclaims entries abandoned by a dead consumer via
 XAUTOCLAIM once idle past the claim threshold. Consumers subclass
 `BaseBusConsumerCommand`.
 
+**NATS durables are reconciled on every boot.** A JetStream durable outlives
+the process that made it, and `js.pull_subscribe(durable=…)` binds to an
+existing consumer while discarding the `ConsumerConfig` it is handed — so
+without this, a service that gained a topic kept its pre-deploy
+`filter_subjects` server-side and went deaf on the new subject with no error
+anywhere. `NatsJetStreamBus` therefore compares the live consumer against the
+declared one before binding: mutable drift (`RECONCILABLE_FIELDS` — subjects,
+`ack_wait`, `max_deliver`, …) is updated **in place**, which preserves the ack
+floor, and is logged with the before/after subject sets; immutable drift
+(`IMMUTABLE_FIELDS` — `ack_policy`, `replay_policy`, `deliver_subject`, …)
+raises `ConsumerConfigConflict` at startup rather than running deaf. Start
+position (`deliver_policy`, `opt_start_*`) and fields the backend never
+declares are left alone. The match is verified against the server after setup,
+so the log line naming the subjects is a fact, not an intention.
+
 ### Verification factors & policy — `STAPEL_VERIFICATION` (`verification/conf.py`)
 
 | Key | Default | What it customizes |

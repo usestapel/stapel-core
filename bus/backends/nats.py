@@ -20,6 +20,11 @@ Delivery semantics mirror the Kafka backend:
 - ``Nats-Msg-Id: event_id`` enables JetStream's server-side duplicate
   suppression on publish
 
+A durable consumer outlives the process that created it, so its
+server-side config is reconciled against the declared one on every boot
+(see ``reconcile_durable``) — otherwise a service that gains a topic goes
+silently deaf on it.
+
 Requires nats-py (``pip install 'stapel-core[nats]'``).
 """
 from __future__ import annotations
@@ -44,6 +49,240 @@ MAX_HANDLER_RETRIES = 3
 def _durable_name(group: str) -> str:
     """NATS durable names must not contain dots/spaces/wildcards."""
     return re.sub(r"[^A-Za-z0-9_-]", "_", group) or "stapel"
+
+
+# ----------------------------------------------------------------------
+# Durable consumer reconciliation
+# ----------------------------------------------------------------------
+#
+# ``js.pull_subscribe(durable=...)`` BINDS to an existing consumer and
+# throws the ConsumerConfig it was handed away — nats-py's own code reads
+# ``consumer_info(...)`` then sets ``should_create = False`` and never
+# looks at ``config`` again. The consumer therefore keeps whatever config
+# it was born with, forever.
+#
+# That is a silent-deafness defect, not a cosmetic one. A service that
+# gains a subscription topic after its durable exists keeps the pre-deploy
+# ``filter_subjects`` server-side: the worker logs the widened subject list
+# it ASKED for, publishers keep writing to the stream, the events match no
+# filter, and nothing errors anywhere. Observed live: a chat service logged
+# ``subjects=[..., 'stapel.evt.user.created', ...]`` for days while the
+# durable filtered the older set and the handler never ran once.
+#
+# So the declared config is compared against the live one before binding,
+# and any drift is either reconciled in place or raised. There is no third
+# outcome — in particular there is no "delete and recreate", which would
+# reset the ack floor and replay the entire stream through the handler.
+
+#: Fields JetStream can change on a live consumer (nats-server 2.10+).
+#: The update goes through CONSUMER.DURABLE.CREATE against the existing
+#: durable, which edits it in place: ``delivered`` and ``ack_floor`` are
+#: untouched, so in-flight progress survives the reconciliation.
+RECONCILABLE_FIELDS = (
+    "filter_subject",
+    "filter_subjects",
+    "ack_wait",
+    "max_deliver",
+    "max_ack_pending",
+    "backoff",
+    "description",
+    "metadata",
+    "inactive_threshold",
+    "num_replicas",
+    "rate_limit_bps",
+    "sample_freq",
+    "headers_only",
+)
+
+#: Fields the server refuses to change after creation. They drift exactly
+#: as silently as the subjects do — ``ack_policy=none`` makes every
+#: ``msg.ack()`` a no-op, ``replay_policy=original`` paces delivery at the
+#: original publish rate, a non-empty ``deliver_subject`` means the durable
+#: is a push consumer that a pull binding will never drain — so they are
+#: compared too. The only honest response is a loud failure: the fix is an
+#: operator decision (rename the group, or delete the durable and accept
+#: the replay), never something a boot sequence should take on itself.
+IMMUTABLE_FIELDS = (
+    "ack_policy",
+    "replay_policy",
+    "deliver_subject",
+    "deliver_group",
+    "max_waiting",
+)
+
+#: Deliberately compared by NEITHER list. These describe where a consumer
+#: STARTS reading; the server applies them once, at creation, and an
+#: existing durable is already past that point. A difference here is
+#: history, not drift, and crash-looping over it would be a false alarm.
+START_POSITION_FIELDS = ("deliver_policy", "opt_start_seq", "opt_start_time")
+
+
+class ConsumerConfigConflict(RuntimeError):
+    """A durable's live config cannot be reconciled with the declared one.
+
+    Raised at startup, on purpose. A crash-loop naming the durable and both
+    configurations is strictly better than a worker that runs, logs the
+    subjects it wanted, and receives nothing.
+    """
+
+
+def _plain(value):
+    """Enum -> its wire value; everything else unchanged."""
+    return getattr(value, "value", value)
+
+
+def subject_set(config) -> frozenset[str]:
+    """The subject filter of *config* as a set.
+
+    JetStream reports a single filter as ``filter_subject`` and multiple
+    ones as ``filter_subjects``; normalising both into a set makes the two
+    spellings of "the same filter" compare equal.
+    """
+    subjects = getattr(config, "filter_subjects", None)
+    if subjects:
+        return frozenset(subjects)
+    single = getattr(config, "filter_subject", None)
+    return frozenset([single]) if single else frozenset()
+
+
+def _values_differ(field: str, declared, actual) -> bool:
+    if field in ("filter_subject", "filter_subjects"):
+        return False  # handled as one unit by subject_set()
+    want = _plain(getattr(declared, field, None))
+    if want is None:
+        # Not declared: whatever the server has is not this deployment's
+        # business (an operator may have tuned it deliberately).
+        return False
+    got = _plain(getattr(actual, field, None))
+    if isinstance(want, (int, float)) and isinstance(got, (int, float)):
+        return abs(float(want) - float(got)) > 1e-6
+    return want != got
+
+
+def consumer_drift(declared, actual) -> dict[str, tuple]:
+    """Declared-vs-actual differences, as ``{field: (declared, actual)}``.
+
+    Only fields the caller actually declared are compared, plus the subject
+    filter (always) and ``deliver_subject`` (always — a push consumer under
+    a pull binding is drift even though we declare nothing there).
+    """
+    drift: dict[str, tuple] = {}
+
+    want_subjects, got_subjects = subject_set(declared), subject_set(actual)
+    if want_subjects != got_subjects:
+        drift["filter_subjects"] = (sorted(want_subjects), sorted(got_subjects))
+
+    for field in RECONCILABLE_FIELDS + IMMUTABLE_FIELDS:
+        if _values_differ(field, declared, actual):
+            drift[field] = (
+                _plain(getattr(declared, field, None)),
+                _plain(getattr(actual, field, None)),
+            )
+
+    if "deliver_subject" not in drift and getattr(actual, "deliver_subject", None):
+        drift["deliver_subject"] = (None, actual.deliver_subject)
+
+    return drift
+
+
+def _conflict(durable: str, declared, actual, drift: dict, reason: str, cause=None):
+    detail = "; ".join(
+        f"{field}: declared={want!r} actual={got!r}" for field, (want, got) in sorted(drift.items())
+    )
+    error = ConsumerConfigConflict(
+        f"JetStream durable {durable!r} cannot be reconciled ({reason}). "
+        f"Drift — {detail}. Declared subjects={sorted(subject_set(declared))} "
+        f"actual subjects={sorted(subject_set(actual))}. "
+        f"Refusing to delete and recreate the consumer: that would reset the "
+        f"ack floor and replay the whole stream. Resolve by hand — widen the "
+        f"consumer with `nats consumer edit`, or rename the consumer group."
+    )
+    if cause is not None:
+        error.__cause__ = cause
+    return error
+
+
+async def _consumer_info(js, stream: str, durable: str):
+    """Live consumer info, or None when the durable does not exist yet."""
+    from nats.js.errors import NotFoundError
+
+    try:
+        return await js.consumer_info(stream, durable)
+    except NotFoundError:
+        return None
+
+
+async def reconcile_durable(js, stream: str, durable: str, declared) -> str:
+    """Make the live consumer *durable* match *declared* before binding.
+
+    Returns ``"absent"`` (nothing to reconcile — pull_subscribe will create
+    it), ``"matched"`` or ``"reconciled"``. Raises `ConsumerConfigConflict`
+    when the drift cannot be applied in place.
+    """
+    info = await _consumer_info(js, stream, durable)
+    if info is None:
+        return "absent"
+
+    actual = info.config
+    drift = consumer_drift(declared, actual)
+    if not drift:
+        return "matched"
+
+    blocked = sorted(set(drift) & set(IMMUTABLE_FIELDS))
+    if blocked:
+        raise _conflict(
+            durable, declared, actual, drift,
+            f"immutable field(s) differ: {', '.join(blocked)}",
+        )
+
+    logger.warning(
+        "NatsJetStreamBus reconciling durable=%s in place — drift: %s. "
+        "Subjects before=%s after=%s. Ack floor is preserved (in-place "
+        "update, not recreate).",
+        durable,
+        {field: {"declared": want, "actual": got} for field, (want, got) in sorted(drift.items())},
+        sorted(subject_set(actual)),
+        sorted(subject_set(declared)),
+    )
+
+    # nats-py has no update_consumer(); add_consumer() against an existing
+    # durable maps to CONSUMER.DURABLE.CREATE, which the server treats as an
+    # in-place edit. Newer clients may expose update_consumer() — prefer it.
+    update = getattr(js, "update_consumer", None) or js.add_consumer
+    try:
+        await update(stream, config=declared)
+    except Exception as exc:  # server rejected the edit — never fall through
+        raise _conflict(
+            durable, declared, actual, drift,
+            f"the server rejected the in-place update: {exc}", cause=exc,
+        ) from exc
+
+    return "reconciled"
+
+
+async def assert_consumer_matches(js, stream: str, durable: str, declared) -> None:
+    """Startup invariant: declared == actual, verified against the server.
+
+    Runs after the subscription is bound, for freshly created durables too,
+    so "the consumer really is filtering what this worker thinks it is" is
+    an observable fact in the logs rather than an assumption.
+    """
+    info = await _consumer_info(js, stream, durable)
+    if info is None:  # pragma: no cover — bound, so it exists
+        raise ConsumerConfigConflict(
+            f"JetStream durable {durable!r} vanished right after it was bound"
+        )
+    drift = consumer_drift(declared, info.config)
+    if drift:
+        raise _conflict(
+            durable, declared, info.config, drift,
+            "still differs after setup — the server accepted the update "
+            "without applying it",
+        )
+    logger.info(
+        "NatsJetStreamBus durable=%s verified against the server: subjects=%s",
+        durable, sorted(subject_set(info.config)),
+    )
 
 
 class NatsJetStreamBus(BusBackend):
@@ -158,23 +397,29 @@ class NatsJetStreamBus(BusBackend):
 
         subjects = [NatsBusConfig.subject_for(t) for t in topics]
         durable = _durable_name(group)
+        stream = NatsBusConfig.stream()
+        declared = ConsumerConfig(
+            durable_name=durable,
+            filter_subjects=subjects,
+            max_deliver=-1,
+            # Retries inside _process sleep up to 14s per message and a
+            # batch of 10 is handled sequentially — far beyond the 30s
+            # default ack_wait, after which JetStream would redeliver
+            # messages we are still processing.
+            ack_wait=300,
+        )
+        # An existing durable ignores `config` on bind — reconcile first.
+        outcome = await reconcile_durable(js, stream, durable, declared)
         sub = await js.pull_subscribe(
             "",  # subjects come from the consumer config
             durable=durable,
-            stream=NatsBusConfig.stream(),
-            config=ConsumerConfig(
-                durable_name=durable,
-                filter_subjects=subjects,
-                max_deliver=-1,
-                # Retries inside _process sleep up to 14s per message and a
-                # batch of 10 is handled sequentially — far beyond the 30s
-                # default ack_wait, after which JetStream would redeliver
-                # messages we are still processing.
-                ack_wait=300,
-            ),
+            stream=stream,
+            config=declared,
         )
+        await assert_consumer_matches(js, stream, durable, declared)
         logger.info(
-            "NatsJetStreamBus consuming durable=%s subjects=%s", durable, subjects
+            "NatsJetStreamBus consuming durable=%s (%s) subjects=%s",
+            durable, outcome, subjects,
         )
 
         stopping = asyncio.Event()
@@ -279,4 +524,15 @@ def dlq_subject_for(topic: str) -> str:
     return NatsBusConfig.subject_for(topic) + DLQ_SUFFIX
 
 
-__all__ = ["NatsJetStreamBus", "dlq_subject_for"]
+__all__ = [
+    "ConsumerConfigConflict",
+    "IMMUTABLE_FIELDS",
+    "NatsJetStreamBus",
+    "RECONCILABLE_FIELDS",
+    "START_POSITION_FIELDS",
+    "assert_consumer_matches",
+    "consumer_drift",
+    "dlq_subject_for",
+    "reconcile_durable",
+    "subject_set",
+]

@@ -1,5 +1,89 @@
 # Changelog
 
+## [0.34.0] — 2026-08-22
+
+### A durable NATS consumer silently ignored every config change after its first boot
+
+**The defect class: a seam that is silent on both sides.** A service adds a
+subscription topic. Its worker starts, logs
+`consuming durable=chat-service_actions subjects=[…, 'stapel.evt.user.created', …]`
+— exactly the widened list the code declares. Publishers publish. The
+events reach the stream. The handler never runs, not once, for as long as
+the durable lives. Nothing raises, nothing warns, no metric moves; the log
+line the operator would check to diagnose it is the one telling the lie.
+
+The cause is in nats-py, and it is one line of control flow:
+
+```python
+# nats/js/client.py — pull_subscribe()
+if durable:
+    await self._jsm.consumer_info(stream, durable)
+    should_create = False      # ...and `config` is never looked at again
+```
+
+`pull_subscribe(durable=…)` BINDS to an existing consumer and throws away
+the `ConsumerConfig` it was handed. A durable outlives the process that
+created it, so the consumer keeps whatever `filter_subjects` it was born
+with — forever. Every topic added after the durable's first boot is
+delivered to a filter that does not match it. This was proven live, hop by
+hop, on the darom fleet.
+
+Nothing about this is specific to subjects. `ack_wait` drifts the same
+silent way (a durable born with the 30s default redelivers messages a
+handler is still retrying), and so does `ack_policy` (`none` makes every
+`msg.ack()` a no-op).
+
+**The fix — reconcile on bind, or refuse to run.** `NatsJetStreamBus`
+now fetches the live consumer config before binding and compares it,
+field by field, against the declared one:
+
+- **Reconcilable** (`RECONCILABLE_FIELDS`) — `filter_subject(s)`,
+  `ack_wait`, `max_deliver`, `max_ack_pending`, `backoff`, `description`,
+  `metadata`, `inactive_threshold`, `num_replicas`, `rate_limit_bps`,
+  `sample_freq`, `headers_only`. Drift here is **updated in place**: the
+  edit goes through `CONSUMER.DURABLE.CREATE` against the existing durable
+  (`js.update_consumer` where the client has one, `js.add_consumer`
+  otherwise), which the server applies without touching `delivered` or
+  `ack_floor`. Verified on nats-server 2.14.5: publish 3, ack 2, widen the
+  subjects — `ack_floor.consumer_seq` stays `2` and the next delivery is
+  message #3. The consumer is **never** deleted and recreated; that would
+  reset the floor and replay the entire stream through the handler.
+- **Immutable** (`IMMUTABLE_FIELDS`) — `ack_policy`, `replay_policy`,
+  `deliver_subject`, `deliver_group`, `max_waiting`. The server will not
+  change these on a live consumer, so the boot **fails loudly** with
+  `ConsumerConfigConflict`, naming the durable, the drifted fields and
+  both subject sets. A crash-loop with a named cause beats silent
+  deafness; whether to rename the group or accept a replay is an
+  operator's call, not a boot sequence's.
+- **Start position** (`START_POSITION_FIELDS`) — `deliver_policy`,
+  `opt_start_seq`, `opt_start_time` — is compared by neither list. These
+  decide where a consumer *starts*; an existing durable is long past that
+  point, and a difference is history rather than drift.
+
+Fields the backend does not declare are left alone: an operator who tuned
+`max_ack_pending` by hand keeps their tuning.
+
+Whatever the server answers, the reconciliation is verified against it
+afterwards (`assert_consumer_matches`), for freshly created durables too —
+so a server that accepts an edit without applying it also cannot leave a
+deaf worker running. Startup now logs one of
+
+```
+NatsJetStreamBus reconciling durable=… in place — drift: {…}. Subjects before=[…] after=[…]
+NatsJetStreamBus durable=… verified against the server: subjects=[…]
+NatsJetStreamBus consuming durable=… (matched|reconciled|absent) subjects=[…]
+```
+
+**Behaviour change** (hence the minor, not a patch): a consumer whose live
+config cannot be reconciled now refuses to start where it previously
+started and received nothing. Deployments carrying such a durable will see
+the crash on the next deploy — which is the point.
+
+New public names in `stapel_core.bus.backends.nats`:
+`ConsumerConfigConflict`, `reconcile_durable`, `assert_consumer_matches`,
+`consumer_drift`, `subject_set`, `RECONCILABLE_FIELDS`,
+`IMMUTABLE_FIELDS`, `START_POSITION_FIELDS`.
+
 ## [0.33.2] — 2026-08-22
 
 ### Fix — `replay_done` was missing from `RESERVED_FRAME_TYPES`

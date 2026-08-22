@@ -22,11 +22,22 @@ class FakeNatsTimeoutError(Exception):
     pass
 
 
+class FakeNotFoundError(Exception):
+    pass
+
+
+class FakeConsumerInfo:
+    def __init__(self, config):
+        self.config = config
+
+
 class FakeJS:
     def __init__(self):
         self.streams = []
         self.published = []
         self.pull_subs = []
+        self.consumers = {}
+        self.calls = []
         self.fail_next_publish = False
         self.add_stream_error = None
 
@@ -41,8 +52,22 @@ class FakeJS:
             raise RuntimeError("dlq write failed")
         self.published.append((subject, payload, headers))
 
+    async def consumer_info(self, stream, durable):
+        self.calls.append("consumer_info")
+        try:
+            return FakeConsumerInfo(self.consumers[durable])
+        except KeyError:
+            raise FakeNotFoundError(durable) from None
+
+    async def add_consumer(self, stream, config=None):
+        self.calls.append("add_consumer")
+        self.consumers[config.durable_name] = config
+        return FakeConsumerInfo(config)
+
     async def pull_subscribe(self, subject, durable=None, stream=None, config=None):
+        self.calls.append("pull_subscribe")
         self.pull_subs.append({"durable": durable, "stream": stream, "config": config})
+        self.consumers.setdefault(durable, config)
         return self.sub
 
 
@@ -69,14 +94,19 @@ def _install_fake_nats(monkeypatch, js):
     fake_errors.TimeoutError = FakeNatsTimeoutError
     fake_js_mod = types.ModuleType("nats.js")
     fake_api_mod = types.ModuleType("nats.js.api")
+    fake_js_errors_mod = types.ModuleType("nats.js.errors")
+    fake_js_errors_mod.NotFoundError = FakeNotFoundError
 
     class ConsumerConfig:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
+            for key, value in kwargs.items():
+                setattr(self, key, value)
 
     fake_api_mod.ConsumerConfig = ConsumerConfig
     fake_nats.errors = fake_errors
     fake_js_mod.api = fake_api_mod
+    fake_js_mod.errors = fake_js_errors_mod
     fake_nats.js = fake_js_mod
 
     async def connect(url, **kwargs):
@@ -88,6 +118,7 @@ def _install_fake_nats(monkeypatch, js):
     monkeypatch.setitem(sys.modules, "nats.errors", fake_errors)
     monkeypatch.setitem(sys.modules, "nats.js", fake_js_mod)
     monkeypatch.setitem(sys.modules, "nats.js.api", fake_api_mod)
+    monkeypatch.setitem(sys.modules, "nats.js.errors", fake_js_errors_mod)
     return nc, connect_calls
 
 
@@ -234,6 +265,90 @@ def test_consume_ack_dlq_and_nak_cycle(monkeypatch):
         "stapel.evt.payment.completed",
     ]
     assert nc.drained is True
+
+
+@pytest.mark.django_db
+def test_consume_reconciles_an_existing_durable_before_binding(monkeypatch, caplog):
+    """The live defect end to end: the durable already exists filtering the
+    pre-deploy subject set, and the service has since gained a topic.
+    consume() must widen the consumer BEFORE it binds — binding first would
+    hand nats-py a config it throws away, and the worker would run deaf."""
+    from stapel_core.bus.backends import nats as nats_backend
+
+    created_events = []
+
+    class AsyncioProxy:
+        def __getattr__(self, item):
+            return getattr(real_asyncio, item)
+
+        def Event(self):
+            evt = real_asyncio.Event()
+            created_events.append(evt)
+            return evt
+
+    monkeypatch.setattr(nats_backend, "asyncio", AsyncioProxy())
+
+    js = FakeJS()
+    _install_fake_nats(monkeypatch, js)
+    stale = sys.modules["nats.js.api"].ConsumerConfig(
+        durable_name="chat_service",
+        filter_subjects=["stapel.evt.chat.message"],  # pre-deploy set
+        max_deliver=-1,
+        ack_wait=300,
+    )
+    js.consumers["chat_service"] = stale
+
+    class FakeSub:
+        async def fetch(self, batch=10, timeout=5):
+            created_events[0].set()
+            raise FakeNatsTimeoutError()
+
+    js.sub = FakeSub()
+
+    with caplog.at_level("INFO"):
+        _new_bus().consume(["chat.message", "user.created"], "chat.service", lambda e: None)
+
+    # Reconciled in place, then bound — order matters.
+    assert js.calls.index("add_consumer") < js.calls.index("pull_subscribe")
+    assert "delete_consumer" not in js.calls
+    assert js.consumers["chat_service"].filter_subjects == [
+        "stapel.evt.chat.message",
+        "stapel.evt.user.created",
+    ]
+    assert "reconciling durable=chat_service" in caplog.text
+    assert "verified against the server" in caplog.text
+    assert "durable=chat_service (reconciled)" in caplog.text
+
+
+@pytest.mark.django_db
+def test_consume_fails_loudly_when_the_server_rejects_the_update(monkeypatch):
+    """No silent path remains: a rejected edit crashes the boot naming the
+    durable and both subject sets, rather than leaving a deaf worker up."""
+    from stapel_core.bus.backends.nats import ConsumerConfigConflict
+
+    js = FakeJS()
+    _install_fake_nats(monkeypatch, js)
+    js.consumers["chat_service"] = sys.modules["nats.js.api"].ConsumerConfig(
+        durable_name="chat_service",
+        filter_subjects=["stapel.evt.chat.message"],
+        max_deliver=-1,
+        ack_wait=300,
+    )
+
+    async def rejecting_add_consumer(stream, config=None):
+        js.calls.append("add_consumer")
+        raise RuntimeError("consumer filter subject cannot be updated")
+
+    js.add_consumer = rejecting_add_consumer
+
+    with pytest.raises(ConsumerConfigConflict) as excinfo:
+        _new_bus().consume(["chat.message", "user.created"], "chat.service", lambda e: None)
+
+    message = str(excinfo.value)
+    assert "chat_service" in message
+    assert "stapel.evt.user.created" in message  # declared
+    assert "stapel.evt.chat.message" in message  # actual
+    assert "pull_subscribe" not in js.calls  # never bound to a deaf consumer
 
 
 # ---------------------------------------------------------------------------
