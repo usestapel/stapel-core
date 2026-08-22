@@ -26,7 +26,7 @@ the `ConsumerConfig` it was handed. A durable outlives the process that
 created it, so the consumer keeps whatever `filter_subjects` it was born
 with — forever. Every topic added after the durable's first boot is
 delivered to a filter that does not match it. This was proven live, hop by
-hop, on the darom fleet.
+hop, on a client fleet.
 
 Nothing about this is specific to subjects. `ack_wait` drifts the same
 silent way (a durable born with the 30s default redelivers messages a
