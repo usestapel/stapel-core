@@ -1,6 +1,6 @@
 {
   "module": "stapel-core",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
   "axes": [],
   "extension_points": [
@@ -218,6 +218,36 @@
       "kind": "predicate",
       "path": "stapel_core.django.monitoring.schema_health.unapplied_migrations",
       "intent": "Migrations on disk the database has not applied — the same definition as `manage.py migrate --check`, deliberately, so the boot gate, the deploy gate and the health probe cannot disagree about what 'behind' means. Use it in a management command or a boot gate; do not re-derive the migration plan yourself."
+    },
+    {
+      "name": "pseudonymize",
+      "kind": "factory",
+      "path": "stapel_core.gdpr.owners.pseudonymize",
+      "intent": "The fleet's one erasure funnel for an id that must survive as a stable pseudonym: HMAC-SHA256 under the deployment's SECRET_KEY, 32 hex, `erased:`-prefixed and therefore idempotent. This is how a ledger-carrying owner (billing, agent, video) erases — the ids that NAME the person go, the economics stay, and per-subject arithmetic still works. Never a bare hash of a user id: that is a rainbow table away from being the id again.",
+      "instead_of": [
+        "hashlib.sha256(str(user_id).encode()).hexdigest()"
+      ]
+    },
+    {
+      "name": "receipt_id",
+      "kind": "factory",
+      "path": "stapel_core.gdpr.owners.receipt_id",
+      "intent": "The deterministic id of one erasure receipt, `<owner>:<subject_type>:<subject_key>:<correlation_id>`. register_gdpr_owner already stamps it; call it directly only to assert against a receipt from the other side. Derived rather than random so an at-least-once redelivery produces the SAME receipt instead of a second one the audit trail cannot follow back."
+    },
+    {
+      "name": "register_gdpr_owner",
+      "kind": "factory",
+      "path": "stapel_core.gdpr.owners.register_gdpr_owner",
+      "intent": "Subscribe a library as a stapel-gdpr data owner from its AppConfig.ready() — one call registers gdpr.erasure.requested, gdpr.owner.probe and (optionally) the deprecated user.deleted with exactly the fleet protocol: deterministic receipt_id, the receipt emitted inside the erase's transaction, silence for a subject type this owner does not claim, a logged drop for a malformed payload or an unparseable key, and the probe answered from the same module so gdpr.owner.alive proves the erasure path is CONSUMED. A new owner library must call this; nine libraries carry the same sixty lines by hand and migrate on their next minor.",
+      "instead_of": [
+        "a hand-written actions.py with gdpr.erasure.requested / gdpr.owner.probe / user.deleted handlers"
+      ]
+    },
+    {
+      "name": "registered_gdpr_owners",
+      "kind": "predicate",
+      "path": "stapel_core.gdpr.owners.registered_gdpr_owners",
+      "intent": "Owner name → the subject types it registered in THIS process. The honest answer to 'which owners does this container actually erase for', as opposed to the host's STAPEL_GDPR['DATA_OWNERS'] declaration — the gap between the two is the silent-owner defect the probe exists to expose."
     },
     {
       "name": "load_configured_factors",

@@ -442,6 +442,65 @@ def test_purge_with_filters_forgets_one_subject_only():
     assert [e.payload["subject_id"] for e in left] == ["bob"]
 
 
+@pytest.mark.django_db
+def test_purge_by_filter_alone_forgets_the_whole_history_of_one_subject():
+    """An erasure has no cut-off date — no older_than, and yesterday goes too."""
+    old = dj_tz.now() - timedelta(days=400)
+    eventstore.append("ws.audit", {"workspace_id": "w1", "n": 1}, ts=old)
+    eventstore.append("ws.audit", {"workspace_id": "w1", "n": 2})
+    eventstore.append("ws.audit", {"workspace_id": "w2", "n": 3})
+
+    removed = eventstore.purge("ws.audit", filters={"workspace_id": "w1"})
+
+    assert removed == 2
+    assert [e.payload["n"] for e in eventstore.query("ws.audit")] == [3]
+
+
+@pytest.mark.django_db
+def test_purge_matches_identity_columns_too():
+    eventstore.append("s", {"n": 1}, project="p1")
+    eventstore.append("s", {"n": 2}, project="p2")
+
+    assert eventstore.purge("s", filters={"project": "p1"}) == 1
+    assert [e.payload["n"] for e in eventstore.query("s")] == [2]
+
+
+@pytest.mark.django_db
+def test_purge_needs_a_bound():
+    eventstore.append("s", {"n": 1})
+    with pytest.raises(ValueError, match="needs a bound"):
+        eventstore.purge("s")
+    assert len(eventstore.query("s")) == 1
+
+
+@pytest.mark.django_db
+def test_purge_refuses_a_filter_a_backend_cannot_apply():
+    """A store whose purge is time-only must not turn an erasure into a sweep."""
+    from stapel_core.eventstore.base import PurgeFiltersUnsupported
+
+    mem = _MemStore()
+    with override_settings(
+        STAPEL_EVENTSTORE={"BUFFER_SYNC": True, "ROUTES": {"analytics": mem}}
+    ):
+        with pytest.raises(PurgeFiltersUnsupported, match="_MemStore"):
+            eventstore.purge("analytics", filters={"subject_id": "alice"})
+        # retention still reaches the same backend, unfiltered
+        assert eventstore.purge("analytics", older_than=dj_tz.now()) == 0
+
+
+def test_purge_accepts_filters_reads_the_signature():
+    from stapel_core.eventstore.base import purge_accepts_filters
+    from stapel_core.eventstore.backends.postgres import PostgresEventStore
+
+    class _Kwargs(_MemStore):
+        def purge(self, stream, **kwargs):
+            return 0
+
+    assert purge_accepts_filters(PostgresEventStore())
+    assert purge_accepts_filters(_Kwargs())
+    assert not purge_accepts_filters(_MemStore())
+
+
 # --------------------------------------------------------------------------
 # anchor pages — the AnchorPagination wire contract over a stream
 # --------------------------------------------------------------------------

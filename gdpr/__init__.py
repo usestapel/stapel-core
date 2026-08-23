@@ -1,8 +1,22 @@
 """
 GDPR primitives shared across all Stapel packages.
 
-Microservices bus protocol
---------------------------
+Data owners (stapel-gdpr 0.5.0 and later)
+-----------------------------------------
+An owner library subscribes to the erasure protocol with ONE call from its
+``AppConfig.ready()`` — see :mod:`stapel_core.gdpr.owners`::
+
+    from stapel_core.gdpr import register_gdpr_owner
+
+    register_gdpr_owner("recordings",
+                        ["account", "workspace", "recording"],
+                        erase_subject)
+
+and erases ledger-bearing ids through the fleet's one keyed-HMAC funnel,
+:func:`~stapel_core.gdpr.owners.pseudonymize`.
+
+Microservices bus protocol (pre-0.5.0 export/delete)
+----------------------------------------------------
 Each service that holds user data must run a GDPR consumer:
 
     class Command(GDPRServiceConsumerCommand):
@@ -25,6 +39,19 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+
+from .owners import (  # noqa: F401 — re-exported surface
+    ERASURE_REQUESTED,
+    OWNER_ALIVE,
+    OWNER_PROBE,
+    PSEUDONYM_PREFIX,
+    SECTION_ERASED,
+    GdprOwner,
+    pseudonymize,
+    receipt_id,
+    register_gdpr_owner,
+    registered_gdpr_owners,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -195,3 +222,25 @@ class GDPRServiceConsumerCommand:
             payload=payload,
             key=key,
         ))
+
+
+__all__ = [
+    "GDPR_DELETE_COMPLETED",
+    "GDPR_DELETE_REQUESTED",
+    "GDPR_EXPORT_COMPLETED",
+    "GDPR_EXPORT_REQUESTED",
+    "ERASURE_REQUESTED",
+    "OWNER_ALIVE",
+    "OWNER_PROBE",
+    "PSEUDONYM_PREFIX",
+    "SECTION_ERASED",
+    "GDPRProvider",
+    "GDPRRegistry",
+    "GDPRServiceConsumerCommand",
+    "GdprOwner",
+    "gdpr_registry",
+    "pseudonymize",
+    "receipt_id",
+    "register_gdpr_owner",
+    "registered_gdpr_owners",
+]

@@ -1,5 +1,126 @@
 # Changelog
 
+## [0.35.0] — 2026-08-23
+
+### The sixty lines every data owner writes by hand — `register_gdpr_owner`
+
+stapel-gdpr 0.5.0 turned erasure into a protocol: the orchestrator creates
+one `ErasurePart` per owner that claims the subject type, emits
+`gdpr.erasure.requested`, and waits for a receipt. Nine libraries now answer
+it — workspaces, profile, notifications, recordings, agent, docs, media,
+billing, translations — and all nine answer it with **the same code**,
+copied. Not similar code: the same receipt id derivation, the same
+transaction, the same four guards, the same probe handler beside the same
+erasure handler. The ninth copy (billing 0.9.0) was written the day this
+release was queued.
+
+A protocol implemented nine times is a protocol that disagrees with itself
+nine ways, and the failure mode is not a crash — it is a receipt that says
+an erasure happened. So the protocol now lives here, once:
+
+```python
+# stapel_recordings/apps.py
+def ready(self):
+    from stapel_core.gdpr import register_gdpr_owner
+    from .erasure import erase_subject
+
+    register_gdpr_owner(
+        "recordings",
+        ["account", "workspace", "meeting", "recording"],
+        erase_subject,
+    )
+```
+
+The library keeps exactly what is its own: `erase(subject_type, subject_key,
+workspace_id) -> counts | None` — idempotent, counting what it removed,
+`None` for "this key names nothing of mine". Everything around it is
+protocol, and every arm of it is what the copies converged on:
+
+- **`gdpr.erasure.requested`** → erase, then `gdpr.section.erased` carrying
+  `counts` and a deterministic `receipt_id`
+  (`<owner>:<subject_type>:<subject_key>:<correlation_id>`) **emitted inside
+  the erase's transaction**. Derived rather than random, so an
+  at-least-once redelivery mints the SAME receipt instead of a second one
+  the audit trail cannot follow back; inside the transaction, so the receipt
+  leaves iff the erasure committed. An owner that receipts a rollback is
+  worse than an owner that stays silent — the orchestrator counts the
+  receipt and finalizes.
+- **A subject type this owner does not claim** → ignored, no receipt. The
+  orchestrator created no part for it; answering would be answering for
+  somebody else.
+- **A malformed payload** → logged and dropped, not raised: a payload this
+  shape will never parse, and raising would redeliver it until the broker
+  gives up. **A key `erase` cannot parse** (`TypeError` / `ValueError` /
+  `ValidationError`) → logged and **never receipted**; it names no row here,
+  so receipting would claim an erasure that never happened. Anything else
+  propagates, which is what redelivery is for.
+- **`gdpr.owner.probe`** → `gdpr.owner.alive {owner, subject_types}` from
+  the same module as the eraser. That co-location is the entire point of the
+  probe: the answer is evidence that the erasure subscriber is *consumed*,
+  not that a container is running somewhere. It reports the types registered
+  in this process — a probe that echoed the host's `DATA_OWNERS`
+  declaration back would confirm nothing.
+- **`user.deleted`**, the pre-0.5.0 account signal stapel-gdpr keeps
+  emitting for one minor (`legacy_user_deleted=True`, and only for an owner
+  that claims `account`) → the same `erase("account", …)`. There is no
+  second erasure implementation to drift, and when the handler goes no
+  erasure logic goes with it.
+
+Registering one owner name twice with the same terms is a no-op — a
+`ready()` that runs twice must not double-subscribe; with different terms it
+raises, because the second registration would silently win for some payloads
+and lose for others.
+
+`stapel_core.gdpr.pseudonymize(value, prefix="erased:")` is the same
+collapse for the other duplicated function: the fleet's one keyed-HMAC
+funnel (HMAC-SHA256 under `SECRET_KEY`, truncated to 32 hex, `erased:`-
+prefixed and therefore idempotent), which stapel-video, stapel-agent and
+stapel-billing each carried. A ledger-carrying owner erases the ids that
+NAME the person and keeps the economics — the bill is the product's record,
+without the person. A `SECRET_KEY` rotation splits pseudonyms; documented
+and accepted fleet-wide, the alternative being a second key nobody rotates.
+
+`gdpr.py` is a package (`gdpr/`) now — same import path, same exports, plus
+`gdpr/owners.py`. The pre-0.5.0 `GDPRProvider` / `gdpr_registry` /
+`GDPRServiceConsumerCommand` surface is untouched.
+
+**Migration.** New owner libraries MUST use the helper. The nine that
+predate it migrate on their **next minor** — not in this release: adopting
+it bumps their `stapel-core` floor to 0.35.0, and nine floor bumps for a
+refactor nobody asked for is not a migration, it is a fleet-wide rebuild.
+The migration itself is a deletion: drop the library's `actions.py` GDPR
+handlers and its `_receipt_id` / `_emit_receipt` / `pseudonymize` copies,
+call `register_gdpr_owner` from `ready()`. MODULE.md ("Data owners") states
+this, and the surface entry names it as what to reach for instead of a
+hand-written `actions.py`.
+
+### `eventstore.purge` — an erasure has no cut-off date
+
+`purge(stream, older_than=…, filters=…)` has had `filters` since 0.24.0, and
+a subject-scoped erasure still had to name a time it did not have: the bound
+was mandatory, so "forget everything about this workspace" was written as
+"delete everything about this workspace older than now" — a gate whose
+correctness rests on a clock.
+
+- `older_than` is optional. `purge("ws.audit", filters={"workspace_id": w})`
+  removes that subject's whole history and leaves everybody else's alone.
+- At least one bound is required. `purge(stream)` reads like "purge this
+  stream" and would delete every row it has ever held, so it raises
+  `ValueError` naming both ways to bound it.
+- A backend whose `purge` predates `filters` — backends are a public seam
+  (`STAPEL_EVENTSTORE["BACKEND"]` / `ROUTES`), and a store written against
+  the old signature is still a valid `EventStore` — now raises
+  `PurgeFiltersUnsupported` when handed one, instead of the `TypeError` that
+  used to surface at the call site. Silently purging by time instead would
+  erase rows nobody asked about and keep the ones somebody did. Unfiltered
+  retention still reaches such a backend unchanged;
+  `purge_accepts_filters(backend)` is the signature check behind it, exposed
+  because a caller that must choose deserves to ask.
+
+The Postgres/SQLite backend applies payload filters through the same JSON
+lookup `query` uses, so what a filter selects for deletion is exactly what
+it selects for reading.
+
 ## [0.34.0] — 2026-08-22
 
 ### A durable NATS consumer silently ignored every config change after its first boot

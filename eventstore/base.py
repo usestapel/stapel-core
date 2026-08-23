@@ -167,7 +167,7 @@ class EventStore(ABC):
         self,
         stream: str,
         *,
-        older_than: datetime,
+        older_than: datetime | None = None,
         filters: Mapping[str, object] | None = None,
     ) -> int:
         """Delete raw events of *stream* with ``ts < older_than``; return the
@@ -177,13 +177,48 @@ class EventStore(ABC):
         ``filters`` (same contract as :meth:`query`) narrows the deletion to
         matching rows. Retention never needs it; subject-scoped erasure does:
         a GDPR delete of one person's audit lines is "purge everything about
-        this subject up to now", and without a filtered purge every module
-        would keep a bespoke deletable table just to be able to forget."""
+        this subject", and without a filtered purge every module would keep a
+        bespoke deletable table just to be able to forget.
+
+        ``older_than=None`` means *no time bound* — the whole history of the
+        rows the filters name. An erasure has no cut-off date: bounding it at
+        ``now`` and calling that "everything" is the kind of gate that lies
+        the day a clock skews. The facade refuses a call with neither bound,
+        so unbounded here always means "bounded by the filters"."""
 
     def purge_rollup(self, stream: str, *, older_than: datetime) -> int:
         """Delete rollup buckets older than *older_than* (raw retention ≠
         rollup retention). Default: nothing to purge."""
         return 0
+
+
+class PurgeFiltersUnsupported(NotImplementedError):
+    """The backend a stream routes to cannot purge by subject.
+
+    Raised instead of purging by time alone. A store that quietly widened a
+    subject-scoped erasure into "delete everything older than X" — or quietly
+    narrowed it to nothing — would be an erasure receipt for work nobody did.
+    """
+
+
+def purge_accepts_filters(backend: EventStore) -> bool:
+    """Whether *backend*'s ``purge`` takes ``filters``.
+
+    Backends are a public seam (``STAPEL_EVENTSTORE["BACKEND"]``/``ROUTES``),
+    and one written against the pre-0.24 signature is still a valid
+    ``EventStore`` — it just cannot answer a subject-scoped purge. Asked by
+    signature rather than by a flag, so a third-party store that never heard
+    of this question still gets the right answer.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(type(backend).purge).parameters
+    except (TypeError, ValueError):  # pragma: no cover - exotic callables
+        return True  # not introspectable: assume the current contract
+    if any(p.kind is p.VAR_KEYWORD for p in params.values()):
+        return True
+    return "filters" in params
 
 
 def resolve_field(event: Event, name: str):
@@ -199,6 +234,8 @@ __all__ = [
     "Event",
     "EventPage",
     "EventStore",
+    "PurgeFiltersUnsupported",
     "RollupRow",
+    "purge_accepts_filters",
     "resolve_field",
 ]

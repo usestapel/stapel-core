@@ -53,7 +53,8 @@ points below; a generic fix or gap belongs **upstream** (see
   `subscription_changed`, `media_processed`, `profile_updated`,
   `workspace_member_changed`).
 - `gdpr` — `GDPRProvider` ABC, in-process `gdpr_registry`,
-  `GDPRServiceConsumerCommand` for microservices mode.
+  `GDPRServiceConsumerCommand` for microservices mode, and the data-owner
+  erasure subscriber (`register_gdpr_owner`, `pseudonymize`).
 - `captcha` — `CaptchaVerifier` ABC with turnstile / recaptcha / hcaptcha /
   noop backends, plus the tiered challenge policy (`captcha/policy.py`,
   `@captcha_protected`) driven by the client's network class.
@@ -1008,10 +1009,16 @@ core primitive, not N bespoke tables). Facade API (root export
   into=None) -> list[RollupRow]` — group-by (identity columns or payload
   keys) + sum-fields; `into=` upserts buckets into a rollup table (replace /
   recompute semantics). Concrete rollups are the consumer's business.
-- `purge(stream, *, older_than, filters=None) -> int` — retention mechanism;
-  `filters` narrows it to matching rows (subject-scoped erasure: a GDPR
-  delete of one person's audit lines is `purge(stream, older_than=now,
-  filters={"subject_id": …})`).
+- `purge(stream, *, older_than=None, filters=None) -> int` — retention
+  mechanism (`older_than`) **and** subject-scoped erasure (`filters`, same
+  contract as `query`: identity columns or payload keys). At least one bound
+  is required — `purge(stream)` would delete the whole stream, so it raises.
+  An erasure needs no cut-off date: `purge(stream, filters={"subject_id":
+  …})` forgets that subject's whole history and leaves everyone else's. A
+  backend whose `purge` predates `filters` raises `PurgeFiltersUnsupported`
+  rather than silently widening the erasure into a retention sweep
+  (`purge_accepts_filters(backend)` is the signature check behind it);
+  unfiltered retention still reaches such a backend.
 
 | Key | Default | Semantics | What it customizes |
 |---|---|---|---|
@@ -1214,13 +1221,66 @@ the misconfiguration diagnostics (W001 backend missing, W002 unaudited DAC,
 E003 STRICT unenforceable, W003/admin.W001 wrong app_label in a `MODELS`
 key, E004/W005 step-up, nav.E001/E002 malformed registries).
 
-### GDPR providers (`gdpr.py`)
+### GDPR providers (`gdpr/`)
 
 Subclass `GDPRProvider` (define `section`, implement `export` / `delete` /
 `anonymize`) and either register with `gdpr_registry` (monolith) or ship a
 management command subclassing `GDPRServiceConsumerCommand` with
 `gdpr_service_name` matching an entry in `GDPR_COLLECTING_SERVICES`
 (microservices).
+
+### Data owners — `register_gdpr_owner` (`gdpr/owners.py`)
+
+The stapel-gdpr 0.5.0 erasure protocol, implemented once. A library that
+holds rows about a subject subscribes from its `AppConfig.ready()`:
+
+```python
+from stapel_core.gdpr import register_gdpr_owner
+
+register_gdpr_owner(
+    "recordings",                                  # its GDPRProvider.section
+    ["account", "workspace", "meeting", "recording"],
+    erase_subject,                                 # the library's own code
+)
+```
+
+`erase(subject_type, subject_key, workspace_id) -> counts | None` is the
+only part that is the library's: idempotent, counting what it removed,
+`None` when the key names nothing of its own. Everything else is protocol
+and comes from here:
+
+- `gdpr.erasure.requested` → erase, then `gdpr.section.erased` with
+  `counts` and a deterministic `receipt_id`
+  (`<owner>:<subject_type>:<subject_key>:<correlation_id>`, so a redelivery
+  mints the same receipt), **emitted inside the erase's transaction** — the
+  receipt leaves iff the erasure committed.
+- a subject type the owner does not claim → ignored silently (the
+  orchestrator created no part for it, so a receipt would teach it nothing);
+  a malformed payload → logged and dropped, never retried forever; a key
+  `erase` cannot parse (`TypeError`/`ValueError`/`ValidationError`) → logged
+  and **never receipted**. Any other exception propagates for redelivery.
+- `gdpr.owner.probe` → `gdpr.owner.alive {owner, subject_types}` from the
+  same module, which is the whole point of the probe: the answer is evidence
+  that the erasure subscriber is *consumed*, not that a container is running.
+  It reports the types registered here, not the host's declaration.
+- `user.deleted` (the pre-0.5.0 account signal, `legacy_user_deleted=True`
+  by default, and only when the owner claims `account`) → the same
+  `erase("account", …)`, so the two paths cannot drift.
+
+`pseudonymize(value, prefix="erased:")` is the fleet's one keyed-HMAC funnel
+(HMAC-SHA256 under `SECRET_KEY`, 32 hex, `erased:`-prefixed and therefore
+idempotent). A ledger-carrying owner erases the ids that NAME the person and
+keeps the economics — the bill is the product's record, without the person.
+A `SECRET_KEY` rotation splits pseudonyms; accepted fleet-wide.
+
+**New owner libraries MUST use this helper** — not a copy of it. The nine
+libraries that predate it (workspaces, profile, notifications, recordings,
+agent, docs, media/cdn, billing, translations) carry the code verbatim and
+migrate to `register_gdpr_owner` on their next minor: the migration is
+deleting their `actions.py` GDPR handlers and their `_receipt_id` /
+`_emit_receipt` / `pseudonymize` copies, and calling this from `ready()`.
+Their core floor bumps to 0.35.0 when they do, which is why it is their
+next minor rather than this release.
 
 ### Revision sync contract — `RevisionMixin` (`django/models.py`, `django/api/revision.py`)
 

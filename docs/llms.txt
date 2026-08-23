@@ -1,8 +1,8 @@
-# stapel-core 0.34.0
+# stapel-core 0.35.0
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
-Contract: surface 24 · extension points 14 · error codes 42.
+Contract: surface 28 · extension points 14 · error codes 42.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Usage surface — call these before writing your own
@@ -43,6 +43,8 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 - admin/base_site.html — django/templates/admin/base_site.html
   The admin shell that renders the cross-service navigation: STAPEL_SERVICES, the NAV_LINKS sections and the introspection-gated Swagger link. A project that ships its own admin/base_site.html instead of extending this one silently loses all three and gets no error — override blocks, do not replace the file.
 ### predicate
+- registered_gdpr_owners — stapel_core.gdpr.owners.registered_gdpr_owners
+  Owner name → the subject types it registered in THIS process. The honest answer to 'which owners does this container actually erase for', as opposed to the host's STAPEL_GDPR['DATA_OWNERS'] declaration — the gap between the two is the silent-owner defect the probe exists to expose.
 - schema_probe — stapel_core.django.monitoring.schema_health.schema_probe
   The register_dependency_check-shaped view of schema_state: True at head, False behind, None when the probe could not ask. This is what the framework registers; call it directly only if you are mounting the probe somewhere else.
 - schema_state — stapel_core.django.monitoring.schema_health.schema_state
@@ -56,10 +58,18 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
   The urlpatterns for the whole health/metrics family — include() this in a service's root urls.py instead of wiring the four views by hand, so every service in the fleet answers the same paths and a deployment's probes are portable between them.
 - load_configured_factors — stapel_core.verification.factors.load_configured_factors
   Boot-time loader that turns STAPEL_VERIFICATION['EXTRA_FACTORS'] from a declaration into registrations (pinned, so host ids beat library ones whatever the INSTALLED_APPS order). CommonDjangoConfig.ready() calls it since 0.16.1 — a host app must NOT call it from its own AppConfig any more; before 0.16.1 it had no caller anywhere in the framework and the setting was decorative, which is exactly the failure this whole section exists to make impossible.
+- pseudonymize — stapel_core.gdpr.owners.pseudonymize
+  instead of: hashlib.sha256(str(user_id).encode()).hexdigest()
+  The fleet's one erasure funnel for an id that must survive as a stable pseudonym: HMAC-SHA256 under the deployment's SECRET_KEY, 32 hex, `erased:`-prefixed and therefore idempotent. This is how a ledger-carrying owner (billing, agent, video) erases — the ids that NAME the person go, the economics stay, and per-subject arithmetic still works. Never a bare hash of a user id: that is a rainbow table away from being the id again.
+- receipt_id — stapel_core.gdpr.owners.receipt_id
+  The deterministic id of one erasure receipt, `<owner>:<subject_type>:<subject_key>:<correlation_id>`. register_gdpr_owner already stamps it; call it directly only to assert against a receipt from the other side. Derived rather than random so an at-least-once redelivery produces the SAME receipt instead of a second one the audit trail cannot follow back.
 - register_dependency_check — stapel_core.django.monitoring.health.register_dependency_check
   Register a probe for an OUTBOUND dependency (LiveKit, an STT provider, a payment gateway) so its state shows up as checks.<name> on /api/health/ and stapel_dependency_up{dependency="<name>"} on /api/metrics/. Reach for this whenever you wrap a network call in a best-effort try/except: the wrapper is fine, the wrapper WITHOUT a registered check is how meettoday's host-kick and room-PIN silently did nothing in production for a day. Canon: swallowed exception + logger.error + register_dependency_check, never the first alone. The probe has THREE answers, not two — True, False, and None for 'I could not ask'. Return None rather than a guess: an undetermined dependency renders as checks.<name>="unknown", omits its stapel_dependency_up sample instead of dropping it to 0, and never takes the process out of rotation.
 - register_factor — stapel_core.verification.factors.register_factor
   Register a step-up verification factor (instance or dotted path) from an AppConfig.ready() — the fork-free way for a library or a host to add OTP/TOTP/passkey-shaped proof of presence. A host that only has a dotted path should use the EXTRA_FACTORS setting instead and let the boot loader do this.
+- register_gdpr_owner — stapel_core.gdpr.owners.register_gdpr_owner
+  instead of: a hand-written actions.py with gdpr.erasure.requested / gdpr.owner.probe / user.deleted handlers
+  Subscribe a library as a stapel-gdpr data owner from its AppConfig.ready() — one call registers gdpr.erasure.requested, gdpr.owner.probe and (optionally) the deprecated user.deleted with exactly the fleet protocol: deterministic receipt_id, the receipt emitted inside the erase's transaction, silence for a subject type this owner does not claim, a logged drop for a malformed payload or an unparseable key, and the probe answered from the same module so gdpr.owner.alive proves the erasure path is CONSUMED. A new owner library must call this; nine libraries carry the same sixty lines by hand and migrate on their next minor.
 - register_metrics_exporter — stapel_core.django.monitoring.health.register_metrics_exporter
   Contribute additional Prometheus lines to /api/metrics/ from a module or a product, without forking the view. Use it instead of standing up a second metrics endpoint — one scrape target per service is the contract deployments are built against.
 - register_schema_check — stapel_core.django.monitoring.schema_health.register_schema_check

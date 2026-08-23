@@ -53,6 +53,11 @@ REPO = Path(__file__).resolve().parent.parent
 COMMITTED = REPO / "docs" / "capabilities.json"
 COMMITTED_LLMS_TXT = REPO / "docs" / "llms.txt"
 
+#: Matches the Makefile's ``--budget 4600`` — see its comment. Raised, never
+#: fitted into by trimming intents: a cut context file reads exactly like a
+#: complete one.
+LLMS_TXT_BUDGET = 4600
+
 
 @pytest.fixture(scope="module")
 def emitted() -> dict:
@@ -83,15 +88,15 @@ def test_llms_txt_committed():
 def test_llms_txt_has_no_drift():
     """docs/llms.txt (the fifth contract artifact) must match a fresh render of
     the committed docs/capabilities.json byte for byte."""
-    rendered = render_llms_txt(load_llms_inputs(REPO))
+    rendered = render_llms_txt(load_llms_inputs(REPO), budget=LLMS_TXT_BUDGET)
     assert COMMITTED_LLMS_TXT.read_text() == rendered, (
         "docs/llms.txt is stale — run `make contract` and commit it"
     )
 
 
 def test_llms_txt_emission_is_deterministic():
-    a = render_llms_txt(load_llms_inputs(REPO))
-    b = render_llms_txt(load_llms_inputs(REPO))
+    a = render_llms_txt(load_llms_inputs(REPO), budget=LLMS_TXT_BUDGET)
+    b = render_llms_txt(load_llms_inputs(REPO), budget=LLMS_TXT_BUDGET)
     assert a == b
 
 

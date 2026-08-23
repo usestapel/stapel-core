@@ -206,10 +206,14 @@ class PostgresEventStore(EventStore):
         self,
         stream: str,
         *,
-        older_than: datetime,
+        older_than: datetime | None = None,
         filters: Mapping[str, object] | None = None,
     ) -> int:
-        queryset = _model().objects.filter(stream=stream, ts__lt=older_than)
+        queryset = _model().objects.filter(stream=stream)
+        if older_than is not None:
+            queryset = queryset.filter(ts__lt=older_than)
+        # Payload keys go through the same JSON lookup `query` uses, so what
+        # a filter selects for deletion is what it selects for reading.
         queryset = _apply_filters(queryset, filters)
         deleted, _ = queryset.delete()
         return deleted

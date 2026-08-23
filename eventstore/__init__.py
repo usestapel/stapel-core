@@ -46,7 +46,9 @@ from .base import (
     Event,
     EventPage,
     EventStore,
+    PurgeFiltersUnsupported,
     RollupRow,
+    purge_accepts_filters,
 )
 from .buffer import WriteBuffer
 
@@ -240,17 +242,47 @@ def rollup(
 def purge(
     stream: str,
     *,
-    older_than: datetime,
+    older_than: datetime | None = None,
     filters: Mapping[str, object] | None = None,
 ) -> int:
-    """Delete raw events of *stream* older than *older_than*; return count.
+    """Delete raw events of *stream*; return how many were removed.
 
-    ``filters`` narrows the deletion (subject-scoped erasure — see
-    :meth:`EventStore.purge`); retention sweeps leave it unset."""
+    Two bounds, at least one required:
+
+    - ``older_than`` — the retention sweep's bound (``ts < older_than``).
+    - ``filters`` — identity columns or payload keys, exactly as in
+      :func:`query`. This is subject-scoped erasure:
+      ``purge("ws.audit", filters={"workspace_id": wid})`` forgets one
+      subject's whole history and leaves everybody else's alone.
+
+    Neither bound is refused rather than executed: ``purge(stream)`` reads
+    like "purge this stream" and would delete every row it has ever held.
+
+    A backend whose ``purge`` predates ``filters`` raises
+    :class:`~stapel_core.eventstore.base.PurgeFiltersUnsupported` when one is
+    given — an erasure that silently became a retention sweep is worse than
+    an erasure that stopped."""
+    if older_than is None and filters is None:
+        raise ValueError(
+            f"purge({stream!r}) needs a bound: older_than=… (retention) or "
+            "filters=… (subject-scoped erasure). Unbounded, this deletes the "
+            "whole stream — say so with older_than=timezone.now() if that is "
+            "really what you mean."
+        )
     flush()
-    return resolve_backend(stream).purge(
-        stream, older_than=older_than, filters=filters
-    )
+    backend = resolve_backend(stream)
+    if not purge_accepts_filters(backend):
+        if filters is not None:
+            raise PurgeFiltersUnsupported(
+                f"event-store backend {type(backend).__name__} cannot purge "
+                f"{stream!r} by filters {sorted(filters)} — its purge() takes "
+                "only a time bound. Purging by time instead would erase rows "
+                "nobody asked about and keep the ones somebody did."
+            )
+        # Retention still works against a pre-filters backend: don't hand it
+        # an argument its signature never had.
+        return backend.purge(stream, older_than=older_than)
+    return backend.purge(stream, older_than=older_than, filters=filters)
 
 
 atexit.register(flush)
@@ -262,12 +294,14 @@ __all__ = [
     "Event",
     "EventPage",
     "EventStore",
+    "PurgeFiltersUnsupported",
     "RollupRow",
     "WriteBuffer",
     "append",
     "append_batch",
     "flush",
     "purge",
+    "purge_accepts_filters",
     "query",
     "resolve_backend",
     "rollup",

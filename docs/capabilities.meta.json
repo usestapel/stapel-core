@@ -94,6 +94,10 @@
     {
       "select": "functions",
       "path": "django/monitoring/schema_health.py"
+    },
+    {
+      "select": "functions",
+      "path": "gdpr/owners.py"
     }
   ],
   "surface": {
@@ -200,6 +204,28 @@
     "reset_schema_state": {
       "kind": "gate_function",
       "intent": "Drop the cached schema verdict. For tests, and for a post-migrate hook in a process that migrates itself and should stop reporting the pre-migration answer for the rest of the TTL."
+    },
+    "register_gdpr_owner": {
+      "kind": "factory",
+      "intent": "Subscribe a library as a stapel-gdpr data owner from its AppConfig.ready() — one call registers gdpr.erasure.requested, gdpr.owner.probe and (optionally) the deprecated user.deleted with exactly the fleet protocol: deterministic receipt_id, the receipt emitted inside the erase's transaction, silence for a subject type this owner does not claim, a logged drop for a malformed payload or an unparseable key, and the probe answered from the same module so gdpr.owner.alive proves the erasure path is CONSUMED. A new owner library must call this; nine libraries carry the same sixty lines by hand and migrate on their next minor.",
+      "instead_of": [
+        "a hand-written actions.py with gdpr.erasure.requested / gdpr.owner.probe / user.deleted handlers"
+      ]
+    },
+    "pseudonymize": {
+      "kind": "factory",
+      "intent": "The fleet's one erasure funnel for an id that must survive as a stable pseudonym: HMAC-SHA256 under the deployment's SECRET_KEY, 32 hex, `erased:`-prefixed and therefore idempotent. This is how a ledger-carrying owner (billing, agent, video) erases — the ids that NAME the person go, the economics stay, and per-subject arithmetic still works. Never a bare hash of a user id: that is a rainbow table away from being the id again.",
+      "instead_of": [
+        "hashlib.sha256(str(user_id).encode()).hexdigest()"
+      ]
+    },
+    "receipt_id": {
+      "kind": "factory",
+      "intent": "The deterministic id of one erasure receipt, `<owner>:<subject_type>:<subject_key>:<correlation_id>`. register_gdpr_owner already stamps it; call it directly only to assert against a receipt from the other side. Derived rather than random so an at-least-once redelivery produces the SAME receipt instead of a second one the audit trail cannot follow back."
+    },
+    "registered_gdpr_owners": {
+      "kind": "predicate",
+      "intent": "Owner name → the subject types it registered in THIS process. The honest answer to 'which owners does this container actually erase for', as opposed to the host's STAPEL_GDPR['DATA_OWNERS'] declaration — the gap between the two is the silent-owner defect the probe exists to expose."
     }
   },
   "requires": []

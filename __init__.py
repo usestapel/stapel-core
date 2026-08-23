@@ -13,7 +13,9 @@ The building blocks every Stapel package sits on:
 - ``signals`` — in-process Django signals for business milestones.
 - ``django.api`` — API conventions: ``StapelResponse``,
   ``StapelErrorResponse`` and ``StapelDataclassSerializer``.
-- ``gdpr`` — GDPR provider protocol and in-process registry.
+- ``gdpr`` — GDPR provider protocol, in-process registry and the
+  data-owner erasure subscriber (``register_gdpr_owner``,
+  ``pseudonymize``).
 - ``netintel`` — IP intelligence seam (``classify_ip``, ``country_of``,
   ``IpProfile``): pluggable provider, cached, fail-open.
 - ``eventstore`` — append-only stream seam (``append``, ``query``,
@@ -83,9 +85,11 @@ _LAZY_EXPORTS = {
     "StapelResponse": (".django.api.errors", "StapelResponse"),
     "StapelErrorResponse": (".django.api.errors", "StapelErrorResponse"),
     "StapelDataclassSerializer": (".django.api.serializers", "StapelDataclassSerializer"),
-    # GDPR — provider protocol + in-process registry
+    # GDPR — provider protocol, in-process registry, erasure-owner subscriber
     "GDPRProvider": (".gdpr", "GDPRProvider"),
     "gdpr_registry": (".gdpr", "gdpr_registry"),
+    "register_gdpr_owner": (".gdpr", "register_gdpr_owner"),
+    "pseudonymize": (".gdpr", "pseudonymize"),
     # Users — base user model
     "AbstractStapelUser": (".django.users.models", "AbstractStapelUser"),
     # Framework-agnostic JWT primitives (0.1.x root exports, kept stable)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.34.0"
+version = "0.35.0"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -134,8 +134,10 @@ omit = [
     # External service integrations — require running services
     "*/django/workspaces.py",
     "*/notifications/*",
-    # GDPR — external data export, tested at service level
-    "*/gdpr.py",
+    # GDPR export/delete over the bus — needs a running service to exercise.
+    # Only that half: gdpr/owners.py (the erasure-owner subscriber) is
+    # measured like any other seam.
+    "*/gdpr/__init__.py",
     # Language utilities — tested at service level
     "*/core/language.py",
     # Migrations — auto-generated
@@ -192,6 +194,7 @@ packages = [
     "stapel_core.django.gateway",
     "stapel_core.django.gateway.migrations",
     "stapel_core.gateway",
+    "stapel_core.gdpr",
     "stapel_core.eventstore",
     "stapel_core.eventstore.backends",
     "stapel_core.comm",
