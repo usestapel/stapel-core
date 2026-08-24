@@ -721,7 +721,8 @@ Fleet libraries run the default.
 The layered stance (system-design §8.1) asks a view to be *thin*: validate with
 a serializer, hand a DTO to the service layer, render through a serializer,
 return `StapelResponse`. Nothing in that shape is module-specific — and yet
-nineteen stapel modules hand-wrote the same `SerializerSeamMixin`, because the
+twenty-three stapel modules hand-wrote the same `SerializerSeamMixin` — twenty-four
+definitions counting the stapel-tools library template — because the
 core did not ship one (`docs/reference/module-extension-gaps.md`, meettoday-gap
 item 2). 0.37.0 ships it once.
 
@@ -787,8 +788,15 @@ Per-lib, one release each — do not batch across libraries:
    into every *new* library — fix the template in the same sweep, or new
    libraries keep being born with the duplicate.
 
-Two copies are **deliberate divergences and stay local** — do not "unify" them:
+Three copies are **deliberate divergences and stay local** — do not "unify" them:
 
+- **stapel-auth** (`utils.py:44`) — a `__getattr__` that *synthesizes*
+  `get_<purpose>_serializer_class()` for any `*_serializer_class` attribute a
+  view declares, so a view with a dozen serializers writes no getters at all.
+  A different mechanism, not a drifted copy; the canonical mixin stays explicit
+  (two named attributes, two named getters — greppable, typeable, and it does
+  not swallow attribute errors). If the fleet wants the dynamic form, it comes
+  upstream as its own opt-in mixin, not by folding it into this one.
 - **stapel-listings** (`views.py:80`) — a ViewSet module. Its mixin defines
   `get_serializer_class()` (DRF's own hook) as a fallback, and
   `ListingViewSet` overrides it for per-action selection. Different seam,

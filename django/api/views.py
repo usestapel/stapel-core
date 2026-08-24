@@ -6,7 +6,7 @@ through a serializer, return a :class:`~stapel_core.django.api.errors.StapelResp
 Nothing about that shape is module-specific — and yet every stapel module wrote
 its own ``SerializerSeamMixin`` with the same two attributes and the same two
 getters, because the core did not ship one (``module-extension-gaps`` §"Пробелы
-из meettoday-миграции" item 2). Nineteen copies is not a pattern, it is a
+из meettoday-миграции" item 2). Twenty-four copies is not a pattern, it is a
 missing primitive.
 
 What the seam buys a host project

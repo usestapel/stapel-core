@@ -1,6 +1,7 @@
 """The serializer seam and the thin-view base — the semantics consumers rely on.
 
-Nineteen stapel modules hand-wrote this seam before the core shipped it
+Twenty-three stapel modules (plus the stapel-tools library template)
+hand-wrote this seam before the core shipped it
 (``docs/reference/module-extension-gaps.md``). These tests pin the contract
 those copies established, so a module deleting its local copy inherits the
 same behaviour and not merely the same method names:

@@ -2,17 +2,18 @@
 
 ## [0.37.0] — 2026-08-24
 
-### The serializer seam, written once instead of nineteen times
+### The serializer seam, written once instead of twenty-four times
 
 `SerializerSeamMixin` is the seam that makes a stapel view swappable without a
 fork: a host names a different serializer on a subclass and the library's HTTP
 method bodies keep working. It is declared in system-design §8.1, it is quoted
 in every library's MODULE.md — and the core never shipped it. So every module
-wrote it: nineteen copies, byte-identical below the docstring, one of them
+wrote it: twenty-four copies across twenty-three libraries, byte-identical
+below the docstring, one of them
 inside `stapel-tools`' library template so that every *future* library is born
 with the duplicate too.
 
-Nineteen copies of eight lines is not a maintenance cost worth a release on its
+Twenty-four copies of eight lines is not a maintenance cost worth a release on its
 own. What makes it one is what the copies mean. A seam is a promise to a host
 project, and a promise re-typed per library is a promise that can drift per
 library — quietly, because nothing tests a mixin that only forwards attributes.
@@ -24,7 +25,7 @@ impossible to write, not to notice it later.
 
 - **`SerializerSeamMixin`** — the canonical superset: the two class attributes,
   the two getters, `None` meaning "this direction carries no serializer" rather
-  than an error. Behaviourally identical to the seventeen copies that agreed;
+  than an error. Behaviourally identical to the twenty-one copies that agreed;
   a consumer deletes its local class, imports this one, and no call site moves.
 - **`StapelAPIView`** — `APIView` + the seam + the two moves the hand-written
   bodies were already making at three hundred call sites:
@@ -37,12 +38,13 @@ Both are pinned by 23 tests over the semantics consumers actually rely on —
 override resolution through the getter *and* through the attribute, per-request
 getter overrides, MRO placement left of `APIView`, and the `None` direction.
 
-**What was deliberately not unified.** Two of the nineteen are real divergences,
-not drift, and this release leaves them alone: stapel-listings is a ViewSet
-module whose mixin hooks DRF's own `get_serializer_class()` for per-action
-selection, and stapel-mailtrap declares the response direction only. Averaging
-those into the canon would have been the same mistake as the duplication, in
-the other direction.
+**What was deliberately not unified.** Three of the twenty-four are real
+divergences, not drift, and this release leaves them alone: stapel-auth
+synthesizes its getters through `__getattr__` so a view with a dozen
+serializers writes none; stapel-listings is a ViewSet module whose mixin hooks
+DRF's own `get_serializer_class()` for per-action selection; stapel-mailtrap
+declares the response direction only. Averaging those into the canon would have
+been the same mistake as the duplication, in the other direction.
 
 Consequently this mixin **never defines `get_serializer_class()`**. DRF's
 `GenericAPIView` and every `ViewSet` already define it; a mixin sitting first in
