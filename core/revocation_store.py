@@ -28,14 +28,15 @@ apart again.
 
 How
 ---
-A second cache *connection* is built from the deployment's own ``CACHES``
-entry — same backend, same ``LOCATION``, same ``OPTIONS``, so the same Redis
-and the same pool settings — with ``KEY_PREFIX`` and ``VERSION`` forced to
-values that are a property of the FLEET, not of the service. Any peer that
-runs this library and points at the same store computes the same key.
-
-``KEY_FUNCTION`` is dropped for the same reason: a per-service key function
-would re-isolate the namespace this module exists to share.
+The mechanism itself lives in :mod:`stapel_core.core.fleet_cache` (0.45.0,
+generalized out of this module when verification grants turned out to have
+the identical defect — see that module's header). It builds a second cache
+*connection* from the deployment's own ``CACHES`` entry — same backend, same
+``LOCATION``, same ``OPTIONS`` — with ``KEY_PREFIX`` and ``VERSION`` forced to
+values that are a property of the FLEET, not of the service, and drops
+``KEY_FUNCTION`` so a per-service one cannot re-isolate the namespace. This
+module contributes the revocation-specific half: which namespace, and which
+alias to borrow the connection from.
 
 Configuration (both optional, and both must match across peers if changed):
 
@@ -52,17 +53,13 @@ from __future__ import annotations
 
 import logging
 
+from .fleet_cache import NAMESPACE_VERSION, fleet_cache, reset_fleet_caches
+
 logger = logging.getLogger(__name__)
 
 #: The fleet-wide default. Deliberately not derived from SERVICE_NAME,
 #: DATABASE, or anything else that differs between peers.
 DEFAULT_NAMESPACE = "stapel_revocation"
-
-#: Pinned: the namespace is a wire format between services, so bumping it is
-#: a fleet-wide migration, never an incidental per-service value.
-NAMESPACE_VERSION = 1
-
-_CONNECTIONS: dict = {}
 
 
 def revocation_namespace() -> str:
@@ -82,76 +79,25 @@ def revocation_cache_alias() -> str:
     return getattr(settings, "STAPEL_JWT_REVOCATION_CACHE", None) or "default"
 
 
-def _build(alias: str, namespace: str):
-    from django.conf import settings
-    from django.utils.module_loading import import_string
-
-    caches = getattr(settings, "CACHES", None) or {}
-    conf = caches.get(alias)
-    if conf is None:
-        conf = caches.get("default")
-    if not conf:
-        raise KeyError(f"no CACHES entry for alias {alias!r} (and no default)")
-
-    params = dict(conf)
-    backend_path = params.pop("BACKEND")
-    location = params.pop("LOCATION", "")
-    # The three keys that decide the final Redis key, forced to fleet values.
-    params["KEY_PREFIX"] = namespace
-    params["VERSION"] = NAMESPACE_VERSION
-    params.pop("KEY_FUNCTION", None)
-
-    backend_cls = import_string(backend_path)
-    return backend_cls(location, params)
-
-
 def revocation_cache():
-    """A cache connection into the shared revocation namespace.
-
-    Falls back to the ordinary ``caches[alias]`` connection if a deployment's
-    backend cannot be re-instantiated this way. That fallback is the OLD,
-    prefix-scoped behaviour, so it is logged at error level rather than
-    passed over: a deployment on such a backend has per-service revocation
-    and needs to know.
-    """
-    alias = revocation_cache_alias()
-    namespace = revocation_namespace()
-    key = (alias, namespace)
-
-    hit = _CONNECTIONS.get(key)
-    if hit is not None:
-        return hit
-
-    try:
-        store = _build(alias, namespace)
-    except Exception as exc:  # pragma: no cover - backend-specific
-        logger.error(
-            "Cannot open the shared revocation namespace on cache %r (%s); "
-            "falling back to this service's own cache prefix, which means "
-            "revocation does NOT propagate to peer services.",
-            alias,
-            exc,
-        )
-        from django.core.cache import caches
-
-        return caches[alias]
-
-    _CONNECTIONS[key] = store
-    return store
+    """A cache connection into the shared revocation namespace."""
+    return fleet_cache(
+        namespace=revocation_namespace(),
+        alias=revocation_cache_alias(),
+        what="revocation",
+    )
 
 
 def reset_revocation_cache(**kwargs) -> None:
     """Drop memoized connections (settings changed, or a test overrode them)."""
-    _CONNECTIONS.clear()
+    reset_fleet_caches(**kwargs)
 
 
-def _connect_settings_reset() -> None:
-    """Rebuild on ``override_settings``, so tests and reloads see new CACHES."""
-    try:
-        from django.test.signals import setting_changed
-    except Exception:  # pragma: no cover - django.test not importable
-        return
-    setting_changed.connect(reset_revocation_cache, dispatch_uid="stapel_revocation_reset")
-
-
-_connect_settings_reset()
+__all__ = [
+    "DEFAULT_NAMESPACE",
+    "NAMESPACE_VERSION",
+    "reset_revocation_cache",
+    "revocation_cache",
+    "revocation_cache_alias",
+    "revocation_namespace",
+]

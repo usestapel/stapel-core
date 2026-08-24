@@ -25,7 +25,9 @@ points below; a generic fix or gap belongs **upstream** (see
   pattern, generalized) with dotted-path `import_strings` seams.
 - `verification` — step-up verification on any endpoint
   (`@requires_verification`), pluggable factor registry, per-user policy
-  resolved via the `auth.verification.policy` comm Function.
+  resolved via the `auth.verification.policy` comm Function, and a **fleet-wide**
+  challenge/grant store (`core/fleet_cache.py`) so a factor completed in one
+  service counts in the peer that demanded it.
 - `flows` — self-documenting business scenarios (`Flow`, `@flow_step`,
   `flow_registry`) with doc generation and a CI completeness gate.
 - `i18n` — domain-agnostic shipping of localized content: per-app
@@ -458,6 +460,19 @@ so the log line naming the subjects is a fact, not an intention.
 | `EXTRA_FACTORS` | `[]` | Dotted paths of custom factor classes, applied at boot by `CommonDjangoConfig.ready()` |
 | `DEFAULT_LEVEL` | `"strict"` | Level used when a view passes `level=None`: `strict` \| `default_on` \| `opt_in` |
 | `POLICY_CACHE_TTL` | `60` | Cache TTL (s) for the resolved per-user policy |
+| `GRANT_NAMESPACE` | `"stapel_verification"` | The **fleet-wide** cache key prefix challenges/grants/tokens are written under (0.45.0). A wire format between peers — change it only to run two fleets against one store, and then change it in EVERY peer (`stapel_core.verification.W001`, security-critical) |
+| `GRANT_CACHE` | `"default"` | `CACHES` alias the shared connection is borrowed from (`stapel_core.verification.E001` when it names an alias that does not exist and there is no `default` — grants written nowhere means step-up is permanently refused) |
+
+**Grants are fleet-shared state, not per-service** (0.45.0). Until 0.44.2
+challenges, grants and verification tokens went through
+`django.core.cache.cache`, which Django namespaces under the *deployment's*
+`KEY_PREFIX` — a value every service in a split deployment sets differently on
+purpose. A step-up completed in the auth service was therefore invisible to the
+peer that demanded it (`auth:1:stapel:verification:grant:<uid>:sensitive`
+versus `stapel_profiles:1:…`). Grants now use `stapel_core.core.fleet_cache`,
+the same mechanism revocation has used since 0.39.0. The key is fleet-stable
+because the identity is: `user.pk` is the UUID the JWT `user_id` claim carries,
+and consumer-mode services materialise the local row under that same pk.
 
 Custom factors: subclass `VerificationFactor` (define `id`, implement
 `verify`, optionally `available_for` / `initiate`) and call
@@ -1274,7 +1289,8 @@ here, because the next caller will not have it.
 | Choke point | Owns | Refuses |
 |---|---|---|
 | `jwt_provider` (`django/jwt/provider.py`) | ALL minting: `create_tokens(user)`, `create_tokens_from_data(data)`, `refresh_access_token(token)` | a revoked jti, a user-level ban (`is_user_blacklisted`) — before the mint, never after |
-| `revocation_cache()` (`core/revocation_store.py`) | the ONE key namespace all three revocation facts are written to, shared by every peer service | nothing itself — it is what makes the others reach across services (0.39.0) |
+| `revocation_cache()` (`core/revocation_store.py`) | the ONE key namespace all three revocation facts are written to, shared by every peer service | nothing itself — it is what makes the others reach across services (0.39.0; mechanism generalized into `core/fleet_cache.py` in 0.45.0) |
+| `fleet_cache()` (`core/fleet_cache.py`) | the mechanism under every namespace that must be shared rather than per-service — revocation and verification grants today | nothing itself — it is what stops a per-service `KEY_PREFIX` turning fleet state into a per-service illusion (0.45.0) |
 | `is_user_tombstoned()` (`django/jwt/tombstone.py`) | "this uid was deleted at the issuer" — consulted on BOTH halves of the gate: authentication (consumer mode) and re-mint (unconditionally) | a deleted account, for at least the refresh-token lifetime (0.40.0/0.41.0) |
 | `load_user_by_uid` (`django/jwt/utils.py`) | the re-mint identity on EVERY refresh path | a **tombstoned** uid (0.41.0), a deleted user, an **inactive** user (0.38.0) |
 | `get_or_create_user_from_jwt` (`django/jwt/utils.py`) | the principal every authentication path resolves — middleware, DRF class, `JWTAuthBackend`, channels | an unresolvable user, an **inactive** user (0.38.0) |
@@ -1371,7 +1387,11 @@ for `stapel_profiles:1:jwt_blacklist:<jti>`, so a revoked token kept working
 everywhere except where it was revoked. `revocation_cache()` borrows the
 deployment's cache connection (same backend, same `LOCATION`, same `OPTIONS`)
 with `KEY_PREFIX`/`VERSION` forced to fleet values, so every peer computes the
-same key on every backend.
+same key on every backend. In 0.45.0 that borrow-and-force step moved to
+`core/fleet_cache.py` — verification grants turned out to have the identical
+defect, and the answer to a second instance is the same mechanism, not a
+second one. `revocation_store.py` keeps the revocation-specific half (which
+namespace, which alias) and its public API is unchanged.
 
 ```python
 # both optional; if you change either, change it in EVERY peer service
@@ -1607,13 +1627,48 @@ operation declared HIGH) requires a fresh verification grant — the mandate
 says a role *may* act, step-up says it was re-proven recently. The grant store
 is `stapel_core.verification`'s, i.e. the *same* one stapel-auth's step-up flow
 (and the legacy `/totp/step-up/` bridge, scope `sensitive`/max_age `900`) write
-to — completing step-up anywhere satisfies the admin gate (no auth hook). Only
-`StapelModelAdmin` enforces it (permission-layer deny closes every mutation
-path; the add/change/delete views return an educational 403 — core has no web
-verification flow). **Degradation**: self-disables when no verification factor
-is registered (a grant would be unobtainable) — `W005` flags it; enforcement
-resumes once stapel-auth (or `register_factor`) is present. The
-`dac_escalation` / `step_up_denied` signals are forwarded to the eventstore
+to (no auth hook). Only `StapelModelAdmin` enforces it (permission-layer deny
+closes every mutation path; the add/change/delete views return an educational
+403 — core has no web verification flow). **Degradation**: self-disables when
+no verification factor is registered (a grant would be unobtainable) — `W005`
+flags it; enforcement resumes once stapel-auth (or `register_factor`) is
+present.
+
+**The three channels the gate reads (0.45.0).** Until 0.44.2 there was
+effectively one, and no admin browser could fill it: `has_fresh_step_up`
+called `has_grant(user, scope)` with no `token=`, so the `X-Verification-Token`
+fallback was unreachable from this gate (and a browser form POST cannot set a
+header anyway), leaving a grant in *this process's* `django.core.cache.cache` —
+namespaced per service. So the property this section used to claim, "completing
+step-up anywhere satisfies the admin gate", held only inside one `KEY_PREFIX`,
+and the 403 pointed operators at a cross-service flow that could not satisfy
+the check. With `ENFORCE=True` by default, any process that registered a factor
+but did not mint the grant refused every HIGH operation with instructions that
+could not be followed. What the gate reads now, in order:
+
+1. **The fleet-wide grant store** — `GRANT_NAMESPACE` above, keyed by the
+   fleet-stable `user.pk`. This is what finally makes "completing step-up
+   anywhere in the fleet counts here" true rather than documented.
+2. **The session** — `request.session["stapel_step_up"] = {scope: granted_at}`,
+   written by `record_step_up_in_session(request)`. The session cookie is the
+   one credential the admin browser carries on every subsequent form POST, and
+   this channel keeps working where the cache is not shared. Freshness is
+   judged against the *current* `MAX_AGE`, so shortening the policy tightens
+   live sessions immediately.
+3. **A presented verification token** — `X-Verification-Token` (API clients) or
+   the `verification_token` query parameter / form field (a browser returning
+   from an auth-service step-up redirect). A token accepted at an admin *view*
+   is pinned onto the session by `adopt_step_up_token`, because the confirm
+   form that follows carries neither the query string nor a header. Pinning
+   happens only in views: `step_up_blocks` stays side-effect free, since
+   `has_*_permission` calls it during rendering.
+
+Session-recorded proofs are bounded by `MAX_AGE` (900s by default) but are
+**not** reached by `revoke_grants()`, which deletes from the shared store —
+flushing the session (or the user's whole session store) is what ends one
+early.
+
+The `dac_escalation` / `step_up_denied` signals are forwarded to the eventstore
 (`AUDIT_SINK`) + `NOTIFY` shim, **best-effort** (a sink failure never breaks
 `has_perm`).
 

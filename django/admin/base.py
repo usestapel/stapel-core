@@ -26,6 +26,10 @@ express:
   top of the mandate. ``has_{add,change,delete}_permission`` deny without one
   (closing the direct URL and the bulk action alike); the add/change/delete
   *views* return an educational 403 telling the user how to obtain the grant.
+  The whole *request* is handed to the gate, not just the user: since 0.45.0
+  the proof may arrive on the session or as a presented verification token,
+  and a gate readable only from server-side state was one an admin browser
+  could not satisfy.
   Step-up lives at the admin layer (not in the backend), so only
   ``StapelModelAdmin`` subclasses enforce it (see
   :mod:`stapel_core.access.stepup`).
@@ -43,6 +47,7 @@ from django.utils.html import format_html
 
 from stapel_core.access import effective_access
 from stapel_core.access.stepup import (
+    adopt_step_up_token,
     record_step_up_denied,
     step_up_blocks,
     step_up_denied_message,
@@ -134,13 +139,19 @@ class StapelModelAdmin(admin.ModelAdmin):
     # -- step-up on HIGH operations (AS-6) ----------------------------------
 
     def _step_up_blocks(self, request, action: str) -> bool:
-        """Whether step-up gates *action* for this request (no fresh grant).
+        """Whether step-up gates *action* for this request (no fresh proof).
 
         The permission-layer backstop: consulted by ``has_*_permission`` so
         *every* mutation path — direct URL, bulk delete action, inline save —
         is closed uniformly, not just the views overridden below.
+
+        The *request* is passed on, not just the user: the proof may be on the
+        session or on a presented verification token, and a gate that reads
+        only server-side state cannot be satisfied by the client it guards.
         """
-        return step_up_blocks(getattr(request, "user", None), self.model, action)
+        return step_up_blocks(
+            getattr(request, "user", None), self.model, action, request=request
+        )
 
     def _step_up_response(self, request, action: str):
         """An educational 403 when step-up blocks *action*, else None.
@@ -150,8 +161,14 @@ class StapelModelAdmin(admin.ModelAdmin):
         obtain the grant. Fires the ``step_up_denied`` signal once per view
         call for the audit trail — core has no web verification flow, so this
         honest 403 is the contract (admin-suite §3.8).
+
+        A verification token presented on this request is adopted into the
+        session first. This is the one place that may write, and it is a view:
+        a browser returning from an auth-service step-up carries the token in
+        the URL, and the confirm-form POST that follows does not.
         """
         user = getattr(request, "user", None)
+        adopt_step_up_token(request, user)
         if not self._step_up_blocks(request, action):
             return None
         record_step_up_denied(user, self.model, action)

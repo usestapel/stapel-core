@@ -1,5 +1,147 @@
 # Changelog
 
+## [0.45.0] — 2026-08-24
+
+### The gate asked for a credential the browser it guarded could not produce
+
+`StapelModelAdmin` refuses a HIGH-clearance admin operation — `delete` in the
+standard preset — until the operator holds a fresh verification grant. `ENFORCE`
+defaults to `True`. Here is what "holds a grant" actually meant:
+
+`has_fresh_step_up(user)` called `has_grant(user, scope)` with **no `token=`**,
+so the `X-Verification-Token` fallback was unreachable from this gate — and a
+browser form POST could not have set that header anyway. That left exactly one
+channel: a grant in **this process's** `django.core.cache.cache`, which Django
+keys under the service's own `KEY_PREFIX`.
+
+So the module's own docstring — *"completing step-up anywhere in the session
+satisfies the admin gate"* — was true only inside one `KEY_PREFIX`, and
+`step_up_denied_message` sent operators to an auth-service step-up flow that
+could not satisfy the check it was quoted in. This repository already documents
+that exact mechanism silently breaking revocation across services
+(`core/revocation_store.py`, 0.39.0) and moved revocation onto a forced
+fleet-wide namespace. Verification grants were never moved.
+
+**Third instance of this class tonight**, after the WebSocket handshake that
+read a header a browser cannot send (0.44.0) and the OpenAPI scheme that named
+a cookie the service never issues (0.44.2): a guard reading a credential
+channel the real client has no way to fill, kept green by tests that fill it
+some other way.
+
+**Mirrored in the tests, which is why nobody caught it.** Every green "step-up
+satisfied" assertion in `tests/test_access_stepup.py` opened the gate by calling
+`grant_verification()` directly, in-process, into the same cache the check
+reads. No test drove it the way an admin browser can, and none covered the
+cross-prefix case — even though `tests/test_revocation_namespace.py` had been
+standing up two caches differing only in `KEY_PREFIX` since 0.39.0. That
+technique is now applied where it belonged.
+
+### SECURITY — verification grants are fleet-wide state and now live in a fleet-wide namespace
+
+**Grants, challenges and verification tokens have moved out of the service's own
+cache prefix.** `stapel_core.verification.grants` now writes through
+`stapel_core.core.fleet_cache` — the deployment's own cache connection (same
+backend, same `LOCATION`, same `OPTIONS`) with `KEY_PREFIX` and `VERSION` forced
+to fleet values and `KEY_FUNCTION` dropped, so a per-service key function cannot
+re-isolate what the fleet must share. The key is fleet-stable because the
+identity is: `user.pk` is the UUID the JWT `user_id` claim carries.
+
+**Deployments must know: live grants in the old per-service keys simply stop
+counting.** They are not migrated and not deleted — they sit at
+`<service>:1:stapel:verification:grant:<uid>:<scope>` until their TTL expires,
+invisible to the new reader. In practice a user mid-session is asked for one
+extra factor: a `sensitive` grant lives 900s, the `@requires_verification`
+default 300s. Rolling a fleet is therefore safe in any order, but a peer still
+on ≤0.44.2 will not see grants minted by an upgraded peer and vice versa, so
+plan for a window where step-up does not converge across the fleet. Nothing
+fails open at any point: a missing grant is a refusal, never an admission.
+
+**Added — `STAPEL_VERIFICATION["GRANT_NAMESPACE"]` / `["GRANT_CACHE"]**
+(defaults `"stapel_verification"` / `"default"`). These are a wire format
+between peers, not a local preference. Both are `no_env` — a namespace picked
+up from a container's environment is a per-service opinion by construction,
+which is the one thing they exist to prevent.
+
+**Added — `stapel_core.verification.E001` / `W001` / `W002`**, the mirror of
+the revocation namespace findings. `W001` (security-critical, so a blanket
+`SILENCED_SYSTEM_CHECKS` line cannot mute it) fires on a non-default namespace:
+legitimate for two fleets on one store, and the original defect if it is one
+service's local opinion. `E001` fires when `GRANT_CACHE` names an alias that
+does not exist and there is no `default` — grants written nowhere means every
+step-up-gated operation is refused forever.
+
+### Fixed — the admin gate now reads channels an admin browser can fill
+
+`step_up_blocks` takes the whole **request**, not just the user, and reads
+three channels:
+
+1. **The fleet-wide grant store**, above — which finally makes "completing
+   step-up anywhere in the fleet counts here" a property of the code and not
+   just of the docstring.
+2. **The session.** `record_step_up_in_session(request)` records
+   `{scope: granted_at}` under `request.session["stapel_step_up"]`. The session
+   cookie is the one credential the admin browser carries on every subsequent
+   form POST, and this channel keeps working where the cache is not shared
+   (LocMem, split Redis DBs — `stapel_core.blacklist.W002` already warns about
+   that shape). Freshness is judged against the *current* `MAX_AGE`, so
+   shortening the policy tightens live sessions immediately; a timestamp in the
+   future is refused rather than trusted.
+3. **A presented verification token** — `X-Verification-Token` for API clients,
+   or the `verification_token` query parameter / form field, which is the
+   spelling a browser can produce when an auth-service step-up redirects back.
+   A token accepted at an admin *view* is pinned onto the session
+   (`adopt_step_up_token`), because the confirm form that follows carries
+   neither the query string nor a header. Pinning happens only in views:
+   `step_up_blocks` stays side-effect free, since `has_*_permission` calls it
+   during page rendering.
+
+A token is still validated against the user it was minted for and the scope it
+was minted in — a token belonging to someone else, or to another scope, opens
+nothing. Session-recorded proofs are bounded by `MAX_AGE` but are **not**
+reached by `revoke_grants()`, which deletes from the shared store; flushing the
+session is what ends one early.
+
+`step_up_denied_message` now names only paths a reader can take, and
+`stepup.py`'s module docstring describes the three channels instead of claiming
+a property one cache prefix could not deliver.
+
+### Changed — `core/fleet_cache.py`, the mechanism, named for what it does
+
+The borrow-the-connection-and-force-the-prefix step moved out of
+`core/revocation_store.py` into `core/fleet_cache.py`. Two instances of one
+defect get one mechanism, not two: `revocation_store.py` keeps the
+revocation-specific half (which namespace, which alias) and its public API —
+`revocation_cache()`, `revocation_namespace()`, `revocation_cache_alias()`,
+`reset_revocation_cache()`, `DEFAULT_NAMESPACE`, `NAMESPACE_VERSION` — is
+unchanged, so nothing that imports it needs editing.
+
+### Tests
+
+`tests/test_step_up_channels.py` (21 tests). **20 of them fail on 0.44.2** —
+`20 failed, 1 passed`, the one pass being the negative control (an unverified
+user is still refused). These are the defect itself rather than a missing
+symbol:
+
+- a grant minted in the `auth` prefix is invisible in the `stapel_profiles`
+  prefix — *"step-up completed in one service is invisible in the next"*;
+- the admin gate stays shut on a grant minted by a peer service;
+- `revoke_grants` does not cross services either;
+- the grant is still readable in this service's own `django.core.cache.cache`
+  namespace — *"the grant is still in this service's own cache namespace"*;
+- **`X-Verification-Token` does not open the admin gate at all** — the
+  unreachable-fallback half of the report, reproduced.
+
+Browser-shaped requests are asserted to *be* browser-shaped: `_assert_browser_shaped`
+checks `X-Verification-Token` is absent from the request, the same discipline
+0.44.1's `_browser_scope` introduced for the WebSocket handshake. The
+cross-prefix cases use `tests/test_revocation_namespace.py`'s two-cache
+technique unchanged. The existing in-process tests in
+`tests/test_access_stepup.py` are kept and re-pointed: they pin the *policy*
+(which levels are gated, degradation, that a superuser is not exempt), and the
+new file pins *reachability* — with one test asserting the grant left the
+per-service prefix, so the shared helper cannot silently go back to proving the
+old behaviour. Suite: 3176 passed.
+
 ## [0.44.2] — 2026-08-24
 
 ### The ONE cookie name, actually the only one

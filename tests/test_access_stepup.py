@@ -5,6 +5,18 @@ Q8a: step-up is part of the standard preset (delete=HIGH), enforced by default
 top of the mandate; the grant store is stapel_core.verification's (the same one
 stapel-auth's step-up flow writes to — convergence, no auth hook here). With no
 verification factor registered the feature self-disables (degradation).
+
+**What these tests do NOT prove (0.45.0).** Every "step-up satisfied" case
+below opens the gate by calling ``grant_verification()`` in-process, into the
+same store the check reads. That is a legitimate assertion about the *policy*
+— which levels are gated, what degradation does, that a superuser is not
+exempt — and it is why this file stayed green over a gate no admin browser
+could satisfy: the grant lived in one service's cache prefix, and the only
+other channel (``X-Verification-Token``) was never passed and cannot be set by
+a form POST anyway. The channels a real client uses are driven in
+``tests/test_step_up_channels.py``: a peer service's cache prefix, a session,
+and a token presented where a browser can carry it. Keep the two files apart —
+this one pins the policy, that one pins reachability.
 """
 import uuid
 
@@ -69,6 +81,13 @@ def make_staff(*, roles=None, superuser=False):
 
 
 def grant(user, scope="sensitive"):
+    """Mint a grant the way the auth service does.
+
+    Since 0.45.0 this lands in the FLEET-WIDE verification namespace, not this
+    process's own cache prefix — ``test_step_up_channels.py`` asserts that it
+    left the per-service prefix, so this helper cannot silently go back to
+    proving the old, service-local behaviour.
+    """
     grant_verification(user_id=str(user.pk), scope=scope, max_age=900)
 
 

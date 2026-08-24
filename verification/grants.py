@@ -8,6 +8,33 @@ protected view accepts the request while the grant is fresh.
 Both live in the Django cache: they are ephemeral by design and must be
 shared across workers (use Redis in production, as the framework default
 cache already is).
+
+**The namespace is fleet-wide, not per-service (0.45.0).** Until 0.44.1 these
+records went through ``django.core.cache.cache``, which Django keys under the
+*deployment's* ``KEY_PREFIX`` — a value every service in a split deployment
+sets differently on purpose. So a step-up completed in the auth service wrote
+``auth:1:stapel:verification:grant:<uid>:sensitive`` while the profiles
+service looked for ``stapel_profiles:1:stapel:verification:grant:<uid>:...``,
+found nothing, and demanded the factor again — or, in the admin step-up gate
+(``access/stepup.py``), demanded a grant the operator had no way to produce
+from that process at all. Revocation had already met and fixed this exact
+defect; grants now use the same mechanism
+(:mod:`stapel_core.core.fleet_cache`), which borrows the deployment's own
+cache connection and forces ``KEY_PREFIX``/``VERSION`` to fleet values.
+
+User identity is fleet-stable, so the key is too: ``user.pk`` is the UUID the
+JWT ``user_id`` claim carries, and consumer-mode services materialise the
+local row under that same pk (``load_user_by_uid``).
+
+Configuration lives in ``STAPEL_VERIFICATION`` and, like the revocation pair,
+must match across peers if changed:
+
+* ``GRANT_CACHE`` — cache alias to borrow the connection from. Default
+  ``"default"``.
+* ``GRANT_NAMESPACE`` — the shared key prefix. Default
+  ``"stapel_verification"``. Change it only to run two independent fleets
+  against one store, and then change it in EVERY service of that fleet.
+  ``stapel_core.verification.checks`` reports a non-default value at boot.
 """
 from __future__ import annotations
 
@@ -15,11 +42,17 @@ import secrets
 import time
 from typing import Any
 
+from stapel_core.core.fleet_cache import fleet_cache
+
 from .conf import verification_settings
 
 CHALLENGE_KEY = "stapel:verification:challenge:{challenge_id}"
 GRANT_KEY = "stapel:verification:grant:{user_id}:{scope}"
 TOKEN_KEY = "stapel:verification:token:{token}"
+
+#: The fleet-wide default prefix. Deliberately not derived from SERVICE_NAME,
+#: DATABASE, or anything else that differs between peers.
+DEFAULT_GRANT_NAMESPACE = "stapel_verification"
 
 ERR_403_VERIFICATION_REQUIRED = "error.403.verification_required"
 ERR_403_VERIFICATION_ENROLLMENT = "error.403.verification_enrollment_required"
@@ -29,10 +62,27 @@ ERR_404_VERIFICATION_CHALLENGE = "error.404.verification_challenge_not_found"
 ERR_423_VERIFICATION_LOCKED = "error.423.verification_locked"
 
 
-def _cache():
-    from django.core.cache import cache
+def grant_namespace() -> str:
+    """The shared key prefix this deployment writes challenges/grants under."""
+    return str(verification_settings.GRANT_NAMESPACE or DEFAULT_GRANT_NAMESPACE)
 
-    return cache
+
+def grant_cache_alias() -> str:
+    """Which ``CACHES`` entry the verification connection is built from."""
+    return str(verification_settings.GRANT_CACHE or "default")
+
+
+def _cache():
+    """The fleet-shared connection every challenge, grant and token uses.
+
+    Not ``django.core.cache.cache``: that is namespaced per service, and a
+    grant only one service can see is a grant the fleet cannot honour.
+    """
+    return fleet_cache(
+        namespace=grant_namespace(),
+        alias=grant_cache_alias(),
+        what="verification grant",
+    )
 
 
 # ---------------------------------------------------------------------------

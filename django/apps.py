@@ -77,6 +77,13 @@ class CommonDjangoConfig(AppConfig):
         from stapel_core.django import (  # noqa: F401
             blacklist_checks as _blacklist_checks,
         )
+        # Verification-grant namespace checks (stapel_core.verification.checks):
+        # the same finding as the revocation namespace, one layer up. Grants
+        # are fleet-shared state (0.45.0); a per-service GRANT_NAMESPACE means
+        # a step-up completed in the auth service is invisible to the peer
+        # whose admin gate demands it — E-level when the named alias does not
+        # exist (grants written nowhere = step-up permanently refused).
+        from stapel_core.verification import checks as _verification_checks  # noqa: F401
         # Admin-visibility checks (stapel_core.django.admin.checks): E-level
         # for a malformed STAPEL_ADMIN["MODELS"] registry, W-level for
         # cross-service labels and secret-category downgrades.

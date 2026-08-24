@@ -21,6 +21,18 @@ verification_settings = AppSettings(
         # How long (seconds) a user's resolved verification policy
         # (auth.verification.policy Function result) stays cached.
         "POLICY_CACHE_TTL": 60,
+        # The FLEET-WIDE cache namespace challenges, grants and tokens are
+        # written under, and the CACHES alias the connection is borrowed
+        # from (grants.py, stapel_core.core.fleet_cache). These are a wire
+        # format between peer services, not a local preference: a grant
+        # minted in the auth service is only visible to the service whose
+        # admin gate demands it because both compute the same key. Override
+        # only to run two independent fleets against one store, and then
+        # override in EVERY peer — a namespace set per-service is exactly
+        # the defect this replaced (stapel_core.verification.W001 reports a
+        # non-default value at boot).
+        "GRANT_NAMESPACE": "stapel_verification",
+        "GRANT_CACHE": "default",
     },
     # Every key here decides whether, and how hard, a user is challenged
     # before a privileged action — and every name is generic enough to
@@ -41,6 +53,11 @@ verification_settings = AppSettings(
         "EXTRA_FACTORS",
         "DEFAULT_LEVEL",
         "POLICY_CACHE_TTL",
+        # A namespace picked up from a container's environment is a
+        # per-service opinion by construction — the one thing these two keys
+        # exist to prevent.
+        "GRANT_NAMESPACE",
+        "GRANT_CACHE",
     ),
 )
 
