@@ -166,6 +166,21 @@ class CommonDjangoConfig(AppConfig):
 
         register_schema_check()
 
+        # Observability seams (stapel_core.observability.checks): W-level,
+        # and gated on evidence that this deployment adopted the facade — a
+        # metrics backend that silently discards every measurement looks
+        # exactly like one that works, from inside the process.
+        from stapel_core.observability import checks as _obs_checks  # noqa: F401
+        # Facade metrics onto the /api/metrics/ endpoint this service already
+        # serves. Registering here is what makes a module's counter appear on
+        # the scrape URL without every product wiring an exporter; nothing is
+        # collected until the first scrape.
+        from stapel_core.observability.exporter import (
+            register_prometheus_exporter,
+        )
+
+        register_prometheus_exporter()
+
         # Verification factors declared by the host in
         # STAPEL_VERIFICATION["EXTRA_FACTORS"] (#145). MODULE.md documents the
         # setting as THE way a host substitutes or adds a factor, but until

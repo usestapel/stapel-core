@@ -134,17 +134,21 @@ class TestPaginateNextPrev:
         assert p._has_prev is True
 
     def test_prev_with_anchor_desc(self):
+        # Newest-first: the page before anchor 3 is the rows just ABOVE it —
+        # 4,5,6 — handed back in display order, not the far end of the window.
         p = SmallPagination()
         items = p.paginate_queryset(_qs(), _req(anchor="3", direction="prev"))
-        assert [i.id for i in items] == [8, 9, 10]
+        assert [i.id for i in items] == [6, 5, 4]
         assert p._has_prev is True
         assert p._has_next is True
 
     def test_prev_with_anchor_asc(self):
+        # Oldest-first: the page before anchor 8 is 5,6,7 in display order.
         p = AscPagination()
         items = p.paginate_queryset(_qs(), _req(anchor="8", direction="prev"))
-        assert [i.id for i in items] == [3, 2, 1]
+        assert [i.id for i in items] == [5, 6, 7]
         assert p._has_prev is True
+        assert p._has_next is True
 
     def test_prev_at_start(self):
         p = SmallPagination()
@@ -152,6 +156,153 @@ class TestPaginateNextPrev:
         assert [i.id for i in items] == [10]
         assert p._has_prev is False
         assert p._has_next is True
+
+
+class TestPrevReturnsTheAdjacentPage:
+    """``direction=prev`` used to order the backward window by the DISPLAY
+    ordering and slice from its head, which is the far end of the window — so
+    paging back from an anchor jumped to the extreme of the table and the rows
+    next to the anchor were unreachable. Both sort orders, both directions.
+    """
+
+    def test_prev_desc_is_the_run_immediately_after_the_anchor(self):
+        p = SmallPagination()
+        items = p.paginate_queryset(_qs(), _req(anchor="3", direction="prev"))
+        ids = [i.id for i in items]
+        assert ids == [6, 5, 4]
+        # The far end (10) is exactly what the bug returned.
+        assert 10 not in ids
+
+    def test_prev_asc_is_the_run_immediately_before_the_anchor(self):
+        p = AscPagination()
+        items = p.paginate_queryset(_qs(), _req(anchor="8", direction="prev"))
+        ids = [i.id for i in items]
+        assert ids == [5, 6, 7]
+        assert 1 not in ids
+
+    def test_prev_page_is_in_display_order_desc(self):
+        p = SmallPagination()
+        items = p.paginate_queryset(_qs(), _req(anchor="3", direction="prev"))
+        ids = [i.id for i in items]
+        assert ids == sorted(ids, reverse=True)
+
+    def test_prev_page_is_in_display_order_asc(self):
+        p = AscPagination()
+        items = p.paginate_queryset(_qs(), _req(anchor="8", direction="prev"))
+        ids = [i.id for i in items]
+        assert ids == sorted(ids)
+
+    def test_next_then_prev_round_trips_desc(self):
+        # Walk forward one page, then walk back from its head: the rows the
+        # previous page held come back, unchanged and in display order.
+        p = SmallPagination()
+        page1 = [i.id for i in p.paginate_queryset(_qs(), _req(anchor="10"))]
+        assert page1 == [9, 8, 7]
+        p2 = SmallPagination()
+        back = [
+            i.id
+            for i in p2.paginate_queryset(
+                _qs(), _req(anchor=str(page1[-1]), direction="prev")
+            )
+        ]
+        assert back == [10, 9, 8]
+
+    def test_next_then_prev_round_trips_asc(self):
+        p = AscPagination()
+        page1 = [i.id for i in p.paginate_queryset(_qs(), _req(anchor="1"))]
+        assert page1 == [2, 3, 4]
+        p2 = AscPagination()
+        back = [
+            i.id
+            for i in p2.paginate_queryset(
+                _qs(), _req(anchor=str(page1[-1]), direction="prev")
+            )
+        ]
+        assert back == [1, 2, 3]
+
+    def test_prev_walks_page_by_page_desc(self):
+        # Two hops back from the bottom must visit contiguous runs, never skip
+        # to the top of the table.
+        p1 = SmallPagination()
+        hop1 = [
+            i.id for i in p1.paginate_queryset(_qs(), _req(anchor="1", direction="prev"))
+        ]
+        assert hop1 == [4, 3, 2]
+        p2 = SmallPagination()
+        hop2 = [
+            i.id
+            for i in p2.paginate_queryset(
+                _qs(), _req(anchor=str(hop1[0]), direction="prev")
+            )
+        ]
+        assert hop2 == [7, 6, 5]
+
+    def test_prev_walks_page_by_page_asc(self):
+        p1 = AscPagination()
+        hop1 = [
+            i.id
+            for i in p1.paginate_queryset(_qs(), _req(anchor="10", direction="prev"))
+        ]
+        assert hop1 == [7, 8, 9]
+        p2 = AscPagination()
+        hop2 = [
+            i.id
+            for i in p2.paginate_queryset(
+                _qs(), _req(anchor=str(hop1[0]), direction="prev")
+            )
+        ]
+        assert hop2 == [4, 5, 6]
+
+    def test_prev_short_last_hop_desc(self):
+        # Fewer rows left than the limit: everything above the anchor, in
+        # display order, and has_prev says the walk is over.
+        p = SmallPagination()
+        items = p.paginate_queryset(_qs(), _req(anchor="8", direction="prev"))
+        assert [i.id for i in items] == [10, 9]
+        assert p._has_prev is False
+        assert p._has_next is True
+
+    def test_prev_short_last_hop_asc(self):
+        p = AscPagination()
+        items = p.paginate_queryset(_qs(), _req(anchor="3", direction="prev"))
+        assert [i.id for i in items] == [1, 2]
+        assert p._has_prev is False
+        assert p._has_next is True
+
+    def test_prev_without_anchor_is_the_head_of_the_list(self):
+        # No cursor, nothing to walk back from: the head page in display
+        # order, never a page served in reverse of the declared ordering.
+        p = SmallPagination()
+        items = p.paginate_queryset(_qs(), _req(direction="prev"))
+        assert [i.id for i in items] == [10, 9, 8]
+        assert p._has_prev is False
+        assert p._has_next is True
+
+    def test_prev_anchors_reported_by_the_envelope_desc(self):
+        p = SmallPagination()
+        p.paginate_queryset(_qs(), _req(anchor="3", direction="prev"))
+        resp = p.get_paginated_response(["a", "b", "c"])
+        # prev_anchor is the newest row of the page (walk further back from
+        # it), next_anchor the oldest (walk forward again).
+        assert resp.data["prev_anchor"] == 6
+        assert resp.data["next_anchor"] == 4
+
+    def test_prev_anchors_reported_by_the_envelope_asc(self):
+        p = AscPagination()
+        p.paginate_queryset(_qs(), _req(anchor="8", direction="prev"))
+        resp = p.get_paginated_response(["a", "b", "c"])
+        assert resp.data["prev_anchor"] == 5
+        assert resp.data["next_anchor"] == 7
+
+    def test_next_is_unchanged_desc(self):
+        p = SmallPagination()
+        items = p.paginate_queryset(_qs(), _req(anchor="8", direction="next"))
+        assert [i.id for i in items] == [7, 6, 5]
+
+    def test_next_is_unchanged_asc(self):
+        p = AscPagination()
+        items = p.paginate_queryset(_qs(), _req(anchor="2", direction="next"))
+        assert [i.id for i in items] == [3, 4, 5]
 
 
 class TestPaginateCenter:

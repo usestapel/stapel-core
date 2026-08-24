@@ -72,6 +72,16 @@
       "name": "gdpr_registry",
       "kind": "in_process_registry",
       "summary": "GDPRProvider implementations a module registers for export/erasure; microservices mode consumes the same providers through GDPRServiceConsumerCommand."
+    },
+    {
+      "name": "STAPEL_OBSERVABILITY[\"METRICS_BACKEND\"]",
+      "kind": "dotted_path",
+      "summary": "Where measurements land. Modules call stapel_core.observability.metrics.counter/gauge/histogram/timer and never import a client library; the deployment names a MetricsBackend subclass — PrometheusMetricsBackend (default, degrades to a no-op that check W002 reports when prometheus-client is absent), StatsdMetricsBackend, LoggingMetricsBackend, NoopMetricsBackend, or its own. A backend never raises into the caller: instrumentation that can fail a request fails exactly when the system is already unhappy."
+    },
+    {
+      "name": "STAPEL_OBSERVABILITY[\"ERROR_REPORTER\"]",
+      "kind": "dotted_path",
+      "summary": "Where report_error() sends an exception. Sentry-shaped interface (capture_exception/capture_message with level, tags, context), no-op by DEFAULT — a framework does not decide that a host's exceptions go to a third party. SentryErrorReporter and LoggingErrorReporter ship; the in-flight trace ids ride along as tags, so an error and its log lines are joined by trace_id."
     }
   ],
   "surface_roots": [
@@ -98,6 +108,22 @@
     {
       "select": "functions",
       "path": "gdpr/owners.py"
+    },
+    {
+      "select": "functions",
+      "path": "observability/metrics.py"
+    },
+    {
+      "select": "functions",
+      "path": "observability/logs.py"
+    },
+    {
+      "select": "functions",
+      "path": "observability/context.py"
+    },
+    {
+      "select": "functions",
+      "path": "observability/errors.py"
     }
   ],
   "surface": {
@@ -226,6 +252,106 @@
     "registered_gdpr_owners": {
       "kind": "predicate",
       "intent": "Owner name → the subject types it registered in THIS process. The honest answer to 'which owners does this container actually erase for', as opposed to the host's STAPEL_GDPR['DATA_OWNERS'] declaration — the gap between the two is the silent-owner defect the probe exists to expose."
+    },
+    "counter": {
+      "intent": "Add to a counter without importing a metrics client. The instrumentation call every module writes; where the number lands is the deployment's answer (METRICS_BACKEND), not the library's. Never raises — a failed measurement is not a failed request.",
+      "kind": "gate_function"
+    },
+    "gauge": {
+      "intent": "Set a level — queue depth, pool size, backlog — through the same vendor-free facade as counter().",
+      "kind": "gate_function"
+    },
+    "histogram": {
+      "intent": "Record one observation of a distribution (a latency in SECONDS, a payload size). Buckets come from settings unless the call site pins them.",
+      "kind": "gate_function"
+    },
+    "timer": {
+      "intent": "Time a block and record it as a histogram observation. Measures in a finally, so a block that raises is still measured — the latency of failures is usually the interesting half.",
+      "kind": "gate_function"
+    },
+    "metric_name": {
+      "intent": "The final, namespaced, Prometheus-legal name for a metric. Reach for it when building a metric name outside the facade (a custom exporter) so both halves of a deployment's scrape surface share one namespace.",
+      "kind": "factory"
+    },
+    "get_backend": {
+      "intent": "The metrics backend this process resolved. For introspection and for a custom exporter that wants the backend's exposition text; instrumentation should call counter/gauge/histogram instead.",
+      "kind": "factory"
+    },
+    "set_backend": {
+      "intent": "Pin a metrics backend for this process, ignoring settings — for tests and for a host that builds its own pre-configured client. The normal way in is METRICS_BACKEND.",
+      "kind": "gate_function"
+    },
+    "reset_backend": {
+      "intent": "Forget the memoized metrics backend so the next call rebuilds it from settings. Wired to setting_changed already; call it directly only in a test that reconfigures by other means.",
+      "kind": "gate_function"
+    },
+    "logging_config": {
+      "intent": "The LOGGING dict for a Stapel service: one stdout handler, JSON objects with a mandatory field set, trace ids stamped on every record and REDACT_FIELDS blanked at the formatter. Reach for it instead of hand-writing dictConfig — a text log is grepped, a structured log is queried.",
+      "kind": "factory"
+    },
+    "configure_logging": {
+      "intent": "logging_config() applied right now, for processes that do not go through Django settings — management commands, bus consumers, workers.",
+      "kind": "gate_function"
+    },
+    "report_error": {
+      "intent": "Send an exception to whatever this deployment uses for error tracking (ERROR_REPORTER), with the in-flight trace ids attached as tags. Reach for it instead of sentry_sdk.capture_exception: library code must not name a vendor, and the default reports nowhere. Never raises.",
+      "kind": "gate_function"
+    },
+    "report_message": {
+      "intent": "report_error() for a condition with no exception object — a threshold crossed, an invariant that held but should not have.",
+      "kind": "gate_function"
+    },
+    "get_error_reporter": {
+      "intent": "The error reporter this process resolved. For introspection and for code that needs the reporter's own return value (a backend event id).",
+      "kind": "factory"
+    },
+    "set_error_reporter": {
+      "intent": "Pin an error reporter for this process, ignoring settings — tests, and hosts that construct their own client.",
+      "kind": "gate_function"
+    },
+    "reset_error_reporter": {
+      "intent": "Forget the memoized error reporter so the next call rebuilds it from settings.",
+      "kind": "gate_function"
+    },
+    "start_trace": {
+      "intent": "Open a correlated unit of work: binds trace/span/correlation/causation ids for the block, so every log line, metric and comm envelope inside it carries them. TraceContextMiddleware does this per request; call it directly for a worker, a cron job or a management command, which otherwise run uncorrelated.",
+      "kind": "factory"
+    },
+    "continue_trace": {
+      "intent": "The subscriber side: bind the trace an incoming event carries, with causation_id set to that event's id. This is what makes a fan-out reconstructible as a tree — comm delivery and the bus consumer base already call it, so a handler inherits its cause for free.",
+      "kind": "factory"
+    },
+    "current_trace": {
+      "intent": "The TraceContext in flight. Never None — an unbound context is empty, so callers never branch on presence.",
+      "kind": "predicate"
+    },
+    "trace_ids": {
+      "intent": "The five in-flight ids as a plain dict — for stamping onto a log record, an outbound header, or a payload the framework does not own.",
+      "kind": "predicate"
+    },
+    "bind_trace": {
+      "intent": "Set a trace context without a with-block, returning the reset token. The escape hatch for a framework hook that enters and exits in different callbacks; prefer start_trace().",
+      "kind": "gate_function"
+    },
+    "new_trace_id": {
+      "intent": "A fresh 32-hex-char trace id (W3C shape). For code minting a trace outside start_trace().",
+      "kind": "factory"
+    },
+    "new_span_id": {
+      "intent": "A fresh 16-hex-char span id (W3C shape).",
+      "kind": "factory"
+    },
+    "sanitize_id": {
+      "intent": "Make an untrusted correlation id safe to log, label and forward — closed alphabet, length-capped. Apply it to any id read off the network before it reaches a log field or a metric label.",
+      "kind": "factory"
+    },
+    "parse_traceparent": {
+      "intent": "Read a W3C traceparent header, or None if it is not one. A malformed header is a header we did not write, never a reason to fail a request.",
+      "kind": "predicate"
+    },
+    "format_traceparent": {
+      "intent": "Render the in-flight context as a traceparent value for an outbound call — the join that carries one trace across a service boundary. Empty when the ids are not W3C-shaped.",
+      "kind": "factory"
     }
   },
   "requires": []

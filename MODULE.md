@@ -76,6 +76,16 @@ points below; a generic fix or gap belongs **upstream** (see
   `gateway.confirm`) for the control plane; two-phase confirmation; one
   audit line per outcome into the eventstore. Capability without
   credentials (system-design §5.9).
+- `observability` — signals out, vendors swappable: structured JSON logging
+  (`logging_config` / `configure_logging`, mandatory field set, secrets
+  redacted at the formatter), a metrics facade
+  (`metrics.counter/gauge/histogram/timer`) over a `METRICS_BACKEND` seam
+  (Prometheus default, statsd/logging/no-op/your own), an `ERROR_REPORTER`
+  seam with a Sentry-shaped interface and a no-op default, and **trace
+  correlation carried in the comm envelope** — one `trace_id` follows a
+  business operation from the HTTP request through every module and service it
+  touches. Health/readiness are re-exported from `django.monitoring.health`,
+  not re-implemented.
 - `core` — framework-agnostic JWT primitives (`JWTHandler`, `TokenManager`,
   `TokenBlacklist`, `JWTConfig`).
 
@@ -981,6 +991,118 @@ AS396982 (Google Cloud) is the datacenter-only ASN. `manage.py
 download_geolite` is a TODO (netintel package docstring). Consumers: captcha
 challenge policy, OAuth region resolution (stapel-auth), rate limits,
 analytics.
+
+### Observability — `STAPEL_OBSERVABILITY` (`observability/`)
+
+Structured logging, a metrics facade, an error-reporting seam and **trace
+correlation through the comm envelope**
+(docs/pending/data-storage-and-observability-v2.md §2). The framework/platform
+border is the usual one: this package *emits* clean signals through seams;
+Prometheus/Grafana/Loki/Sentry/Alertmanager *collect and display* them and are
+a deployment's business, not a library's.
+
+Public surface (all re-exported from `stapel_core.observability`):
+
+- `metrics.counter/gauge/histogram/observe/timer(name, value, labels=…)` — a
+  module instruments itself and never imports `prometheus_client`.
+- `logging_config(service=…)` / `configure_logging(…)`, `JsonFormatter`,
+  `TraceContextFilter` — one JSON object per record.
+- `report_error(exc, context=…, tags=…)` / `report_message(…)`.
+- `start_trace(...)` / `continue_trace(envelope)` / `current_trace()` /
+  `trace_ids()`, plus `parse_traceparent` / `format_traceparent` for W3C
+  interop and `sanitize_id` for ids read off the network.
+- `TraceContextMiddleware` (`observability/middleware.py`).
+- Health/readiness are **not re-implemented**: `health_check`,
+  `readiness_probe`, `liveness_probe`, `prometheus_metrics`,
+  `get_health_urls`, `register_dependency_check` and
+  `register_metrics_exporter` are lazily re-exported from
+  `stapel_core.django.monitoring.health`, so the observability surface is one
+  import.
+
+| Key | Default | Semantics | What it customizes |
+|---|---|---|---|
+| `METRICS_BACKEND` | `stapel_core.observability.backends.PrometheusMetricsBackend` | replace (dotted path/class/instance) | Where measurements land (`MetricsBackend`: `counter`/`gauge`/`histogram`/`expose`). Ships `Prometheus`, `Statsd`, `Logging`, `Noop` |
+| `ERROR_REPORTER` | `stapel_core.observability.errors.NoopErrorReporter` | replace (dotted path/class/instance) | Where `report_error()` sends an exception (`ErrorReporter`: `capture_exception`/`capture_message`). Ships `Sentry`, `Logging`, `Noop` |
+| `SERVICE_NAME` | `None` → `comm.service_name()` | replace | Name stamped on every record, metric and report |
+| `LOG_FORMAT` / `LOG_LEVEL` | `"json"` / `"INFO"` | replace | `logging_config()` output shape and level |
+| `LOG_STATIC_FIELDS` | `{}` | **merge** into every record | Deployment/region/image-tag fields |
+| `LOG_INCLUDE_SOURCE` | `False` | replace | Adds `module`/`func`/`line` |
+| `LOG_EXEMPT_LOGGERS` | `[]` | **merge** | Loggers `logging_config()` leaves entirely to the host |
+| `REDACT_FIELDS` | password/token/secret/authorization/cookie/… | replace | Record fields blanked to `"***"` at the formatter |
+| `METRIC_NAMESPACE` | `"stapel_"` | replace | Prefix on every metric name (matches `STAPEL_METRICS_PREFIX` on `/api/metrics/`) |
+| `HISTOGRAM_BUCKETS` | HTTP-latency ladder (s) | replace | Default histogram buckets; per-call `buckets=` wins |
+| `STATSD_HOST` / `STATSD_PORT` | `"127.0.0.1"` / `8125` | replace | `StatsdMetricsBackend` target |
+| `REQUEST_ID_HEADER` / `TRACE_ID_HEADER` / `CORRELATION_ID_HEADER` | `X-Request-ID` / `X-Trace-Id` / `X-Correlation-Id` | replace | Headers `TraceContextMiddleware` reads and echoes |
+| `TRUST_INCOMING_TRACE` | `True` | replace | Accept a caller-presented trace (what makes one trace span services). Incoming ids are always sanitized; turn off at an internet-facing edge that wants ids it minted |
+| `ECHO_TRACE_HEADERS` | `True` | replace | Stamp the ids on the response |
+| `REQUEST_METRICS` | `True` | replace | `http_requests_total` + `http_request_duration_seconds` from the middleware |
+
+`METRICS_BACKEND` and `ERROR_REPORTER` are `import_strings` (implicitly
+env-closed — they name the class the process runs, not data). The three header
+names and `TRUST_INCOMING_TRACE` carry trust weight and are `no_env` for the
+same reason `netintel.TRUSTED_PROXY_HEADER` is.
+
+**Nothing in the facade raises into a caller.** A measurement is an observation
+of the work, not part of it: a missing client library, an unreachable statsd,
+a label set that contradicts an earlier registration and a reporter that
+itself fails are each absorbed, logged once, and dropped. Instrumentation that
+can take a request down fails exactly when the system is already unhappy.
+
+Optional dependencies are guarded and *degrade with a name*: without
+`prometheus-client` (`stapel-core[prometheus]`) the default backend still
+constructs, reports `available = False`, records nothing, and is named by
+check `W002`; without `sentry-sdk` (`stapel-core[sentry]`)
+`SentryErrorReporter` does the same via `W003`. Never an `ImportError` at
+request time.
+
+System checks (W-level, registered by the `stapel_core.django` app, **all
+gated on adoption** — a service with no `STAPEL_OBSERVABILITY` block is told
+nothing, the `netintel.W003` rule): `W001` backend could not be built,
+`W002` backend is unavailable, `W003` reporter could not be built / is the
+no-op default while `SENTRY_DSN` is set, `W004` `TraceContextMiddleware` is in
+no `MIDDLEWARE` so no request starts a trace.
+
+#### Correlation — what no off-the-shelf APM can do here
+
+A generic APM does not know about `stapel_core.comm`, so a request that fans
+out into Actions and Functions across modules and services becomes a scatter
+of unrelated log lines. Four ids fix that, and they ride in the **envelope**:
+
+`Event` carries `trace_id` (the whole operation), `span_id` (this hop),
+`correlation_id` (the *business* operation, which may outlive one trace) and
+`causation_id` (the message that caused this one — what makes a fan-out a tree
+rather than a bag). They are filled from the ambient trace context at
+construction, so `emit()` inside a request inherits it with no call site
+passing anything, and they are `compare=False` — two events are the same event
+because of what they say, not because of which trace observed them.
+
+The loop closes on the far side: `comm.deliver()` and
+`BaseBusConsumerCommand` bind `continue_trace(event)` around the handler, so a
+subscriber's own logs, metrics and emits join the operation that caused them —
+including when the outbox runs the handler minutes later in another process,
+where nothing about the originating request is otherwise in scope.
+`Event.from_json` restores the ids explicitly rather than re-stamping with the
+reader's trace, which is exactly the outbox relay's situation.
+
+Adoption is three lines in a settings module:
+
+```python
+from stapel_core.observability import logging_config
+LOGGING = logging_config(service="chat")
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "stapel_core.observability.middleware.TraceContextMiddleware",
+    ...,
+]
+STAPEL_OBSERVABILITY = {
+    "ERROR_REPORTER": "stapel_core.observability.errors.SentryErrorReporter",
+}
+```
+
+Facade metrics need no wiring at all: `stapel_core.observability.exporter`
+registers the backend's exposition into the `/api/metrics/` endpoint core
+already serves, so a module's counter shows up on the scrape URL the
+deployment already scrapes — no second endpoint, no second port.
 
 ### Event store — `STAPEL_EVENTSTORE` (`eventstore/`)
 

@@ -62,9 +62,24 @@ class BaseBusConsumerCommand(BaseCommand):
         bus.consume(
             self.topics,
             self.consumer_group,
-            self.handle_event,
+            self._handle_traced,
             poll_timeout=options["poll_timeout"],
         )
+
+    def _handle_traced(self, event: Event) -> None:
+        """Bind the trace the message carries, then hand it to the subclass.
+
+        A worker consuming a topic is the far end of an operation that
+        started in somebody's HTTP request, possibly in another service. Its
+        log lines belong to that operation, and until they carry its
+        ``trace_id`` there is no way to see the two halves together. Bound
+        here rather than in :meth:`handle_event` so every existing consumer
+        subclass gets it without changing a line.
+        """
+        from ..observability.context import continue_trace
+
+        with continue_trace(event):
+            self.handle_event(event)
 
     def handle_event(self, event: Event) -> None:
         raise NotImplementedError

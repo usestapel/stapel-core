@@ -1,6 +1,6 @@
 {
   "module": "stapel-core",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
   "axes": [],
   "extension_points": [
@@ -73,6 +73,16 @@
       "name": "gdpr_registry",
       "kind": "in_process_registry",
       "summary": "GDPRProvider implementations a module registers for export/erasure; microservices mode consumes the same providers through GDPRServiceConsumerCommand."
+    },
+    {
+      "name": "STAPEL_OBSERVABILITY[\"METRICS_BACKEND\"]",
+      "kind": "dotted_path",
+      "summary": "Where measurements land. Modules call stapel_core.observability.metrics.counter/gauge/histogram/timer and never import a client library; the deployment names a MetricsBackend subclass — PrometheusMetricsBackend (default, degrades to a no-op that check W002 reports when prometheus-client is absent), StatsdMetricsBackend, LoggingMetricsBackend, NoopMetricsBackend, or its own. A backend never raises into the caller: instrumentation that can fail a request fails exactly when the system is already unhappy."
+    },
+    {
+      "name": "STAPEL_OBSERVABILITY[\"ERROR_REPORTER\"]",
+      "kind": "dotted_path",
+      "summary": "Where report_error() sends an exception. Sentry-shaped interface (capture_exception/capture_message with level, tags, context), no-op by DEFAULT — a framework does not decide that a host's exceptions go to a third party. SentryErrorReporter and LoggingErrorReporter ship; the in-flight trace ids ride along as tags, so an error and its log lines are joined by trace_id."
     }
   ],
   "surface": [
@@ -248,6 +258,156 @@
       "kind": "predicate",
       "path": "stapel_core.gdpr.owners.registered_gdpr_owners",
       "intent": "Owner name → the subject types it registered in THIS process. The honest answer to 'which owners does this container actually erase for', as opposed to the host's STAPEL_GDPR['DATA_OWNERS'] declaration — the gap between the two is the silent-owner defect the probe exists to expose."
+    },
+    {
+      "name": "bind_trace",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.context.bind_trace",
+      "intent": "Set a trace context without a with-block, returning the reset token. The escape hatch for a framework hook that enters and exits in different callbacks; prefer start_trace()."
+    },
+    {
+      "name": "continue_trace",
+      "kind": "factory",
+      "path": "stapel_core.observability.context.continue_trace",
+      "intent": "The subscriber side: bind the trace an incoming event carries, with causation_id set to that event's id. This is what makes a fan-out reconstructible as a tree — comm delivery and the bus consumer base already call it, so a handler inherits its cause for free."
+    },
+    {
+      "name": "current_trace",
+      "kind": "predicate",
+      "path": "stapel_core.observability.context.current_trace",
+      "intent": "The TraceContext in flight. Never None — an unbound context is empty, so callers never branch on presence."
+    },
+    {
+      "name": "format_traceparent",
+      "kind": "factory",
+      "path": "stapel_core.observability.context.format_traceparent",
+      "intent": "Render the in-flight context as a traceparent value for an outbound call — the join that carries one trace across a service boundary. Empty when the ids are not W3C-shaped."
+    },
+    {
+      "name": "new_span_id",
+      "kind": "factory",
+      "path": "stapel_core.observability.context.new_span_id",
+      "intent": "A fresh 16-hex-char span id (W3C shape)."
+    },
+    {
+      "name": "new_trace_id",
+      "kind": "factory",
+      "path": "stapel_core.observability.context.new_trace_id",
+      "intent": "A fresh 32-hex-char trace id (W3C shape). For code minting a trace outside start_trace()."
+    },
+    {
+      "name": "parse_traceparent",
+      "kind": "predicate",
+      "path": "stapel_core.observability.context.parse_traceparent",
+      "intent": "Read a W3C traceparent header, or None if it is not one. A malformed header is a header we did not write, never a reason to fail a request."
+    },
+    {
+      "name": "sanitize_id",
+      "kind": "factory",
+      "path": "stapel_core.observability.context.sanitize_id",
+      "intent": "Make an untrusted correlation id safe to log, label and forward — closed alphabet, length-capped. Apply it to any id read off the network before it reaches a log field or a metric label."
+    },
+    {
+      "name": "start_trace",
+      "kind": "factory",
+      "path": "stapel_core.observability.context.start_trace",
+      "intent": "Open a correlated unit of work: binds trace/span/correlation/causation ids for the block, so every log line, metric and comm envelope inside it carries them. TraceContextMiddleware does this per request; call it directly for a worker, a cron job or a management command, which otherwise run uncorrelated."
+    },
+    {
+      "name": "trace_ids",
+      "kind": "predicate",
+      "path": "stapel_core.observability.context.trace_ids",
+      "intent": "The five in-flight ids as a plain dict — for stamping onto a log record, an outbound header, or a payload the framework does not own."
+    },
+    {
+      "name": "get_error_reporter",
+      "kind": "factory",
+      "path": "stapel_core.observability.errors.get_error_reporter",
+      "intent": "The error reporter this process resolved. For introspection and for code that needs the reporter's own return value (a backend event id)."
+    },
+    {
+      "name": "report_error",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.errors.report_error",
+      "intent": "Send an exception to whatever this deployment uses for error tracking (ERROR_REPORTER), with the in-flight trace ids attached as tags. Reach for it instead of sentry_sdk.capture_exception: library code must not name a vendor, and the default reports nowhere. Never raises."
+    },
+    {
+      "name": "report_message",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.errors.report_message",
+      "intent": "report_error() for a condition with no exception object — a threshold crossed, an invariant that held but should not have."
+    },
+    {
+      "name": "reset_error_reporter",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.errors.reset_error_reporter",
+      "intent": "Forget the memoized error reporter so the next call rebuilds it from settings."
+    },
+    {
+      "name": "set_error_reporter",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.errors.set_error_reporter",
+      "intent": "Pin an error reporter for this process, ignoring settings — tests, and hosts that construct their own client."
+    },
+    {
+      "name": "configure_logging",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.logs.configure_logging",
+      "intent": "logging_config() applied right now, for processes that do not go through Django settings — management commands, bus consumers, workers."
+    },
+    {
+      "name": "logging_config",
+      "kind": "factory",
+      "path": "stapel_core.observability.logs.logging_config",
+      "intent": "The LOGGING dict for a Stapel service: one stdout handler, JSON objects with a mandatory field set, trace ids stamped on every record and REDACT_FIELDS blanked at the formatter. Reach for it instead of hand-writing dictConfig — a text log is grepped, a structured log is queried."
+    },
+    {
+      "name": "counter",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.metrics.counter",
+      "intent": "Add to a counter without importing a metrics client. The instrumentation call every module writes; where the number lands is the deployment's answer (METRICS_BACKEND), not the library's. Never raises — a failed measurement is not a failed request."
+    },
+    {
+      "name": "gauge",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.metrics.gauge",
+      "intent": "Set a level — queue depth, pool size, backlog — through the same vendor-free facade as counter()."
+    },
+    {
+      "name": "get_backend",
+      "kind": "factory",
+      "path": "stapel_core.observability.metrics.get_backend",
+      "intent": "The metrics backend this process resolved. For introspection and for a custom exporter that wants the backend's exposition text; instrumentation should call counter/gauge/histogram instead."
+    },
+    {
+      "name": "histogram",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.metrics.histogram",
+      "intent": "Record one observation of a distribution (a latency in SECONDS, a payload size). Buckets come from settings unless the call site pins them."
+    },
+    {
+      "name": "metric_name",
+      "kind": "factory",
+      "path": "stapel_core.observability.metrics.metric_name",
+      "intent": "The final, namespaced, Prometheus-legal name for a metric. Reach for it when building a metric name outside the facade (a custom exporter) so both halves of a deployment's scrape surface share one namespace."
+    },
+    {
+      "name": "reset_backend",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.metrics.reset_backend",
+      "intent": "Forget the memoized metrics backend so the next call rebuilds it from settings. Wired to setting_changed already; call it directly only in a test that reconfigures by other means."
+    },
+    {
+      "name": "set_backend",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.metrics.set_backend",
+      "intent": "Pin a metrics backend for this process, ignoring settings — for tests and for a host that builds its own pre-configured client. The normal way in is METRICS_BACKEND."
+    },
+    {
+      "name": "timer",
+      "kind": "gate_function",
+      "path": "stapel_core.observability.metrics.timer",
+      "intent": "Time a block and record it as a histogram observation. Measures in a finally, so a block that raises is still measured — the latency of failures is usually the interesting half."
     },
     {
       "name": "load_configured_factors",

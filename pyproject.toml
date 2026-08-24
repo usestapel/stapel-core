@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.35.0"
+version = "0.36.0"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -67,6 +67,12 @@ redis-bus = [
 sentry = [
     "sentry-sdk>=1.40",
 ]
+# Prometheus metrics backend (stapel_core.observability, the METRICS_BACKEND
+# default). Absent, the backend degrades to a no-op that says so via check
+# stapel_core.observability.W002 — never an ImportError at request time.
+prometheus = [
+    "prometheus-client>=0.19",
+]
 # MaxMindProvider (stapel_core.netintel) — offline GeoLite2/GeoIP2 lookups
 netintel-maxmind = [
     "geoip2>=4.7",
@@ -94,9 +100,13 @@ dev = [
     # in-memory Redis for the Streams bus backend tests — real XADD/
     # XREADGROUP/XACK/XAUTOCLAIM semantics without a running server.
     "fakeredis>=2.20",
+    # the DEFAULT metrics backend; without it the observability suite would
+    # only ever exercise the degraded no-op path of the backend every
+    # deployment gets out of the box.
+    "prometheus-client>=0.19",
 ]
 all = [
-    "stapel-core[kafka,nats,redis-bus,sentry,netintel-maxmind,gateway,channels]",
+    "stapel-core[kafka,nats,redis-bus,sentry,prometheus,netintel-maxmind,gateway,channels]",
 ]
 
 [project.urls]
@@ -205,6 +215,7 @@ packages = [
     "stapel_core.lint",
     "stapel_core.net",
     "stapel_core.netintel",
+    "stapel_core.observability",
     "stapel_core.secrets",
     "stapel_core.security",
     "stapel_core.verification",

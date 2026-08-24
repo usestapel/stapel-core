@@ -231,14 +231,23 @@ def deliver(event: Event) -> None:
 
     if transport == "inprocess":
         errors: list[Exception] = []
-        for handler in action_registry.handlers(event.event_type):
-            try:
-                handler(event)
-            except Exception as exc:
-                logger.exception(
-                    "action handler %r failed for %s", handler, event.event_type
-                )
-                errors.append(exc)
+        # The subscriber inherits the trace the event carries: its log lines,
+        # its metrics and anything it emits in turn join the operation that
+        # caused it, with causation_id pointing back at this event. Without
+        # this the fan-out is a scatter of unrelated records — and the outbox
+        # makes that worse, since a handler can run minutes later in another
+        # process, where nothing about the originating request is in scope.
+        from ..observability.context import continue_trace
+
+        with continue_trace(event):
+            for handler in action_registry.handlers(event.event_type):
+                try:
+                    handler(event)
+                except Exception as exc:
+                    logger.exception(
+                        "action handler %r failed for %s", handler, event.event_type
+                    )
+                    errors.append(exc)
         if errors:
             raise ActionDeliveryError(event.event_type, errors)
         return

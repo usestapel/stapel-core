@@ -1,5 +1,163 @@
 # Changelog
 
+## [0.36.0] — 2026-08-24
+
+### Observability, and a paginator that could not walk backwards
+
+Three things, one theme: a signal that exists but cannot be followed is not
+a signal.
+
+#### `AnchorPagination` `direction=prev` returned the far end of the window
+
+The bug is one missing `order_by`. A backward page filtered correctly — with
+ordering `-id` and anchor 3, `id__gt=3` selects exactly the right rows — and
+then ordered that filtered set by the **display** ordering and sliced its
+head. On a newest-first list the head of `id__gt=3` ordered `-id` is the
+newest row in the table, so paging back from anchor 3 in a ten-row set
+returned 8, 9, 10. Not the adjacent page. The rows next to the anchor were
+not merely mis-sorted, they were **unreachable**: every hop back landed on
+the same extreme, so a client walking `prev` from the bottom of a list could
+never arrive anywhere else. Ascending orderings had it symmetrically — the
+oldest rows instead of the newest.
+
+The `items[::-1]` a few lines down was the tell. It only makes sense over a
+nearest-first fetch, which is what the query was supposed to be and never
+was. So the fetch now uses the reverse of the declared ordering and the flip
+back into display order becomes what it always claimed to be:
+
+```python
+# ordering="-seq", anchor=3, limit=3
+# before: [10, 9, 8]   — the far end, and the same answer on every hop
+# after:  [6, 5, 4]    — the page adjacent to the anchor, newest first
+```
+
+Two facts about the blast radius. First, the correct answer was already in
+this repository: `eventstore.anchor.anchor_page` implements the same wire
+contract for streams, and its `prev` branch reads ascending, trims, and
+reverses — exactly right. One contract had two implementations and they
+disagreed; the queryset one was the wrong one. Second, `stapel-chat` is the
+only fleet consumer that exercises `prev`, and it had already noticed: its
+history test asserts `len(seqs) == 2 and all(s > 2)` where every other test
+in that class asserts an exact sequence. A loosened assertion is a defect
+report written in the only language a test can write one in. With this
+release that test can say `== [4, 3]`, which is what it meant.
+
+Also fixed, in the same place: `prev` **without** an anchor served the head
+page in reverse of the declared ordering — the one thing a paginator must
+never do. There is no cursor to walk back from, so it now returns the head
+page the way `next` would.
+
+#### `stapel_core.observability` — the facade, built once
+
+Every service reinvents four things, and the fleet had four different
+answers to each: how a log line is shaped, where a number goes, where an
+exception goes, and how any of them are tied together. The border is the one
+we draw everywhere else — the framework **emits** through seams; Prometheus,
+Grafana, Loki, Sentry and Alertmanager **collect and display**, and belong
+to a deployment.
+
+- **Structured logging.** `logging_config(service="chat")` is a `LOGGING`
+  dict: one stdout handler, one JSON object per record, a mandatory field set
+  (`ts, level, service, logger, msg, trace_id, span_id, correlation_id,
+  causation_id, request_id`), exceptions decomposed into `exc_type` /
+  `exc_message` / `stack`, and `REDACT_FIELDS` blanked **at the formatter** —
+  a structured logger takes whatever `extra=` hands it, so the one place
+  redaction cannot be routed around is the last one. `configure_logging()`
+  for processes that never see Django settings.
+- **Metrics facade.** `metrics.counter/gauge/histogram/timer(name, value,
+  labels=…)`. A module instruments itself and never imports a client library;
+  `METRICS_BACKEND` decides where the number lands — `PrometheusMetricsBackend`
+  (default), `StatsdMetricsBackend`, `LoggingMetricsBackend`,
+  `NoopMetricsBackend`, or yours. Two real backends, not one plus an
+  interface, because a seam with a single implementation is a wrapper.
+- **Error-reporting seam.** `report_error(exc, context=…, tags=…)` over
+  `ERROR_REPORTER`, Sentry-shaped (`capture_exception` / `capture_message`
+  with `level`, `tags`, `context`) and **no-op by default**. The default is
+  the design: a framework that ships exceptions and their context to a third
+  party unless you opt out has made a decision it has no standing to make.
+  The in-flight trace ids ride along as tags, so the issue in the tracker and
+  the lines in the aggregator are joined by `trace_id`.
+- **Health/ready.** Not re-implemented. `/api/health/`, `/api/health/ready/`,
+  `/api/health/live/`, `/api/metrics/` and `register_dependency_check` have
+  shipped in `django.monitoring.health` for releases; they are re-exported
+  (lazily) so the observability surface is one import.
+
+Nothing in the facade raises into a caller. A missing client library, an
+unreachable statsd, a label set that contradicts an earlier registration, a
+reporter that itself fails — each is absorbed, logged once, and dropped.
+Instrumentation that can take a request down fails precisely when the system
+is already unhappy.
+
+Optional dependencies degrade **with a name**. Without `prometheus-client`
+the default backend still constructs, records nothing, reports `available =
+False`, and check `W002` says so at `manage.py check` time; without
+`sentry-sdk`, `SentryErrorReporter` does the same through `W003`. Never an
+`ImportError` on a request path. All four checks (`W001` backend unbuildable,
+`W002` unavailable, `W003` reporter, `W004` no `TraceContextMiddleware`) are
+gated on evidence of adoption, so a service that never configured
+`STAPEL_OBSERVABILITY` is not told about a backend it never asked for.
+
+#### Correlation through the comm envelope — the part an APM cannot do
+
+Generic Grafana and generic Sentry do not know about `stapel_core.comm`. A
+request fans out into Actions and Functions across modules and services, and
+without an id carried through, that is a scatter of log lines findable only
+by reading everything in a time window. So the ids ride in the envelope:
+`Event` gains `trace_id` (the whole operation), `span_id` (this hop),
+`correlation_id` (the *business* operation, which may outlive one trace) and
+`causation_id` (the message that caused this one — what makes a fan-out
+reconstructible as a tree instead of a bag).
+
+They fill from the ambient trace context at construction, so `emit()` inside
+a request inherits it with no call site passing anything, and they are
+`compare=False`: two events are the same event because of what they say, not
+because of which trace observed them — every equality assertion written
+before correlation existed still holds. `Event.from_json` restores them
+explicitly instead of re-stamping with the reader's trace, which is exactly
+the outbox relay's situation: it reads a row minutes later, in another
+process, and the event still belongs to the operation that wrote it.
+
+The loop closes on the far side. `comm.deliver()` and
+`BaseBusConsumerCommand` bind `continue_trace(event)` around the handler, so
+a subscriber's logs, metrics and its own emits join the operation that caused
+them — no consumer subclass changes a line. `TraceContextMiddleware` starts
+the trace at the edge, reading `traceparent` (W3C) or `X-Trace-Id` /
+`X-Request-ID` / `X-Correlation-Id`, sanitizing every id it takes off the
+wire (closed alphabet, length cap — an id from the network lands in every log
+field and metric label the operation touches), echoing them on the response,
+and recording `http_requests_total` / `http_request_duration_seconds` labelled
+by the URL **pattern**, never the resolved path: a label with one value per
+object id is how instrumentation takes down the system it measures.
+
+Facade metrics need no wiring: `observability.exporter` registers the
+backend's exposition into the `/api/metrics/` endpoint core already serves,
+so a module's counter appears on the URL the deployment already scrapes — no
+second endpoint, no second port, no scrape-config change.
+
+Adoption is three lines:
+
+```python
+from stapel_core.observability import logging_config
+LOGGING = logging_config(service="chat")
+MIDDLEWARE = [..., "stapel_core.observability.middleware.TraceContextMiddleware", ...]
+STAPEL_OBSERVABILITY = {
+    "ERROR_REPORTER": "stapel_core.observability.errors.SentryErrorReporter",
+}
+```
+
+#### Notes
+
+- New extra `stapel-core[prometheus]` (`prometheus-client>=0.19`), folded into
+  `[all]` and into `[dev]` — without it the suite would only ever exercise the
+  degraded path of the backend every deployment gets by default.
+- `docs/llms.txt` budget 4600 → 6400: the facade adds 25 called symbols across
+  four surfaces plus two extension points. Raised, not fitted into by
+  shortening intents — a trimmed-to-fit context file reads exactly like a
+  complete one.
+- Additive throughout. No existing signature, setting default or wire shape
+  changed; the only behavior difference outside the new package is that
+  `direction=prev` now returns the page it always claimed to.
+
 ## [0.35.0] — 2026-08-23
 
 ### The sixty lines every data owner writes by hand — `register_gdpr_owner`

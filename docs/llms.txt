@@ -1,8 +1,8 @@
-# stapel-core 0.35.0
+# stapel-core 0.36.0
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
-Contract: surface 28 · extension points 14 · error codes 42.
+Contract: surface 53 · extension points 16 · error codes 42.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Usage surface — call these before writing your own
@@ -29,20 +29,48 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 - ReadOnlyOrSuperUser — stapel_core.django.api.permissions.ReadOnlyOrSuperUser
   Same public-read shape as ReadOnlyOrStaff, tightened so only a superuser may write — for reference data a staff member must not edit.
 ### gate_function
+- bind_trace — stapel_core.observability.context.bind_trace
+  Set a trace context without a with-block, returning the reset token. The escape hatch for a framework hook that enters and exits in different callbacks; prefer start_trace().
+- configure_logging — stapel_core.observability.logs.configure_logging
+  logging_config() applied right now, for processes that do not go through Django settings — management commands, bus consumers, workers.
+- counter — stapel_core.observability.metrics.counter
+  Add to a counter without importing a metrics client. The instrumentation call every module writes; where the number lands is the deployment's answer (METRICS_BACKEND), not the library's. Never raises — a failed measurement is not a failed request.
+- gauge — stapel_core.observability.metrics.gauge
+  Set a level — queue depth, pool size, backlog — through the same vendor-free facade as counter().
 - health_check — stapel_core.django.monitoring.health.health_check
   The human/dashboard-facing health view: overall status plus a checks map with one entry per registered dependency. This is the endpoint an uptime monitor should watch — it is where register_dependency_check results become visible.
+- histogram — stapel_core.observability.metrics.histogram
+  Record one observation of a distribution (a latency in SECONDS, a payload size). Buckets come from settings unless the call site pins them.
 - liveness_probe — stapel_core.django.monitoring.health.liveness_probe
   Is the process alive at all — deliberately dependency-free, so an orchestrator does NOT restart a healthy container just because an outbound dependency is down. Pair with readiness_probe; do not point a liveness probe at health_check.
 - prometheus_metrics — stapel_core.django.monitoring.health.prometheus_metrics
   The service's single Prometheus scrape endpoint, including stapel_dependency_probe_ok and stapel_dependency_up per registered dependency plus whatever register_metrics_exporter contributed. One scrape target per service is the contract; do not stand up a second.
 - readiness_probe — stapel_core.django.monitoring.health.readiness_probe
   Should this instance receive traffic — checks the dependencies it cannot serve without. This is the one an orchestrator uses to pull an instance out of rotation, as opposed to killing it. Only a DETERMINED critical failure pulls it: a probe that could not ask leaves the instance in rotation, because every replica loses the same probe at the same moment and a 503 would turn a blip into a full outage.
+- report_error — stapel_core.observability.errors.report_error
+  Send an exception to whatever this deployment uses for error tracking (ERROR_REPORTER), with the in-flight trace ids attached as tags. Reach for it instead of sentry_sdk.capture_exception: library code must not name a vendor, and the default reports nowhere. Never raises.
+- report_message — stapel_core.observability.errors.report_message
+  report_error() for a condition with no exception object — a threshold crossed, an invariant that held but should not have.
+- reset_backend — stapel_core.observability.metrics.reset_backend
+  Forget the memoized metrics backend so the next call rebuilds it from settings. Wired to setting_changed already; call it directly only in a test that reconfigures by other means.
+- reset_error_reporter — stapel_core.observability.errors.reset_error_reporter
+  Forget the memoized error reporter so the next call rebuilds it from settings.
 - reset_schema_state — stapel_core.django.monitoring.schema_health.reset_schema_state
   Drop the cached schema verdict. For tests, and for a post-migrate hook in a process that migrates itself and should stop reporting the pre-migration answer for the rest of the TTL.
+- set_backend — stapel_core.observability.metrics.set_backend
+  Pin a metrics backend for this process, ignoring settings — for tests and for a host that builds its own pre-configured client. The normal way in is METRICS_BACKEND.
+- set_error_reporter — stapel_core.observability.errors.set_error_reporter
+  Pin an error reporter for this process, ignoring settings — tests, and hosts that construct their own client.
+- timer — stapel_core.observability.metrics.timer
+  Time a block and record it as a histogram observation. Measures in a finally, so a block that raises is still measured — the latency of failures is usually the interesting half.
 ### template
 - admin/base_site.html — django/templates/admin/base_site.html
   The admin shell that renders the cross-service navigation: STAPEL_SERVICES, the NAV_LINKS sections and the introspection-gated Swagger link. A project that ships its own admin/base_site.html instead of extending this one silently loses all three and gets no error — override blocks, do not replace the file.
 ### predicate
+- current_trace — stapel_core.observability.context.current_trace
+  The TraceContext in flight. Never None — an unbound context is empty, so callers never branch on presence.
+- parse_traceparent — stapel_core.observability.context.parse_traceparent
+  Read a W3C traceparent header, or None if it is not one. A malformed header is a header we did not write, never a reason to fail a request.
 - registered_gdpr_owners — stapel_core.gdpr.owners.registered_gdpr_owners
   Owner name → the subject types it registered in THIS process. The honest answer to 'which owners does this container actually erase for', as opposed to the host's STAPEL_GDPR['DATA_OWNERS'] declaration — the gap between the two is the silent-owner defect the probe exists to expose.
 - schema_probe — stapel_core.django.monitoring.schema_health.schema_probe
@@ -51,13 +79,31 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
   AT_HEAD, BEHIND or UNKNOWN for the running code's schema — three states deliberately, because the two-valued predecessor mapped 'could not reach the database' onto 'the schema is behind' and made every database restart look like drift. Read this if you need the verdict in your own code; a determined verdict is cached for 30s and a non-answer is never cached.
 - strong_factors — stapel_core.verification.factors.strong_factors
   The strict 'does this user really have 2FA' predicate — ids of STRONG factors the user can actually complete. Any require_mfa policy or mfa_status endpoint must branch on this and not on 'has any factor': an email code alone is not a second factor, it only proves reach to the channel that resets the password.
+- trace_ids — stapel_core.observability.context.trace_ids
+  The five in-flight ids as a plain dict — for stamping onto a log record, an outbound header, or a payload the framework does not own.
 - unapplied_migrations — stapel_core.django.monitoring.schema_health.unapplied_migrations
   Migrations on disk the database has not applied — the same definition as `manage.py migrate --check`, deliberately, so the boot gate, the deploy gate and the health probe cannot disagree about what 'behind' means. Use it in a management command or a boot gate; do not re-derive the migration plan yourself.
 ### factory
+- continue_trace — stapel_core.observability.context.continue_trace
+  The subscriber side: bind the trace an incoming event carries, with causation_id set to that event's id. This is what makes a fan-out reconstructible as a tree — comm delivery and the bus consumer base already call it, so a handler inherits its cause for free.
+- format_traceparent — stapel_core.observability.context.format_traceparent
+  Render the in-flight context as a traceparent value for an outbound call — the join that carries one trace across a service boundary. Empty when the ids are not W3C-shaped.
+- get_backend — stapel_core.observability.metrics.get_backend
+  The metrics backend this process resolved. For introspection and for a custom exporter that wants the backend's exposition text; instrumentation should call counter/gauge/histogram instead.
+- get_error_reporter — stapel_core.observability.errors.get_error_reporter
+  The error reporter this process resolved. For introspection and for code that needs the reporter's own return value (a backend event id).
 - get_health_urls — stapel_core.django.monitoring.health.get_health_urls
   The urlpatterns for the whole health/metrics family — include() this in a service's root urls.py instead of wiring the four views by hand, so every service in the fleet answers the same paths and a deployment's probes are portable between them.
 - load_configured_factors — stapel_core.verification.factors.load_configured_factors
   Boot-time loader that turns STAPEL_VERIFICATION['EXTRA_FACTORS'] from a declaration into registrations (pinned, so host ids beat library ones whatever the INSTALLED_APPS order). CommonDjangoConfig.ready() calls it since 0.16.1 — a host app must NOT call it from its own AppConfig any more; before 0.16.1 it had no caller anywhere in the framework and the setting was decorative, which is exactly the failure this whole section exists to make impossible.
+- logging_config — stapel_core.observability.logs.logging_config
+  The LOGGING dict for a Stapel service: one stdout handler, JSON objects with a mandatory field set, trace ids stamped on every record and REDACT_FIELDS blanked at the formatter. Reach for it instead of hand-writing dictConfig — a text log is grepped, a structured log is queried.
+- metric_name — stapel_core.observability.metrics.metric_name
+  The final, namespaced, Prometheus-legal name for a metric. Reach for it when building a metric name outside the facade (a custom exporter) so both halves of a deployment's scrape surface share one namespace.
+- new_span_id — stapel_core.observability.context.new_span_id
+  A fresh 16-hex-char span id (W3C shape).
+- new_trace_id — stapel_core.observability.context.new_trace_id
+  A fresh 32-hex-char trace id (W3C shape). For code minting a trace outside start_trace().
 - pseudonymize — stapel_core.gdpr.owners.pseudonymize
   instead of: hashlib.sha256(str(user_id).encode()).hexdigest()
   The fleet's one erasure funnel for an id that must survive as a stable pseudonym: HMAC-SHA256 under the deployment's SECRET_KEY, 32 hex, `erased:`-prefixed and therefore idempotent. This is how a ledger-carrying owner (billing, agent, video) erases — the ids that NAME the person go, the economics stay, and per-subject arithmetic still works. Never a bare hash of a user id: that is a rainbow table away from being the id again.
@@ -75,6 +121,10 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 - register_schema_check — stapel_core.django.monitoring.schema_health.register_schema_check
   instead of: a product-local schema_health.py copied into every service directory
   Put the schema-drift probe on /api/health/ and /api/metrics/. CommonDjangoConfig.ready() already calls it, so a service that installs stapel_core.django gets it without wiring anything — call it yourself ONLY from a process that does not install that app config. A product carrying its own copy of this module (ironmemo's iron-*/core/schema_health.py) should delete the copy and rely on this: the answer is the same in every Django service, and a per-service duplicate is a per-service place to drift.
+- sanitize_id — stapel_core.observability.context.sanitize_id
+  Make an untrusted correlation id safe to log, label and forward — closed alphabet, length-capped. Apply it to any id read off the network before it reaches a log field or a metric label.
+- start_trace — stapel_core.observability.context.start_trace
+  Open a correlated unit of work: binds trace/span/correlation/causation ids for the block, so every log line, metric and comm envelope inside it carries them. TraceContextMiddleware does this per request; call it directly for a worker, a cron job or a management command, which otherwise run uncorrelated.
 
 ## Extension points — what a product replaces, fork-free
 - AUTH_USER_MODEL [swappable_model]
@@ -97,6 +147,10 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
   Where each local/external mount lives; LOGIN_URL and friends derive from it lazily, so a module never emits an absolute URL path and works at the root, under a service prefix and in a monolith alike.
 - STAPEL_NETINTEL["PROVIDER"] [dotted_path]
   IP-intelligence provider behind classify_ip()/country_of(): MaxMind mmdb, generic HTTP JSON, or null. Cached and fail-open.
+- STAPEL_OBSERVABILITY["ERROR_REPORTER"] [dotted_path]
+  Where report_error() sends an exception. Sentry-shaped interface (capture_exception/capture_message with level, tags, context), no-op by DEFAULT — a framework does not decide that a host's exceptions go to a third party. SentryErrorReporter and LoggingErrorReporter ship; the in-flight trace ids ride along as tags, so an error and its log lines are joined by trace_id.
+- STAPEL_OBSERVABILITY["METRICS_BACKEND"] [dotted_path]
+  Where measurements land. Modules call stapel_core.observability.metrics.counter/gauge/histogram/timer and never import a client library; the deployment names a MetricsBackend subclass — PrometheusMetricsBackend (default, degrades to a no-op that check W002 reports when prometheus-client is absent), StatsdMetricsBackend, LoggingMetricsBackend, NoopMetricsBackend, or its own. A backend never raises into the caller: instrumentation that can fail a request fails exactly when the system is already unhappy.
 - STAPEL_SECRETS [dotted_path]
   Secret provider; a missing production secret is a loud boot failure (SecretUnavailable), never a silent empty string.
 - STAPEL_SERVICES [deploy_registry]

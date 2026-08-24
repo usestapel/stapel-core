@@ -95,8 +95,26 @@ class AnchorPagination(BasePagination):
         if self.direction == 'center' and self.anchor:
             return self._paginate_center(queryset, order_field, is_descending)
 
-        # Apply ordering
-        queryset = queryset.order_by(self.ordering)
+        # ``prev`` only means something relative to a cursor. Without an anchor
+        # there is no position to walk back from, so it degenerates to the head
+        # of the list — the same page ``next`` would hand back — rather than a
+        # page served in the reverse of the declared display order.
+        is_backward = self.direction == 'prev' and bool(self.anchor)
+
+        # Apply ordering.
+        #
+        # Going BACKWARDS the rows must be walked away from the anchor
+        # nearest-first, which is the REVERSE of the display ordering. Ordering
+        # a backward page by ``self.ordering`` and slicing ``[:limit + 1]``
+        # takes the far end of the window instead — with ordering ``-id`` and
+        # anchor 3, ``id__gt=3`` ordered ``-id`` starts at the largest id in
+        # the table, so paging back from 3 jumped to the newest rows and the
+        # rows adjacent to the anchor were never reachable. The nearest-first
+        # fetch is flipped back into display order below, which is what the
+        # ``items[::-1]`` there was always for.
+        queryset = queryset.order_by(
+            self._reverse_ordering() if is_backward else self.ordering
+        )
 
         # Apply anchor filter
         if self.anchor:
@@ -117,8 +135,10 @@ class AnchorPagination(BasePagination):
         items = list(queryset[:self.limit + 1])
 
         # Check if there are more items
-        if self.direction == 'prev':
-            # When going backwards, reverse the results
+        if is_backward:
+            # Fetched nearest-anchor-first; flip into display order. The extra
+            # probe row is the FURTHEST from the anchor, so after the flip it
+            # sits at the head.
             items = items[::-1]
             self._has_prev = len(items) > self.limit
             if self._has_prev:
@@ -132,6 +152,19 @@ class AnchorPagination(BasePagination):
 
         self._items = items
         return items
+
+    def _reverse_ordering(self) -> str:
+        """``self.ordering`` with its direction flipped.
+
+        The fetch order for a backward page: rows must arrive nearest-anchor
+        first so the slice takes the page ADJACENT to the anchor, then get
+        flipped back into display order.
+        """
+        return (
+            self.ordering[1:]
+            if self.ordering.startswith('-')
+            else f'-{self.ordering}'
+        )
 
     def _paginate_center(
         self,
