@@ -193,6 +193,16 @@ class CommonDjangoConfig(AppConfig):
 
         load_configured_factors()
 
+        # Deletion tombstones (stapel_core.django.jwt.tombstone): a
+        # post_delete receiver on AUTH_USER_MODEL publishes "this uid is
+        # gone" into the fleet-wide revocation namespace. Connected here and
+        # not left to a caller: a consumer-mode verifier cannot tell a
+        # deleted uid from one it has never seen, so a deletion that forgets
+        # its tombstone is a deletion a bearer token can undo.
+        from stapel_core.django.jwt.tombstone import connect_deletion_tombstone
+
+        connect_deletion_tombstone()
+
         # Admin visibility (admin-suite AS-3): re-register contrib service
         # tables (auth.Group, sessions.Session) under declaration-aware admins
         # and apply STAPEL_ADMIN["MODELS"] overrides (None = unregister,

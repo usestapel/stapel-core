@@ -173,3 +173,62 @@ def check_revocation_namespace(app_configs=None, **kwargs):
         ))
 
     return findings
+
+
+#: Security-critical: a tombstone that expires before the credentials naming
+#: the dead account do is a deletion with a resurrection window at the end.
+E002_TOMBSTONE_TTL_TOO_SHORT = declare_security_critical(
+    "stapel_core.revocation.E002",
+    "a deletion tombstone shorter than the refresh-token lifetime leaves a "
+    "window in which a deleted user's own token re-creates them",
+)
+
+
+@checks.register("stapel_blacklist")
+def check_tombstone_ttl(app_configs=None, **kwargs):
+    """E002 — the tombstone must outlive the longest credential it must refuse.
+
+    ``STAPEL_JWT_TOMBSTONE_TTL`` defaults to ``JWT_REFRESH_TOKEN_LIFETIME``,
+    so this can only fire when a deployment set it explicitly and set it too
+    low — or raised the refresh lifetime afterwards and left the tombstone
+    behind, which is the failure this check really exists for: the two
+    numbers drift apart silently, months apart, and the deployment that
+    lengthened its refresh tokens is exactly the one that most needs longer
+    tombstones.
+
+    Error, not Warning: unlike the fail-open hatch, there is no stance a
+    deployment can hold here. A tombstone that ends before the credential
+    does is not a trade-off, it is an unclosed hole with a number on it.
+    """
+    from django.conf import settings
+
+    from stapel_core.django.jwt.tombstone import refresh_token_lifetime
+
+    configured = getattr(settings, "STAPEL_JWT_TOMBSTONE_TTL", None)
+    if configured is None:
+        return []
+
+    try:
+        configured = int(configured)
+    except (TypeError, ValueError):
+        return [checks.Error(
+            f"STAPEL_JWT_TOMBSTONE_TTL is {configured!r}, which is not a "
+            "number of seconds.",
+            hint="Set it to an integer >= JWT_REFRESH_TOKEN_LIFETIME, or "
+                 "remove it and let it derive from that setting.",
+            id=E002_TOMBSTONE_TTL_TOO_SHORT,
+        )]
+
+    refresh = refresh_token_lifetime()
+    if configured >= refresh:
+        return []
+
+    return [checks.Error(
+        f"STAPEL_JWT_TOMBSTONE_TTL is {configured}s but "
+        f"JWT_REFRESH_TOKEN_LIFETIME is {refresh}s. For {refresh - configured}s "
+        "after the tombstone expires, a deleted user's own refresh token is "
+        "still valid and a consumer-mode service will re-create them from it.",
+        hint=f"Raise it to at least {refresh}, or remove the setting and let "
+             "it derive from JWT_REFRESH_TOKEN_LIFETIME automatically.",
+        id=E002_TOMBSTONE_TTL_TOO_SHORT,
+    )]

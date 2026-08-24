@@ -1,5 +1,119 @@
 # Changelog
 
+## [0.40.0] — 2026-08-24
+
+### Security — a deleted account could re-create itself from its own token
+
+**Upgrade note — affects every service running
+`JWT_CREATE_USERS_FROM_TOKEN=True` (consumer/shadow-copy mode).**
+
+Consumer mode exists so a service can materialise a local row for a user it
+has never seen: identity lives in the auth service, everyone else
+shadow-copies on first contact. The mode cannot tell that case from "a user I
+deleted", because both surface as `User.DoesNotExist`. So a deleted user's
+still-valid token walked into a consumer service and was re-created from its
+own claims — reported live as the profiles service answering for an account
+that existed nowhere else. Deletion is the one lifecycle event a bearer token
+must never undo, and it was the one the shadow-copy design had no way to
+represent.
+
+`stapel_core.django.jwt.tombstone` adds the missing fact. The issuer writes
+`user_deleted:<uid>` into the fleet-wide revocation namespace built in 0.39.0,
+so every peer reads the same key regardless of its own cache `KEY_PREFIX`.
+Three properties worth stating, because each one is a way this could have been
+built wrong:
+
+- **Written by the deletion, not by a caller.** A `post_delete` receiver on
+  `AUTH_USER_MODEL`, connected in `CommonDjangoConfig.ready()`. A deletion
+  therefore cannot happen *without* its tombstone — including cascades,
+  `manage.py shell`, the admin, and GDPR erasure jobs. The interim remedy
+  ("ban the user as part of deleting them") was a side effect of a different
+  mechanism that someone had to remember, and it died when its entry expired.
+- **Its own key space.** `user_deleted:` is distinct from `jwt_blacklist:`
+  (per token) and `user_blacklisted:` (per user), so "is this token revoked",
+  "is this person banned" and "is this account gone" never answer each
+  other's question.
+- **Consulted before any claim is trusted**, and only in consumer mode.
+  Issuer mode already answers correctly by reading its own database and does
+  not pay a cache read per request to be told so.
+
+**TTL is derived, and clamped, never merely defaulted.** It comes from the
+deployment's own `JWT_REFRESH_TOKEN_LIFETIME`, so a deployment that lengthens
+its refresh tokens lengthens its tombstones automatically — the silent drift
+this is really guarding against is the one where those two numbers are changed
+months apart. `STAPEL_JWT_TOMBSTONE_TTL` may raise it; a lower value is
+clamped up *and* refused at boot by `stapel_core.revocation.E002` (Error, not
+Warning: unlike the fail-open hatch there is no stance a deployment can hold
+here — a tombstone that ends before the credential does is an unclosed hole
+with a number on it).
+
+**Store unreachable: fails CLOSED.** An unreachable store answers
+"tombstoned", so a deleted principal is not admitted because the thing that
+knows they are deleted is offline. This is the more expensive default and it
+is chosen deliberately: it costs a consumer-mode service its availability
+while its cache is down, rather than costing a deleted person their deletion —
+and the degraded state is exactly when a revocation matters most. It is also
+consistent with both blacklists, which have failed closed since 0.25.0. The
+single documented hatch `STAPEL_BLACKLIST_FAIL_OPEN` flips all three together;
+there is deliberately no separate knob, because two knobs are how the halves
+of revocation drift apart.
+
+*What can break:* a consumer-mode service whose cache is unreachable now
+refuses authentication instead of admitting it. Set
+`STAPEL_BLACKLIST_FAIL_OPEN` only with the trade-off understood. Restoring a
+user from backup after deleting them requires `lift_tombstone(uid)` — nothing
+in the library lifts a tombstone automatically, because every automatic reason
+to do so would be a way for a token to undo a deletion again.
+
+### Security — anyone could revoke anyone's session
+
+`JWTProvider.blacklist_token()` decoded with `verify=False`, so the `jti` it
+revoked came from an unauthenticated string. Anyone who could observe a
+victim's token — any component that logs, proxies or forwards one — could mint
+an unsigned JWT carrying that `jti` and `exp` and POST it to the logout
+endpoint, which requires no authentication. The victim's live session died. A
+denial of service on another user's account, delivered through the revocation
+machinery itself.
+
+The decode now verifies the signature: only a token this deployment signed can
+revoke anything. An already-expired token still returns `False` exactly as
+before (the `expires_in > 0` guard means there is nothing left to revoke), and
+logging out late is unaffected — the refresh token beside it is a separate
+live credential and is revoked on its own.
+
+*What can break:* nothing legitimate. `JWTLogoutView` ignores the return value
+and still clears cookies and the Django session, so a user logging out sees no
+difference. A token signed with a retired key is no longer blacklistable —
+it also no longer authenticates.
+
+### Security — a session cookie is a browser credential too
+
+`CsrfExemptAPIMiddleware`'s docstring has described the right rule since
+0.28.0: a request whose only credential is a cookie is a browser session and
+must keep CSRF. The code counted only the **JWT** cookie. Django's session
+cookie was not counted at all — so an `/api/` request authenticated by
+`sessionid` alone was blanket-exempted from CSRF on every mutating endpoint.
+
+That is not a hypothetical pairing. The JWT middleware calls `login()`, so any
+browser that ever authenticated holds a session cookie, and DRF's
+`SessionAuthentication` accepts it on its own. Both cookies are counted now.
+
+*What can break:* a same-origin front-end that posts to `/api/` with only a
+session cookie and neither a CSRF token nor `X-Requested-With: XMLHttpRequest`
+will start getting 403s. That is the CSRF protection working. An anonymous
+`/api/` request with no cookie at all stays exempt — there is nothing to forge.
+
+### Left for a dedicated wave
+
+Refresh tokens are neither **rotated** nor **bound to a tracked session row**.
+"Log out everywhere" therefore rests entirely on the blacklist, and a stolen
+refresh token is usable for its full lifetime by whoever holds it. Closing
+that needs a session table, an issuing seam that writes to it, and a migration
+path for tokens already in the wild — design, not a patch. Recorded in
+`MODULE.md` so it is not rediscovered as news.
+
+36 tests in `tests/test_deletion_tombstone.py`; 14 fail on 0.39.0.
+
 ## [0.39.0] — 2026-08-24
 
 ### Security — revocation did not leave the service that performed it

@@ -1274,9 +1274,24 @@ here, because the next caller will not have it.
 | Choke point | Owns | Refuses |
 |---|---|---|
 | `jwt_provider` (`django/jwt/provider.py`) | ALL minting: `create_tokens(user)`, `create_tokens_from_data(data)`, `refresh_access_token(token)` | a revoked jti, a user-level ban (`is_user_blacklisted`) — before the mint, never after |
-| `revocation_cache()` (`core/revocation_store.py`) | the ONE key namespace both blacklists write to, shared by every peer service | nothing itself — it is what makes the two above reach across services (0.39.0) |
+| `revocation_cache()` (`core/revocation_store.py`) | the ONE key namespace all three revocation facts are written to, shared by every peer service | nothing itself — it is what makes the others reach across services (0.39.0) |
+| `is_user_tombstoned()` (`django/jwt/tombstone.py`) | "this uid was deleted at the issuer", consulted by consumer-mode verifiers before any claim is trusted | a deleted account, for at least the refresh-token lifetime (0.40.0) |
 | `load_user_by_uid` (`django/jwt/utils.py`) | the re-mint identity on EVERY refresh path | a deleted user, an **inactive** user (0.38.0) |
 | `get_or_create_user_from_jwt` (`django/jwt/utils.py`) | the principal every authentication path resolves — middleware, DRF class, `JWTAuthBackend`, channels | an unresolvable user, an **inactive** user (0.38.0) |
+
+**Only a token we signed can be revoked** (0.40.0). `blacklist_token()` used
+to take its `jti` from an *unverified* decode, so anyone who could observe a
+victim's token — any component that logs or forwards one — could mint an
+unsigned JWT carrying that `jti` and POST it to the unauthenticated logout
+endpoint, killing the victim's live session. The decode now verifies.
+
+**A cookie is a browser credential, session or JWT** (0.40.0).
+`CsrfExemptAPIMiddleware` counted only the JWT cookie, so an `/api/` request
+authenticated by Django's **session** cookie alone — which every browser that
+ever logged in holds, because the JWT middleware calls `login()`, and which
+DRF's `SessionAuthentication` accepts on its own — was blanket-exempted from
+CSRF on every mutating endpoint. It now counts both; a request with no cookie
+at all stays exempt, because there is nothing to forge.
 
 **Minting from credentials happens in exactly one view.**
 `JWTCookieLoginView` (`django/jwt/login_views.py`) is the admin login form —
@@ -1316,32 +1331,55 @@ same key on every backend.
 # both optional; if you change either, change it in EVERY peer service
 STAPEL_JWT_REVOCATION_CACHE = "default"                  # alias to borrow
 STAPEL_JWT_REVOCATION_NAMESPACE = "stapel_revocation"    # the shared prefix
+STAPEL_JWT_TOMBSTONE_TTL = 604800   # optional; clamped to JWT_REFRESH_TOKEN_LIFETIME
 ```
 
 System checks (tag `stapel_blacklist`): `stapel_core.revocation.E001` — the
 named alias is absent and there is no `default`, so bans are written nowhere;
 `W004` — the alias is absent but `default` exists; `W003` (security-critical)
 — a non-default namespace, which is legitimate for two fleets on one store and
-is the original defect if it is one service's local opinion. Plus the existing
+is the original defect if it is one service's local opinion; `E002`
+(security-critical) — a tombstone TTL shorter than the refresh lifetime. Plus the existing
 `stapel_core.blacklist.W001` (fail-open hatch) and `W002` (LocMem, so
 revocation is per-worker).
 
-**Not yet closed** (0.39.0, listed so it is not rediscovered as news):
-`JWTLogoutView` blacklists a jti taken from an *unverified* decode, so a
-forged unsigned token carrying a victim's `jti`+`exp` revokes that victim's
-token (low exploitability — `jti` is a `uuid4`); `CsrfExemptAPIMiddleware`
-exempts an `/api/` request whose only credential is the Django **session**
-cookie, which its own docstring says it should not; refresh tokens are
-neither rotated nor bound to a tracked session row, so "log out everywhere"
-depends entirely on the blacklist; and `JWT_CREATE_USERS_FROM_TOKEN=True`
-(consumer mode, default off) is a full staff-minting primitive by design —
-including **resurrecting a deleted user** from the token's claims, which no
-gate here can distinguish from "a user this service has never seen". Closing
-that one needs a deletion tombstone the issuer publishes, which is design
-work, not a patch. Until then a consumer service holds the line by leaving
-`JWT_CREATE_USERS_FROM_TOKEN` off, or by banning the user
-(`blacklist_user`) as part of deleting them — which, from 0.39.0, actually
-reaches every peer.
+**Deletion is a fact, not a moderation action** (`django/jwt/tombstone.py`,
+0.40.0). A consumer-mode verifier (`JWT_CREATE_USERS_FROM_TOKEN=True`) exists
+to materialise a local row for a user it has never seen, and it cannot tell
+that case from "a user I deleted" — both surface as `DoesNotExist`. So the
+issuer publishes a **tombstone** keyed `user_deleted:<uid>` into the shared
+revocation namespace, written by a `post_delete` receiver on
+`AUTH_USER_MODEL` (connected in `CommonDjangoConfig.ready`) rather than by a
+caller who must remember — cascades, `manage.py shell`, the admin and GDPR
+erasure jobs are all covered. Consumer-mode verifiers consult it before
+trusting a claim; issuer mode skips it and pays nothing, because there the
+local database *is* the account.
+
+Three key spaces, deliberately distinct, so the three questions never answer
+each other's: `jwt_blacklist:<jti>` (is this token revoked), `user_blacklisted:<uid>`
+(is this person banned), `user_deleted:<uid>` (is this account gone).
+
+TTL derives from the deployment's own `JWT_REFRESH_TOKEN_LIFETIME`, so
+lengthening refresh tokens lengthens tombstones automatically;
+`STAPEL_JWT_TOMBSTONE_TTL` may raise it and is **clamped**, never obeyed,
+below the refresh lifetime. `stapel_core.revocation.E002` refuses a boot that
+configures it shorter — a tombstone that ends before the credential does is
+not a trade-off, it is an unclosed hole with a number on it.
+
+All three revocation reads fail **CLOSED** on an unreachable store, flipped
+together by the single `STAPEL_BLACKLIST_FAIL_OPEN` hatch. For the tombstone
+that means a consumer-mode service loses availability while its cache is
+down, rather than a deleted person losing their deletion.
+
+**Not yet closed** (0.40.0, listed so it is not rediscovered as news):
+refresh tokens are neither **rotated** nor **bound to a tracked session row**,
+so "log out everywhere" depends entirely on the blacklist and a stolen
+refresh token is usable for its full lifetime by whoever holds it. That is a
+dedicated wave, not a patch — it needs a session table, an issuing seam that
+writes to it, and a migration path for tokens already in the wild. Also:
+`JWT_CREATE_USERS_FROM_TOKEN=True` remains a staff-minting primitive by
+design (default off) — the tombstone closes resurrection, not elevation; the
+staff claim is still authoritative in that mode by construction.
 
 ### Privilege gateway — `STAPEL_GATEWAY` (`gateway/`)
 

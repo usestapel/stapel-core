@@ -255,6 +255,13 @@ def _ensure_user_in_staff_group(user) -> bool:
         return False
 
 
+def _tombstoned(uid) -> bool:
+    """Imported inside the call so tests (and callers) patch ONE name."""
+    from .tombstone import is_user_tombstoned
+
+    return is_user_tombstoned(uid)
+
+
 def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     """
     Get or create the Django user a validated token speaks for.
@@ -287,6 +294,22 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         Django User instance, or None if the user could not be resolved or
         is not active
     """
+    # Deletion tombstone, consumer mode only (0.40.0). This is the one gate
+    # that has to run BEFORE the row is consulted at all: in consumer mode a
+    # missing row is not evidence of anything — it is the normal first-contact
+    # case the mode exists to handle — so "deleted" has to be a fact carried
+    # from the issuer, not inferred here. Issuer mode skips it: the local
+    # database IS the account there, a deleted user simply is not found, and
+    # this service should not pay a cache read per request to be told that.
+    if _create_users_from_token():
+        uid = user_data.get("user_id")
+        if uid and _tombstoned(uid):
+            logger.warning(
+                "JWT authentication refused: user %s was deleted at the issuer",
+                uid,
+            )
+            return None
+
     user = _get_or_create_user_from_jwt(user_data)
 
     if user is not None and not getattr(user, "is_active", True):

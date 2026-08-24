@@ -243,10 +243,24 @@ class JWTProvider:
         return False
 
     def blacklist_token(self, token: str) -> bool:
-        """Add token to blacklist."""
+        """Add token to blacklist. Only a token WE signed can be revoked.
+
+        This used to decode with ``verify=False``, which meant the ``jti`` it
+        revoked came from an unauthenticated string. Anyone who could observe
+        or guess a victim's ``jti`` could mint an unsigned token carrying it
+        and revoke that victim's live session — a denial of service on another
+        user's account, from an endpoint that requires no authentication.
+        (Guessing is not the realistic path — ``jti`` is a uuid4 — but
+        observing one is: any component that logs or forwards a token has it.)
+
+        An already-expired token still returns False, as it always did — the
+        ``expires_in > 0`` guard below means there is nothing left to revoke.
+        Logging out with a stale access token is unaffected: the refresh token
+        beside it is a separate, live credential and is revoked on its own.
+        """
         self._ensure_initialized()
         from datetime import datetime, timezone
-        payload = self._handler.decode_token(token, verify=False)
+        payload = self._handler.decode_token(token, verify=True)
         if payload and 'jti' in payload and 'exp' in payload:
             expires_in = datetime.fromtimestamp(payload['exp'], tz=timezone.utc) - datetime.now(timezone.utc)
             if expires_in.total_seconds() > 0:

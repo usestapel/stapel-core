@@ -274,11 +274,19 @@ class CsrfExemptAPIMiddleware(MiddlewareMixin):
 
     A request authenticated by an Authorization header or a service API key
     is immune to CSRF by construction (the browser will not attach those
-    cross-site). A request whose only credential is the JWT COOKIE is a
-    browser session: exempting it makes every mutating endpoint
-    CSRF-vulnerable whenever SameSite is relaxed. Such requests must carry
-    the CSRF token (or the X-Requested-With custom header, which is
-    subject to CORS preflight and therefore proves same-origin JS).
+    cross-site). A request whose only credential is a COOKIE is a browser
+    session: exempting it makes every mutating endpoint CSRF-vulnerable
+    whenever SameSite is relaxed. Such requests must carry the CSRF token (or
+    the X-Requested-With custom header, which is subject to CORS preflight and
+    therefore proves same-origin JS).
+
+    "A cookie" means the JWT cookie **or Django's session cookie** (0.40.0).
+    Only the JWT one was counted before, so the exact case this docstring
+    described — a browser session, blanket-exempted from CSRF on every
+    mutating /api/ endpoint — was live for session-authenticated requests.
+    That is not a hypothetical pairing: the JWT middleware calls ``login()``,
+    so a browser that ever authenticated holds a session cookie, and DRF's
+    ``SessionAuthentication`` accepts it on its own.
     """
 
     def process_request(self, request):
@@ -287,6 +295,9 @@ class CsrfExemptAPIMiddleware(MiddlewareMixin):
             return None
         has_cookie_credential = bool(
             request.COOKIES.get(getattr(settings, 'JWT_COOKIE_NAME', 'stapel_jwt'))
+            or request.COOKIES.get(
+                getattr(settings, 'SESSION_COOKIE_NAME', 'sessionid')
+            )
         )
         has_header_credential = bool(
             request.META.get('HTTP_AUTHORIZATION')
