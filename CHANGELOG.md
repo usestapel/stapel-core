@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.41.0] — 2026-08-24
+
+### Security — the deletion gate had an authentication half and no mint half
+
+**Upgrade note — affects consumer-mode services
+(`JWT_CREATE_USERS_FROM_TOKEN=True`) that also set `JWT_REFRESH_ALLOWED=True`.**
+
+0.40.0 put the deletion tombstone on the authentication path and stopped
+there. The re-mint path was left unguarded, and it is reachable: a
+consumer-mode service holds a **shadow row** for a user the issuer has since
+deleted, so the row is still present locally and `load_user_by_uid` still
+found somebody to re-mint from. That service issued a fresh access token for
+a deleted account.
+
+The token was then refused at authentication by the 0.40.0 gate, so no
+request was ever served — which is why this shipped as a residual rather than
+a finding. That reasoning is wrong, and worth writing down rather than
+re-deriving: **the token is harmless because of a check somewhere else.** That
+is precisely the shape that stops being true after one refactor, and "a second
+path to a guarded action that skips the choke point" is the entire failure
+history of this seam — it is the class that produced the login bypass, the
+stale-claims refresh, the per-service blacklist, and the resurrection bug in
+the first place. Closing one door by exact path and leaving the others is how
+containment misses.
+
+`load_user_by_uid` now consults the tombstone, and refuses.
+
+**Deliberately not gated on `JWT_CREATE_USERS_FROM_TOKEN`,** unlike the
+authentication-side check. Two reasons:
+
+- A guard that reads a mode flag has a config-shaped bypass. The
+  misconfiguration this closes — `JWT_REFRESH_ALLOWED=True` on a
+  consumer-mode service, which the docs describe as auth-service-only — exists
+  *because* settings get copied between services, so the flags cannot be
+  trusted to be coherent with each other.
+- The cost argument that justified gating the authentication check does not
+  apply. That one runs per request; this one runs per refresh, which is
+  bounded by the access-token lifetime.
+
+**No new behaviour when the store is unreachable.** The tombstone read fails
+closed like every other revocation read, but the refresh path already failed
+closed there — `JWTProvider.refresh_access_token` runs the user-ban check
+first, and that has failed closed since 0.25.0. A deployment sees no
+availability change it was not already seeing.
+
+*What can break:* a consumer-mode service that was re-minting tokens for
+users deleted upstream stops doing so. Those tokens did not authenticate
+anywhere; they were minted and discarded.
+
+7 tests in `tests/test_deletion_tombstone.py::TestTheMintHalfOfTheDeletionGate`;
+5 fail on 0.40.0, covering the loader, the provider, `JWTRefreshView` and the
+middleware's proactive refresh. The two that pass on both are the controls —
+a live user must still load and still refresh, because a gate that refuses
+everyone is not a fix.
+
 ## [0.40.0] — 2026-08-24
 
 ### Security — a deleted account could re-create itself from its own token

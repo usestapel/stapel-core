@@ -151,21 +151,50 @@ def load_user_by_uid(uid: str) -> Optional[Dict[str, Any]]:
     ``JWTRefreshView``.
 
     Returning ``None`` is how a refresh is REFUSED, so this function decides
-    who may still be re-credentialled, and it refuses two cases:
+    who may still be re-credentialled, and it refuses three cases:
 
+    * the uid is **tombstoned** — deleted at the issuer (0.41.0). This is the
+      MINT half of the deletion gate; 0.40.0 only closed the authentication
+      half. A consumer-mode service holds a shadow row for a user the issuer
+      has since deleted, so the row is still here and the query below still
+      finds it: without this check that service re-mints a fresh access token
+      for a deleted account. The resulting token was refused at
+      authentication, which is a check somewhere else — exactly the shape
+      that stops being true after one refactor, and exactly the class
+      (a second path to a guarded action that skips the choke point) that
+      produced the rest of this file's history.
     * the user no longer exists — a deleted account cannot be re-minted;
     * the user is no longer active — deactivation ("close this account",
       "suspend this employee") must take effect on the next refresh, not up
       to a week later. Without this, a refresh token outlived the account it
       spoke for.
 
+    The tombstone check is deliberately **not** gated on
+    ``JWT_CREATE_USERS_FROM_TOKEN``, unlike the one in
+    ``get_or_create_user_from_jwt``. Two reasons. A guard that reads a mode
+    flag has a config-shaped bypass, and the misconfiguration this closes —
+    ``JWT_REFRESH_ALLOWED=True`` on a consumer-mode service — happens
+    precisely because settings get copied between services, so the flags
+    cannot be trusted to be coherent. And the cost argument that justified
+    gating the authentication check does not apply here: that one runs per
+    request, this one runs per refresh, which is bounded by the access-token
+    lifetime. It also adds no new failure mode when the store is unreachable:
+    the refresh path already fails closed there, via the user-ban check in
+    ``JWTProvider.refresh_access_token``.
+
     Args:
         uid: User primary key, as carried in the token's ``user_id`` claim
 
     Returns:
-        Dictionary with fresh user data, or None if the user is missing,
-        deactivated, or unreadable
+        Dictionary with fresh user data, or None if the uid is tombstoned or
+        the user is missing, deactivated, or unreadable
     """
+    from .tombstone import is_user_tombstoned
+
+    if is_user_tombstoned(uid):
+        logger.warning(f"Refusing to re-mint for deleted user: {uid}")
+        return None
+
     User = _get_user_model()
     try:
         user = User.objects.get(pk=uid)

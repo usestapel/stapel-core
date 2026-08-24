@@ -1275,8 +1275,8 @@ here, because the next caller will not have it.
 |---|---|---|
 | `jwt_provider` (`django/jwt/provider.py`) | ALL minting: `create_tokens(user)`, `create_tokens_from_data(data)`, `refresh_access_token(token)` | a revoked jti, a user-level ban (`is_user_blacklisted`) — before the mint, never after |
 | `revocation_cache()` (`core/revocation_store.py`) | the ONE key namespace all three revocation facts are written to, shared by every peer service | nothing itself — it is what makes the others reach across services (0.39.0) |
-| `is_user_tombstoned()` (`django/jwt/tombstone.py`) | "this uid was deleted at the issuer", consulted by consumer-mode verifiers before any claim is trusted | a deleted account, for at least the refresh-token lifetime (0.40.0) |
-| `load_user_by_uid` (`django/jwt/utils.py`) | the re-mint identity on EVERY refresh path | a deleted user, an **inactive** user (0.38.0) |
+| `is_user_tombstoned()` (`django/jwt/tombstone.py`) | "this uid was deleted at the issuer" — consulted on BOTH halves of the gate: authentication (consumer mode) and re-mint (unconditionally) | a deleted account, for at least the refresh-token lifetime (0.40.0/0.41.0) |
+| `load_user_by_uid` (`django/jwt/utils.py`) | the re-mint identity on EVERY refresh path | a **tombstoned** uid (0.41.0), a deleted user, an **inactive** user (0.38.0) |
 | `get_or_create_user_from_jwt` (`django/jwt/utils.py`) | the principal every authentication path resolves — middleware, DRF class, `JWTAuthBackend`, channels | an unresolvable user, an **inactive** user (0.38.0) |
 
 **Only a token we signed can be revoked** (0.40.0). `blacklist_token()` used
@@ -1352,8 +1352,25 @@ revocation namespace, written by a `post_delete` receiver on
 `AUTH_USER_MODEL` (connected in `CommonDjangoConfig.ready`) rather than by a
 caller who must remember — cascades, `manage.py shell`, the admin and GDPR
 erasure jobs are all covered. Consumer-mode verifiers consult it before
-trusting a claim; issuer mode skips it and pays nothing, because there the
-local database *is* the account.
+trusting a claim; issuer mode skips it there and pays nothing, because on the
+authentication path the local database *is* the account.
+
+**Both halves of the gate, not just authentication** (0.41.0). `load_user_by_uid`
+— the re-mint loader every refresh path passes — consults the tombstone too,
+and **unconditionally**, unlike the authentication check. A consumer-mode
+service holds a shadow row for a user the issuer has since deleted, so the row
+is still there and the query still finds it: without this, that service
+re-minted a fresh access token for a deleted account. The token was refused at
+authentication, but "harmless because of a check somewhere else" is the shape
+that stops being true after one refactor, and a second path to a guarded action
+that skips the choke point is this seam's entire failure history. It is not
+gated on `JWT_CREATE_USERS_FROM_TOKEN` because a guard that reads a mode flag
+has a config-shaped bypass, and the misconfiguration it closes —
+`JWT_REFRESH_ALLOWED=True` on a consumer-mode service — happens precisely
+because settings get copied between services. The cost is one cache read per
+refresh (bounded by the access-token lifetime, not per request), and no new
+failure mode: the refresh path already fails closed on an unreachable store via
+the user-ban check.
 
 Three key spaces, deliberately distinct, so the three questions never answer
 each other's: `jwt_blacklist:<jti>` (is this token revoked), `user_blacklisted:<uid>`

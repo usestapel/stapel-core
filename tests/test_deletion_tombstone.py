@@ -14,6 +14,7 @@ verifiers consult it before trusting a claim.
 Every test in the first three classes fails on 0.39.0.
 """
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -445,3 +446,120 @@ class TestSessionCookieIsNotBlanketCsrfExempt:
     def test_the_configured_session_cookie_name_is_honoured(self):
         with override_settings(SESSION_COOKIE_NAME="my_session"):
             assert self._exempt(cookies={"my_session": "abc"}) is False
+
+
+# ---------------------------------------------------------------------------
+# The MINT half of the deletion gate (0.41.0).
+#
+# 0.40.0 put the tombstone on the authentication path. That left the re-mint
+# path unguarded: a consumer-mode service holds a SHADOW ROW for a user the
+# issuer has since deleted, so `load_user_by_uid` still found somebody and
+# minted a fresh access token from it. The token was then refused at
+# authentication — but "it is useless because of a check somewhere else" is
+# the shape that stops being true after one refactor, and a second path to a
+# guarded action that skips the choke point is the exact class this whole
+# sequence of releases is about.
+#
+# `JWT_REFRESH_ALLOWED=True` on a consumer-mode service is a misconfiguration
+# deployments will make, because settings get copied between services.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestTheMintHalfOfTheDeletionGate:
+    @pytest.fixture(autouse=True)
+    def _provider(self):
+        from stapel_core.django.jwt.provider import jwt_provider
+
+        jwt_provider.reset()
+        self.provider = jwt_provider
+        yield
+        jwt_provider.reset()
+
+    def _shadow_user_deleted_at_the_issuer(self, username):
+        """The exact residual: local row present, uid tombstoned upstream."""
+        user = get_user_model().objects.create(
+            username=username, email=f"{username}@example.com"
+        )
+        tombstone_user(user.pk)
+        return user
+
+    def test_the_loader_refuses_a_tombstoned_uid(self):
+        user = self._shadow_user_deleted_at_the_issuer("mint-loader")
+        from stapel_core.django.jwt.utils import load_user_by_uid
+
+        assert load_user_by_uid(user.pk) is None
+
+    def test_the_loader_still_loads_a_live_user(self):
+        user = get_user_model().objects.create(username="mint-live")
+        from stapel_core.django.jwt.utils import load_user_by_uid
+
+        assert load_user_by_uid(user.pk)["user_id"] == str(user.pk)
+
+    def test_consumer_mode_with_refresh_allowed_mints_nothing(self):
+        """The misconfiguration, end to end through the provider."""
+        with override_settings(
+            JWT_CREATE_USERS_FROM_TOKEN=True, JWT_REFRESH_ALLOWED=True
+        ):
+            user = self._shadow_user_deleted_at_the_issuer("mint-consumer")
+            _, refresh = self.provider.create_tokens_from_data(_claims(user))
+
+            assert self.provider.refresh_access_token(refresh) is None
+
+    def test_the_refresh_view_mints_nothing_either(self):
+        """No path is exempt — the HTTP endpoint, not just the provider."""
+        from django.test import RequestFactory
+
+        from stapel_core.django.jwt.views import JWTRefreshView
+
+        with override_settings(
+            JWT_CREATE_USERS_FROM_TOKEN=True, JWT_REFRESH_ALLOWED=True
+        ):
+            user = self._shadow_user_deleted_at_the_issuer("mint-view")
+            _, refresh = self.provider.create_tokens_from_data(_claims(user))
+
+            request = RequestFactory().post("/auth/refresh/")
+            request.COOKIES = {"stapel_refresh_jwt": refresh}
+            response = JWTRefreshView.as_view()(request)
+
+        assert response.status_code == 401
+
+    def test_the_middleware_refresh_path_mints_nothing(self):
+        """The proactive/expired-access refresh inside JWTAuthMiddleware."""
+        from stapel_core.django.jwt.middleware import JWTAuthMiddleware
+
+        with override_settings(
+            JWT_CREATE_USERS_FROM_TOKEN=True, JWT_REFRESH_ALLOWED=True
+        ):
+            user = self._shadow_user_deleted_at_the_issuer("mint-middleware")
+            _, refresh = self.provider.create_tokens_from_data(_claims(user))
+
+            middleware = JWTAuthMiddleware(lambda r: None)
+            # A plain object, not MagicMock: a mock auto-creates every
+            # attribute, so `_jwt_refreshed` would read truthy whether the
+            # middleware set it or not — the assertion would pass on broken
+            # code.
+            request = SimpleNamespace()
+            middleware._do_refresh(request, refresh)
+
+        assert getattr(request, "_jwt_refreshed", False) is False
+        assert getattr(request, "_new_access_token", None) is None
+
+    def test_a_live_user_can_still_refresh_in_consumer_mode(self):
+        """The gate has to be a gate, not a wall."""
+        with override_settings(
+            JWT_CREATE_USERS_FROM_TOKEN=True, JWT_REFRESH_ALLOWED=True
+        ):
+            user = get_user_model().objects.create(
+                username="mint-ok", email="mint-ok@example.com"
+            )
+            _, refresh = self.provider.create_tokens_from_data(_claims(user))
+
+            assert self.provider.refresh_access_token(refresh) is not None
+
+    def test_the_mint_gate_is_not_gated_on_the_mode_flag(self):
+        """A guard that reads a mode flag has a config-shaped bypass."""
+        with override_settings(JWT_CREATE_USERS_FROM_TOKEN=False):
+            user = self._shadow_user_deleted_at_the_issuer("mint-issuer")
+            from stapel_core.django.jwt.utils import load_user_by_uid
+
+            assert load_user_by_uid(user.pk) is None
