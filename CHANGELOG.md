@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.44.2] — 2026-08-24
+
+### The ONE cookie name, actually the only one
+
+0.44.1 introduced `jwt_cookie_names()` and called it "the ONE resolution" —
+the point being that the socket cannot read a cookie the HTTP side never sets.
+It converted three call sites and left four behind. `getattr(settings,
+"JWT_COOKIE_NAME", "stapel_jwt")` was still re-derived in the CSRF-exemption
+middleware, the JSON logout view, the admin logout redirect, and — as a bare
+literal — in the published OpenAPI security scheme. On a default deployment
+every copy agrees, which is exactly why the drift is invisible until a service
+sets `JWT_COOKIE_NAME` and one half of the stack starts naming a cookie the
+other half never issues. Every one of them now calls `jwt_cookie_names()`.
+
+**Fixed:** a deployment that renames `JWT_COOKIE_NAME` had its OpenAPI schema
+advertise the `stapel_jwt` default, so generated clients looked for a cookie
+the service does not set.
+
+### The sweep the WebSocket fix was missing
+
+`tests/test_ws_credential_sweep.py` proves the *absence* the per-case tests
+cannot — and absence is the half that let the original defect live for months:
+
+- every source the handshake extractor can report is classified ambient or
+  not, so a fifth credential channel cannot be added without deciding whether
+  the origin gate applies to it (`AMBIENT_SOURCES == {cookie}`);
+- the handshake and the HTTP extractor resolve the same cookie name under a
+  **renamed** setting — the default proves nothing, since both halves used to
+  hardcode the same literal;
+- no other module in the package resolves that name from settings, and no
+  other module reads a credential off an ASGI scope — a second reader of the
+  handshake headers would be a second authentication path, and the one that
+  would not inherit the origin gate.
+
+The sweep fails on 0.44.1. No behavioural change to the socket itself: the
+cookie channel, the mandatory fail-closed origin allowlist,
+`STAPEL_WS_ALLOWED_ORIGINS`, `stapel_core.jwt.E001`/`E002` and close codes
+4401/4403 are all unchanged from 0.44.1.
+
+*Tests: 3144 → 3155.*
+
 ## [0.44.1] — 2026-08-24
 
 *(0.44.0 was tagged and never reached PyPI: a test in this release named a

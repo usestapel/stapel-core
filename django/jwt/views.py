@@ -13,7 +13,12 @@ from django.http import JsonResponse
 from django.views import View
 
 from .provider import jwt_provider
-from .utils import extract_jwt_from_request, load_user_by_uid, set_jwt_cookies
+from .utils import (
+    extract_jwt_from_request,
+    jwt_cookie_names,
+    load_user_by_uid,
+    set_jwt_cookies,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +53,7 @@ class JWTLogoutView(View):
             })
 
             # Clear JWT cookies
-            cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'stapel_jwt')
-            refresh_cookie_name = getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'stapel_refresh_jwt')
+            cookie_name, refresh_cookie_name = jwt_cookie_names()
             cookie_domain = getattr(settings, 'JWT_COOKIE_DOMAIN', None)
             cookie_samesite = getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax')
 

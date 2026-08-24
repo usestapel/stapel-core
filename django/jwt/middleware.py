@@ -21,6 +21,7 @@ from django.conf import settings
 from .utils import (
     get_or_create_user_from_jwt,
     extract_jwt_from_request,
+    jwt_cookie_names,
     load_user_by_uid,
     set_jwt_cookies,
 )
@@ -294,7 +295,7 @@ class CsrfExemptAPIMiddleware(MiddlewareMixin):
         if '/api/' not in request.path:
             return None
         has_cookie_credential = bool(
-            request.COOKIES.get(getattr(settings, 'JWT_COOKIE_NAME', 'stapel_jwt'))
+            request.COOKIES.get(jwt_cookie_names()[0])
             or request.COOKIES.get(
                 getattr(settings, 'SESSION_COOKIE_NAME', 'sessionid')
             )

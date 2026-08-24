@@ -494,10 +494,16 @@ def _register_jwt_auth_extension():
         name = "JWTCookieAuth"
 
         def get_security_definition(self, _auto_schema):
+            # The advertised name must be the cookie this deployment actually
+            # sets, not the default: a service that renamed JWT_COOKIE_NAME
+            # was publishing a schema whose auth scheme named a cookie it
+            # never issues.
+            from stapel_core.django.jwt.utils import jwt_cookie_names
+
             return {
                 "type": "apiKey",
                 "in": "cookie",
-                "name": "stapel_jwt",
+                "name": jwt_cookie_names()[0],
                 "description": "JWT token stored in cookie. Login via /auth/admin/ to get the cookie.",
             }
 

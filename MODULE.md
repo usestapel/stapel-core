@@ -1278,7 +1278,7 @@ here, because the next caller will not have it.
 | `is_user_tombstoned()` (`django/jwt/tombstone.py`) | "this uid was deleted at the issuer" — consulted on BOTH halves of the gate: authentication (consumer mode) and re-mint (unconditionally) | a deleted account, for at least the refresh-token lifetime (0.40.0/0.41.0) |
 | `load_user_by_uid` (`django/jwt/utils.py`) | the re-mint identity on EVERY refresh path | a **tombstoned** uid (0.41.0), a deleted user, an **inactive** user (0.38.0) |
 | `get_or_create_user_from_jwt` (`django/jwt/utils.py`) | the principal every authentication path resolves — middleware, DRF class, `JWTAuthBackend`, channels | an unresolvable user, an **inactive** user (0.38.0) |
-| `jwt_cookie_names()` (`django/jwt/utils.py`) | the ONE resolution of `JWT_COOKIE_NAME`/`JWT_REFRESH_COOKIE_NAME` — HTTP extractor, `set_jwt_cookies`, config loader, admin logout, and the Channels handshake (0.44.1) | nothing itself — it is what stops one half of the stack setting a cookie the other half never reads |
+| `jwt_cookie_names()` (`django/jwt/utils.py`) | the ONE resolution of `JWT_COOKIE_NAME`/`JWT_REFRESH_COOKIE_NAME` — HTTP extractor, `set_jwt_cookies`, config loader, both logout views, the CSRF-exemption middleware, the published OpenAPI scheme, and the Channels handshake (0.44.2) | nothing itself — it is what stops one half of the stack setting a cookie the other half never reads |
 
 **Only a token we signed can be revoked** (0.40.0). `blacklist_token()` used
 to take its `jti` from an *unverified* decode, so anyone who could observe a
@@ -1320,6 +1320,16 @@ can never match an `Origin`). `stapel_chat.E014` states the same fact at its
 layer and reads the same list, so the two verdicts agree by construction;
 consumers should delegate to `ws_origin.websocket_origin_allowlist()` and
 `ws_origin.cookie_websocket_auth_reachable()` rather than re-read settings.
+
+**The sweep behind that fix** (`tests/test_ws_credential_sweep.py`, 0.44.2)
+proves what the per-case tests cannot — the *absence* of a second door, which
+is the half that let the original defect live for months. It asserts that
+every source the extractor can report is classified ambient or not (so a fifth
+credential channel cannot be added without deciding whether the origin gate
+applies to it), that the handshake and the HTTP extractor agree on the cookie
+name under a **renamed** setting (the default proves nothing — both halves used
+to hardcode the same literal), and that no other module in the package either
+resolves that name from settings or reads a credential off an ASGI scope.
 
 **A cookie is a browser credential, session or JWT** (0.40.0).
 `CsrfExemptAPIMiddleware` counted only the JWT cookie, so an `/api/` request
