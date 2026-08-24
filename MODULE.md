@@ -1398,6 +1398,28 @@ writes to it, and a migration path for tokens already in the wild. Also:
 design (default off) — the tombstone closes resurrection, not elevation; the
 staff claim is still authoritative in that mode by construction.
 
+### OAuth providers & audience verification (`oauth.py`)
+
+`OAuthProvider` is the registry seam every stapel OAuth integration builds on: subclass it, implement `get_user_data`, `register_provider(MyProvider())` from your `AppConfig.ready()`.
+
+Since 0.42.0 the seam also answers the question that decides whether a caller-supplied token may be trusted at all — **which OAuth client was this token minted for?**
+
+```python
+from stapel_core.oauth import OAuthClientConfig, check_audience, fetch_user_data
+
+reason = check_audience(provider, access_token, config)   # None == accepted
+if reason:                                                 # refuse, every time
+    return None
+return fetch_user_data(provider, access_token, config)
+```
+
+- **`OAuthClientConfig(client_id, client_secret, accepted_audiences)`** — this deployment's own client, plus every client ID a caller-supplied token may legitimately carry. `accepted_audiences` is a tuple because one project routinely owns several clients: Google issues separate Web / iOS / Android client IDs for one project, so a native app's token carries a different `aud` than the web app's and both are the same deployment. A single-value check would refuse every mobile sign-in.
+- **`OAuthProvider.verifies_audience`** (`False`) and **`OAuthProvider.verify_audience(access_token, config)`** (returns `False`) — the hook. **Both defaults refuse**, which is the only safe answer for a provider nobody has taught to introspect: an access token is a bearer credential scoped to the client it was issued to, so a token minted for *somebody else's* app against a victim's provider account would otherwise resolve to that victim's identity. Override the method with a real mechanism (the provider's tokeninfo/introspection endpoint) **and** set the flag; setting the flag without the mechanism is the one way to make this seam lie.
+- **`check_audience`** returns `None` (accepted) or one of `AUDIENCE_UNVERIFIABLE` / `AUDIENCE_UNPINNED` / `AUDIENCE_MISMATCH` — all refusals. An exception inside a provider's verifier is logged and becomes `AUDIENCE_UNVERIFIABLE`: a verification step that fails open is not a verification step, and a provider outage must not open a door.
+- **`fetch_user_data(provider, access_token, config=None)`** — call `get_user_data` through this. `get_user_data` gained an optional `config` parameter in 0.42.0; providers written against the old one-argument signature are detected and called with one argument, so third-party providers keep working untouched.
+
+Only tokens this deployment did **not** mint need the check. A token obtained through your own authorization-code exchange (`exchange_code`, i.e. the `/authorize/` → `/callback/` flow) is yours by construction; a token handed to you in a request body is not.
+
 ### Privilege gateway — `STAPEL_GATEWAY` (`gateway/`)
 
 The mechanism behind "the agent gets the *capability*, never the
@@ -1968,6 +1990,7 @@ mechanism; the `stapel_mounts` private names re-export from there unchanged.
 
 ## Anti-patterns
 
+- **Do not resolve an identity from a token you did not mint without checking its audience.** `OAuthProvider.get_user_data` answers "who is the holder of this token", never "may this token speak for that person here". Run `check_audience` first for any caller-supplied token, and leave `verifies_audience = False` on a provider you cannot actually introspect — a provider that looks verified but is not is worse than one that plainly refuses.
 - **Do not import other stapel modules from core** (or from each other).
   Cross-module communication is comm Actions/Functions/Tasks by string name
   only. Core cannot even validate another module's registry (see

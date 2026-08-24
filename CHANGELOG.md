@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.42.0] — 2026-08-24
+
+### Security — the OAuth seam could not ask who a token was minted for
+
+`OAuthProvider.get_user_data(self, access_token)` carried no provider
+configuration, so no implementation could verify a token's audience even if it
+wanted to. That is not an abstract gap. An OAuth access token is a bearer
+credential scoped to the **client** it was issued to; a service that accepts
+one straight from a request body and resolves the profile behind it will
+accept a token minted for *somebody else's* OAuth app against the victim's
+provider account, and log the caller in as the victim. Downstream,
+stapel-auth's `POST /oauth/login/` is exactly that endpoint (see stapel-auth
+0.27.0).
+
+The seam can now answer the question, and every answer that is not a positive
+proof is a refusal:
+
+```python
+from stapel_core.oauth import OAuthClientConfig, check_audience, fetch_user_data
+
+reason = check_audience(provider, access_token, config)   # None == accepted
+if reason:
+    return None                                           # refuse
+return fetch_user_data(provider, access_token, config)
+```
+
+**Added**
+
+- **`OAuthClientConfig(client_id, client_secret, accepted_audiences)`** — the
+  deployment's own client plus every client ID a caller-supplied token may
+  legitimately carry. `accepted_audiences` is a **tuple, not a single value**:
+  one project routinely owns several clients (Google issues separate Web /
+  iOS / Android client IDs), so a native app's token carries a different `aud`
+  than the web app's and both are the same deployment. A single-value check
+  would have refused every mobile sign-in.
+- **`OAuthProvider.verifies_audience`** (default `False`) and
+  **`OAuthProvider.verify_audience(access_token, config)`** (default returns
+  `False`). **Refuse-if-unverifiable is the default**, so a provider nobody
+  taught to introspect fails closed instead of silently passing. Setting the
+  flag without implementing the mechanism is the one way to make this seam lie.
+- **`check_audience(provider, access_token, config)`** → `None` when accepted,
+  else `AUDIENCE_UNVERIFIABLE` (no mechanism), `AUDIENCE_UNPINNED` (nothing
+  configured to compare against) or `AUDIENCE_MISMATCH` (a different client).
+  An exception inside a provider's verifier is logged and becomes
+  `AUDIENCE_UNVERIFIABLE` — a verification step that fails open is not a
+  verification step, and a provider outage must not open a door.
+- **`fetch_user_data(provider, access_token, config=None)`** — the compat
+  caller. `get_user_data` gained an optional `config` parameter; providers
+  written against the pre-0.42 one-argument signature are detected by
+  introspection and still called with one argument.
+
+### Compatibility
+
+Additive. `get_user_data(self, access_token)` implementations — including
+every third-party provider registered through `register_provider` — keep
+working unchanged; `tests/test_oauth.py`'s own fake provider still uses the
+old signature and is part of the gate. Nothing verifies an audience until a
+provider opts in, and nothing calls `check_audience` until a consumer does.
+
+Only tokens a deployment did **not** mint need the check: a token from your
+own `exchange_code` (the `/authorize/` → `/callback/` flow) is yours by
+construction.
+
 ## [0.41.0] — 2026-08-24
 
 ### Security — the deletion gate had an authentication half and no mint half
