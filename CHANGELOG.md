@@ -110,7 +110,7 @@ changes is that the existing remedy now works: banning the user as part of
 deleting them (`blacklist_user`) reaches every peer service, because the ban
 finally shares a namespace with them.
 
-37 tests across `tests/test_revocation_namespace.py`; the cross-service ones
+21 tests in `tests/test_revocation_namespace.py`; the cross-service ones
 reproduce the stand exactly — two cache connections differing only in
 `KEY_PREFIX` — and fail on 0.38.0 with "a token revoked in one service is
 still valid in the next".
