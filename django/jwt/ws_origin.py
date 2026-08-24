@@ -2,7 +2,7 @@
 
 Why this module exists
 ----------------------
-0.44.0 gave the Channels handshake extractor a **cookie** branch, because a
+0.44.1 gave the Channels handshake extractor a **cookie** branch, because a
 browser cannot set an ``Authorization`` header on ``new WebSocket()`` and the
 product authenticates HTTP with an httpOnly JWT cookie — so every real browser
 handshake used to close 4401 and the client fell back to polling forever.

@@ -1,4 +1,4 @@
-# stapel-core 0.44.0
+# stapel-core 0.44.1
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters, the serializer seam and thin-view base) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 

@@ -40,7 +40,7 @@ Token transmission — four channels, tried in this order
    ``jwt``, ``token``.
 3. ``?token=<jwt>`` query parameter — the simplest explicit fallback. Query
    strings routinely land in proxy/server access logs.
-4. The **JWT cookie** (0.44.0) — ``JWT_COOKIE_NAME``, and
+4. The **JWT cookie** (0.44.1) — ``JWT_COOKIE_NAME``, and
    ``JWT_REFRESH_COOKIE_NAME`` where the deployment allows refresh. Names
    resolve through :func:`stapel_core.django.jwt.utils.jwt_cookie_names`, the
    same call the HTTP extractor makes, so the socket can never read a

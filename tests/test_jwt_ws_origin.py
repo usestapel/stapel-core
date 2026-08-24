@@ -1,6 +1,6 @@
 """Tests for stapel_core.django.jwt.ws_origin — the WebSocket origin guard.
 
-The guard exists because 0.44.0 taught the Channels handshake to read the JWT
+The guard exists because 0.44.1 taught the Channels handshake to read the JWT
 cookie. A cookie is ambient authority: the browser attaches it to a handshake
 started by any page, and WebSockets are protected by neither the same-origin
 policy nor CORS. Without the allowlist, the cookie fix would be Cross-Site
@@ -91,22 +91,55 @@ class TestAllowlistResolution:
         assert wo.origin_allowed("garbage") is False
 
 
+@pytest.fixture
+def raw_settings():
+    """Set settings attributes WITHOUT firing ``setting_changed``.
+
+    ``override_settings(INSTALLED_APPS=...)`` makes Django reload the app
+    registry, so naming an app label there imports it for real — and
+    ``stapel_realtime`` is a sibling library, not a test dependency of the
+    core. Reachability only reads the LIST, never the apps, so the list is
+    what these tests set.
+    """
+    from django.conf import settings
+
+    saved = {}
+
+    def _set(**values):
+        for name, value in values.items():
+            if name not in saved:
+                saved[name] = getattr(settings, name, _MISSING)
+            setattr(settings, name, value)
+
+    yield _set
+    for name, value in saved.items():
+        if value is _MISSING:
+            delattr(settings._wrapped, name)
+        else:
+            setattr(settings, name, value)
+
+
+_MISSING = object()
+
+
 class TestReachability:
     """E001 fires only where a browser can actually reach the socket with a
     cookie. An HTTP-only service never sees it."""
 
-    @override_settings(
-        ASGI_APPLICATION=None, INSTALLED_APPS=[], MIDDLEWARE=[],
-        REST_FRAMEWORK={}, JWT_REFRESH_ALLOWED=False,
-    )
-    def test_http_only_service_is_not_reachable(self):
+    def test_http_only_service_is_not_reachable(self, raw_settings):
+        raw_settings(
+            ASGI_APPLICATION=None, INSTALLED_APPS=[], MIDDLEWARE=[],
+            REST_FRAMEWORK={}, JWT_REFRESH_ALLOWED=False,
+        )
         assert wo.cookie_websocket_auth_reachable() is False
 
-    @override_settings(
-        ASGI_APPLICATION="proj.asgi.application", MIDDLEWARE=[],
-        REST_FRAMEWORK={}, JWT_REFRESH_ALLOWED=False, INSTALLED_APPS=[],
-    )
-    def test_websockets_without_cookie_credentials_is_not_reachable(self):
+    def test_websockets_without_cookie_credentials_is_not_reachable(
+        self, raw_settings
+    ):
+        raw_settings(
+            ASGI_APPLICATION="proj.asgi.application", MIDDLEWARE=[],
+            REST_FRAMEWORK={}, JWT_REFRESH_ALLOWED=False, INSTALLED_APPS=[],
+        )
         assert wo.cookie_websocket_auth_reachable() is False
 
     @override_settings(
@@ -118,21 +151,22 @@ class TestReachability:
     def test_drf_cookie_class_makes_it_reachable(self):
         assert wo.cookie_websocket_auth_reachable() is True
 
-    @override_settings(
-        INSTALLED_APPS=["stapel_realtime"], REST_FRAMEWORK={},
-        MIDDLEWARE=["stapel_core.django.jwt.middleware.JWTAuthMiddleware"],
-        ASGI_APPLICATION=None,
-    )
-    def test_http_jwt_middleware_makes_it_reachable(self):
+    def test_http_jwt_middleware_makes_it_reachable(self, raw_settings):
         """That middleware's extractor reads cookies FIRST, so a browser
-        talking to this service holds one."""
+        talking to this service holds one. The websocket half is proved by
+        stapel_realtime being in INSTALLED_APPS."""
+        raw_settings(
+            INSTALLED_APPS=["stapel_realtime"], REST_FRAMEWORK={},
+            MIDDLEWARE=["stapel_core.django.jwt.middleware.JWTAuthMiddleware"],
+            ASGI_APPLICATION=None,
+        )
         assert wo.cookie_websocket_auth_reachable() is True
 
-    @override_settings(
-        INSTALLED_APPS=["channels"], REST_FRAMEWORK={}, MIDDLEWARE=[],
-        JWT_REFRESH_ALLOWED=True, ASGI_APPLICATION=None,
-    )
-    def test_a_service_that_sets_the_cookies_makes_it_reachable(self):
+    def test_a_service_that_sets_the_cookies_makes_it_reachable(self, raw_settings):
+        raw_settings(
+            INSTALLED_APPS=["channels"], REST_FRAMEWORK={}, MIDDLEWARE=[],
+            JWT_REFRESH_ALLOWED=True, ASGI_APPLICATION=None,
+        )
         assert wo.cookie_websocket_auth_reachable() is True
 
 
@@ -166,12 +200,12 @@ class TestCheck:
         realtime says guarded, core says unguarded, about one socket."""
         assert wo.check_websocket_origin_allowlist(None) == []
 
-    @override_settings(
-        ASGI_APPLICATION=None, INSTALLED_APPS=[], MIDDLEWARE=[],
-        REST_FRAMEWORK={}, JWT_REFRESH_ALLOWED=False,
-        STAPEL_WS_ALLOWED_ORIGINS=[], STAPEL_REALTIME={},
-    )
-    def test_http_only_service_is_never_blocked_by_it(self):
+    def test_http_only_service_is_never_blocked_by_it(self, raw_settings):
+        raw_settings(
+            ASGI_APPLICATION=None, INSTALLED_APPS=[], MIDDLEWARE=[],
+            REST_FRAMEWORK={}, JWT_REFRESH_ALLOWED=False,
+            STAPEL_WS_ALLOWED_ORIGINS=[], STAPEL_REALTIME={},
+        )
         assert wo.check_websocket_origin_allowlist(None) == []
 
     @override_settings(STAPEL_WS_ALLOWED_ORIGINS=["studio.localhost"],

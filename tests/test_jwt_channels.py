@@ -11,7 +11,7 @@ The class of defect this file exists to prevent
 -----------------------------------------------
 Every test below the ``TestBrowserCookieHandshake`` heading authenticates the
 way a BROWSER actually does: the JWT cookie in the handshake headers and no
-``Authorization`` header at all. Until 0.44.0 every test in this file drove a
+``Authorization`` header at all. Until 0.44.1 every test in this file drove a
 path a browser cannot take — a header ``new WebSocket()`` cannot set — so the
 suite was green while the only handshake that mattered closed 4401 in
 production for months. A green test over an impossible client proves nothing.
@@ -165,7 +165,7 @@ class TestExtractToken:
 
 
 # ---------------------------------------------------------------------------
-# The cookie channel — the one a browser actually has (0.44.0)
+# The cookie channel — the one a browser actually has (0.44.1)
 # ---------------------------------------------------------------------------
 
 class TestExtractCookie:
@@ -411,7 +411,7 @@ class TestMiddlewareCall:
 
 
 # ---------------------------------------------------------------------------
-# TestBrowserCookieHandshake — the client that actually exists (0.44.0)
+# TestBrowserCookieHandshake — the client that actually exists (0.44.1)
 #
 # Every test here sends what a browser sends and nothing a browser cannot:
 # the JWT cookie in the handshake headers, an Origin header, and NO

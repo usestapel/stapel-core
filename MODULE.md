@@ -1278,7 +1278,7 @@ here, because the next caller will not have it.
 | `is_user_tombstoned()` (`django/jwt/tombstone.py`) | "this uid was deleted at the issuer" — consulted on BOTH halves of the gate: authentication (consumer mode) and re-mint (unconditionally) | a deleted account, for at least the refresh-token lifetime (0.40.0/0.41.0) |
 | `load_user_by_uid` (`django/jwt/utils.py`) | the re-mint identity on EVERY refresh path | a **tombstoned** uid (0.41.0), a deleted user, an **inactive** user (0.38.0) |
 | `get_or_create_user_from_jwt` (`django/jwt/utils.py`) | the principal every authentication path resolves — middleware, DRF class, `JWTAuthBackend`, channels | an unresolvable user, an **inactive** user (0.38.0) |
-| `jwt_cookie_names()` (`django/jwt/utils.py`) | the ONE resolution of `JWT_COOKIE_NAME`/`JWT_REFRESH_COOKIE_NAME` — HTTP extractor, `set_jwt_cookies`, config loader, admin logout, and the Channels handshake (0.44.0) | nothing itself — it is what stops one half of the stack setting a cookie the other half never reads |
+| `jwt_cookie_names()` (`django/jwt/utils.py`) | the ONE resolution of `JWT_COOKIE_NAME`/`JWT_REFRESH_COOKIE_NAME` — HTTP extractor, `set_jwt_cookies`, config loader, admin logout, and the Channels handshake (0.44.1) | nothing itself — it is what stops one half of the stack setting a cookie the other half never reads |
 
 **Only a token we signed can be revoked** (0.40.0). `blacklist_token()` used
 to take its `jti` from an *unverified* decode, so anyone who could observe a
@@ -1286,7 +1286,7 @@ victim's token — any component that logs or forwards one — could mint an
 unsigned JWT carrying that `jti` and POST it to the unauthenticated logout
 endpoint, killing the victim's live session. The decode now verifies.
 
-**A browser cannot set a header on `new WebSocket()`** (0.44.0). The Channels
+**A browser cannot set a header on `new WebSocket()`** (0.44.1). The Channels
 handshake extractor (`django/jwt/channels.py`) read only the `Authorization`
 header, the `Sec-WebSocket-Protocol` subprotocol and `?token=`. HTTP
 authenticates with an httpOnly JWT **cookie**, and there was no cookie branch —
@@ -1303,7 +1303,7 @@ re-minted through `load_user_by_uid`; the fresh token lands in
 to set a cookie on.
 
 **And a cookie on a socket is ambient authority, so it needs an origin
-allowlist** (`django/jwt/ws_origin.py`, 0.44.0). The browser attaches the
+allowlist** (`django/jwt/ws_origin.py`, 0.44.1). The browser attaches the
 cookie to a handshake started by *any* page, and WebSockets are protected by
 neither the same-origin policy nor CORS. The cookie branch alone would have
 been Cross-Site WebSocket Hijacking, so the guard ships in the same release

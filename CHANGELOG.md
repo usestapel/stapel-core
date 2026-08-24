@@ -1,6 +1,13 @@
 # Changelog
 
-## [0.44.0] — 2026-08-24
+## [0.44.1] — 2026-08-24
+
+*(0.44.0 was tagged and never reached PyPI: a test in this release named a
+sibling library in an `override_settings(INSTALLED_APPS=...)`, which makes
+Django import it for real — green locally, `ModuleNotFoundError` on a clean
+CI runner. The release-gate did its job. 0.44.1 is the same change with the
+test reading the setting instead of loading the app; **0.44.0 does not exist
+on PyPI — floor on `>=0.44.1`**.)*
 
 ### The socket a browser could never open
 

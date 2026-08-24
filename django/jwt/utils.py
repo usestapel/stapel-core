@@ -109,7 +109,7 @@ def jwt_cookie_names() -> tuple[str, str]:
 
     Every place that touches a JWT cookie resolves its name here: the HTTP
     middleware's extractor, ``set_jwt_cookies``, the config loader, the admin
-    login view's logout branch, and — since 0.44.0 — the Channels handshake
+    login view's logout branch, and — since 0.44.1 — the Channels handshake
     extractor. The names used to be re-derived with a literal default at each
     call site; five copies of ``getattr(settings, "JWT_COOKIE_NAME",
     "stapel_jwt")`` is how a deployment ends up setting one cookie and reading
