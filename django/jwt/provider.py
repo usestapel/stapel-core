@@ -25,6 +25,23 @@ from typing import Optional, Tuple, Dict, Any
 logger = logging.getLogger(__name__)
 
 
+class _LoaderDefault:
+    """Sentinel: "caller said nothing", which is NOT the same as "caller said None".
+
+    ``None`` has to keep meaning "re-mint from the token's own claims" — it is
+    the documented framework-free behaviour of ``TokenManager`` and the only
+    way to ask for it deliberately. So the django-layer default cannot be
+    ``None``; it needs a third value that means "you did not choose, so you
+    get the safe one".
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<load_user_by_uid (default)>"
+
+
+_LOADER_DEFAULT = _LoaderDefault()
+
+
 class JWTProvider:
     """
     Singleton-style JWT provider that lazily initializes JWT components.
@@ -170,7 +187,9 @@ class JWTProvider:
             return None
         return user_data
 
-    def refresh_access_token(self, refresh_token: str, load_user_data=None) -> Optional[str]:
+    def refresh_access_token(
+        self, refresh_token: str, load_user_data=_LOADER_DEFAULT
+    ) -> Optional[str]:
         """
         Refresh an access token using refresh token.
 
@@ -179,17 +198,35 @@ class JWTProvider:
         mint: the manager refuses a blacklisted refresh jti, and a banned user
         gets no new token even if their refresh token is otherwise perfect.
 
+        **The database loader is the default, not an opt-in.** Omitting it
+        used to mean "re-mint from the refresh token's own claims", which are
+        as old as the token — up to ``JWT_REFRESH_TOKEN_LIFETIME``, 7 days by
+        default. Every caller that forgot the argument therefore resurrected
+        whatever the database had since revoked: a demoted admin's staff flag,
+        a deactivated account, a deleted user. Core's own refresh view was one
+        such caller (fixed in 0.38.0), and every consumer that calls this
+        method is another one nobody can audit from here. A safe behaviour
+        that each caller must remember is not a safe behaviour, so the safe
+        one is now what you get for free.
+
         Args:
             refresh_token: JWT refresh token
-            load_user_data: Optional callback(user_id) -> user_data dict.
-                           If provided, loads fresh user data from database
-                           to include updated claims in new token.
+            load_user_data: callback(user_id) -> user_data dict, used to load
+                           fresh claims from the database. Defaults to
+                           ``stapel_core.django.jwt.utils.load_user_by_uid``.
+                           Pass ``None`` to deliberately re-mint from the
+                           token's own claims — an explicit, greppable choice
+                           with no legitimate use inside a Django process.
 
         Returns:
-            New access token or None if refresh failed, was revoked, or the
-            user is banned
+            New access token or None if refresh failed, was revoked, the user
+            is banned, or the database no longer has an active user for it
         """
         self._ensure_initialized()
+        if load_user_data is _LOADER_DEFAULT:
+            from .utils import load_user_by_uid
+
+            load_user_data = load_user_by_uid
         # Validate first so the ban check sees the token's real identity, and
         # so a revoked refresh token never reaches the minting step at all.
         user_data = self._manager.validate_refresh_token(refresh_token)

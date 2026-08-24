@@ -1,5 +1,120 @@
 # Changelog
 
+## [0.39.0] — 2026-08-24
+
+### Security — revocation did not leave the service that performed it
+
+**Upgrade note — every split deployment must read this. Any token you
+believed revoked before upgrading may still be live on your other services
+until it expires on its own.**
+
+Both blacklists wrote through `django.core.cache.cache`. Django builds the
+real cache key as `f"{KEY_PREFIX}:{VERSION}:{key}"` from the **deployment's**
+`CACHES`, and every service in a split deployment sets its own `KEY_PREFIX`
+(`auth`, `stapel_profiles`, ...) precisely so its ordinary caches do not
+collide with its peers'. Revocation is the one thing that must collide.
+
+Sharing a Redis is not sharing a namespace. Reproduced on a consumer's stand:
+a token blacklisted in the auth service still returned **200** from the
+profiles service. Both pointed at `redis://redis:6379/0`; auth wrote
+`auth:1:jwt_blacklist:<jti>` and profiles looked for
+`stapel_profiles:1:jwt_blacklist:<jti>`, found nothing, and served the
+request. So "log out everywhere", "revoke suspicious session" and
+password-change revocation were all per-service illusions: a revoked token
+kept working on every service **except** the one that revoked it. That is
+what made the 0.38.0 login bypass unrecoverable while it was live — there was
+no way to kill a token once minted.
+
+`stapel_core.core.revocation_store` is the mechanism. It borrows the
+deployment's own cache connection — same backend, same `LOCATION`, same
+`OPTIONS`, so the same Redis and the same pool — and forces `KEY_PREFIX` and
+`VERSION` to values that are a property of the FLEET rather than of the
+service. Any peer running this library against the same store computes the
+same key. `KEY_FUNCTION` is dropped for the same reason: a per-service key
+function would re-isolate the namespace this exists to share.
+
+Both halves of revocation now use it, so they cannot drift apart again:
+
+- `TokenBlacklist` (per jti) — previously had no bypass at all, which is the
+  half that was reproduced live.
+- `blacklist_user` / `is_user_blacklisted` (per user) — previously reached
+  for `cache.client.get_client()`, a raw django_redis handle, to bypass
+  `KEY_PREFIX`. That workaround was right about the problem and wrong about
+  the scope: it worked on exactly one backend and fell back silently to the
+  broken prefix-scoped path on every other. The namespace replaces it, and no
+  backend is special any more.
+
+Two settings, both optional, and **both must match across every peer if
+changed**:
+
+```python
+STAPEL_JWT_REVOCATION_CACHE = "default"                # alias to borrow
+STAPEL_JWT_REVOCATION_NAMESPACE = "stapel_revocation"  # the shared prefix
+```
+
+New system checks (tag `stapel_blacklist`), because a namespace that is not
+shared fails silently on both sides — the revoking service reports success,
+the verifying service reports 200:
+
+- `stapel_core.revocation.E001` — the configured alias is not in `CACHES` and
+  there is no `default`: bans are written nowhere.
+- `stapel_core.revocation.W004` — the alias is missing but `default` exists.
+- `stapel_core.revocation.W003` (security-critical) — a non-default
+  namespace. Legitimate for two fleets on one store; the original defect if
+  it is one service's local opinion.
+
+*What can break:* the key moves, so entries written before the upgrade are
+invisible after it. Those entries are bounded by the token lifetime, but an
+operator who revoked something during an incident should **re-issue the ban
+after upgrading**. Deployments that relied on the raw-django_redis path are
+unaffected in behaviour; the key they write simply moves with everyone else's.
+
+### Security — the safe refresh was opt-in, so consumers opted out by default
+
+0.38.0 fixed core's own `JWTRefreshView` by passing `load_user_by_uid`. That
+left the argument optional on `jwt_provider.refresh_access_token()`, which is
+the method every consumer's own refresh endpoint calls — and its default
+meant "re-mint from the refresh token's own claims", which are as old as the
+token (up to `JWT_REFRESH_TOKEN_LIFETIME`, 7 days). Every call site that
+omitted the argument resurrected whatever the database had since revoked: a
+demoted admin's staff flag, a deactivated account, a deleted user. Core's own
+view had been exactly such a call site for as long as it existed.
+
+A safe behaviour that each caller must remember is not a safe behaviour. The
+django-layer provider now defaults to the database loader. `None` keeps its
+documented meaning — re-mint from the token's claims, the framework-free
+`TokenManager` behaviour — but has to be typed out, which makes it greppable
+and makes it a decision. There is no legitimate use for it inside a Django
+process.
+
+*What can break:* a caller that passed nothing and relied on stale claims now
+gets `None` when the database has no active user for the token. That is the
+fix. A caller that genuinely wants claim-only re-minting passes `None`
+explicitly.
+
+### The deleted user, and why it is not closed here
+
+A consumer also reported the profiles service serving the profile of a
+**deleted** user. The verifying path in core does not trust claims — the
+middleware, the DRF class, `JWTAuthBackend` and the channels middleware all
+resolve their principal from the database through
+`get_or_create_user_from_jwt()` — so with the default
+`JWT_CREATE_USERS_FROM_TOKEN=False` a deleted user authenticates nobody. With
+consumer mode ON, that same function **creates** the user from the token's
+claims, and it cannot distinguish "a user this service has never seen" (the
+whole point of consumer mode) from "a user this service deleted".
+
+Closing that properly needs a deletion tombstone the issuer publishes and
+verifiers consult — design work, routed rather than invented here. What 0.39.0
+changes is that the existing remedy now works: banning the user as part of
+deleting them (`blacklist_user`) reaches every peer service, because the ban
+finally shares a namespace with them.
+
+37 tests across `tests/test_revocation_namespace.py`; the cross-service ones
+reproduce the stand exactly — two cache connections differing only in
+`KEY_PREFIX` — and fail on 0.38.0 with "a token revoked in one service is
+still valid in the next".
+
 ## [0.38.0] — 2026-08-24
 
 ### Security — the admin login view checked that you had a password, not that you were staff

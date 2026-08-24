@@ -96,3 +96,80 @@ def check_blacklist_store_is_shared(app_configs=None, **kwargs):
              "warning knowingly.",
         id=W002_BLACKLIST_LOCMEM,
     )]
+
+
+#: Security-critical: a namespace that is not shared is revocation that does
+#: not propagate, and the failure is silent on both sides — the revoking
+#: service reports success, the verifying service reports 200.
+E001_REVOCATION_CACHE_MISSING = declare_security_critical(
+    "stapel_core.revocation.E001",
+    "the revocation namespace names a cache alias this deployment does not "
+    "define, so every ban and every logout is written nowhere",
+)
+W003_REVOCATION_NAMESPACE_CUSTOM = declare_security_critical(
+    "stapel_core.revocation.W003",
+    "a per-service revocation namespace is the per-service blacklist defect "
+    "with extra steps: peers compute a different key and never see the ban",
+)
+
+
+@checks.register("stapel_blacklist")
+def check_revocation_namespace(app_configs=None, **kwargs):
+    """E001/W003 — the shared namespace has to actually be shared.
+
+    Both blacklists write through ``stapel_core.core.revocation_store``, which
+    borrows the deployment's cache connection but forces a fleet-wide
+    ``KEY_PREFIX``. Two ways a deployment can defeat that, both silent:
+
+    * ``STAPEL_JWT_REVOCATION_CACHE`` names an alias that is not in ``CACHES``
+      — the store falls back to ``default``, or to nothing;
+    * ``STAPEL_JWT_REVOCATION_NAMESPACE`` is set to a non-default value. That
+      is legitimate (two fleets, one Redis) but only if EVERY peer sets the
+      identical value. A namespace that differs per service reproduces the
+      original defect exactly, with a setting that looks deliberate.
+    """
+    from django.conf import settings
+
+    from stapel_core.core.revocation_store import (
+        DEFAULT_NAMESPACE,
+        revocation_cache_alias,
+        revocation_namespace,
+    )
+
+    findings = []
+    caches = getattr(settings, "CACHES", None) or {}
+    alias = revocation_cache_alias()
+
+    if alias not in caches and "default" not in caches:
+        findings.append(checks.Error(
+            f"STAPEL_JWT_REVOCATION_CACHE names cache alias {alias!r}, which "
+            "is not defined in CACHES, and there is no 'default' to fall back "
+            "to. Token revocation and user bans are written nowhere.",
+            hint="Define the alias in CACHES, or drop the setting and let "
+                 "revocation use the default cache.",
+            id=E001_REVOCATION_CACHE_MISSING,
+        ))
+    elif alias not in caches:
+        findings.append(checks.Warning(
+            f"STAPEL_JWT_REVOCATION_CACHE names cache alias {alias!r}, which "
+            "is not defined in CACHES; revocation falls back to 'default'.",
+            hint="Define the alias, or drop the setting to say so explicitly.",
+            id="stapel_core.revocation.W004",
+        ))
+
+    namespace = revocation_namespace()
+    if namespace != DEFAULT_NAMESPACE:
+        findings.append(SecurityCriticalWarning(
+            f"STAPEL_JWT_REVOCATION_NAMESPACE is {namespace!r}, not the "
+            f"fleet default {DEFAULT_NAMESPACE!r}. Revocation only propagates "
+            "between services that agree on this value — a peer left on the "
+            "default will not see this service's bans, and this service will "
+            "not see the peer's.",
+            hint="Set the identical value in EVERY service that verifies "
+                 "tokens signed by this key, or remove it everywhere and use "
+                 "the default. Use a custom namespace only to run two "
+                 "independent fleets against one store.",
+            id=W003_REVOCATION_NAMESPACE_CUSTOM,
+        ))
+
+    return findings

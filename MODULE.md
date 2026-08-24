@@ -1273,7 +1273,8 @@ here, because the next caller will not have it.
 
 | Choke point | Owns | Refuses |
 |---|---|---|
-| `jwt_provider` (`django/jwt/provider.py`) | ALL minting: `create_tokens(user)`, `create_tokens_from_data(data)`, `refresh_access_token(token, load_user_data=None)` | a revoked jti, a user-level ban (`is_user_blacklisted`) — before the mint, never after |
+| `jwt_provider` (`django/jwt/provider.py`) | ALL minting: `create_tokens(user)`, `create_tokens_from_data(data)`, `refresh_access_token(token)` | a revoked jti, a user-level ban (`is_user_blacklisted`) — before the mint, never after |
+| `revocation_cache()` (`core/revocation_store.py`) | the ONE key namespace both blacklists write to, shared by every peer service | nothing itself — it is what makes the two above reach across services (0.39.0) |
 | `load_user_by_uid` (`django/jwt/utils.py`) | the re-mint identity on EVERY refresh path | a deleted user, an **inactive** user (0.38.0) |
 | `get_or_create_user_from_jwt` (`django/jwt/utils.py`) | the principal every authentication path resolves — middleware, DRF class, `JWTAuthBackend`, channels | an unresolvable user, an **inactive** user (0.38.0) |
 
@@ -1290,14 +1291,42 @@ report success and strand the user. A deployment that needs a **non-admin**
 cookie login writes a different view — a setting that can switch a staff gate
 off is a staff gate that is off in whichever environment nobody audited.
 
-**Refreshing re-reads the database, everywhere.** `JWTRefreshView`
-(`django/jwt/views.py`) and both middleware refresh paths
-(`django/jwt/middleware.py`) pass `load_user_by_uid`. A refresh token lives
-`JWT_REFRESH_TOKEN_LIFETIME` (7 days by default); re-minting from its own
+**Refreshing re-reads the database, everywhere — by default.**
+`jwt_provider.refresh_access_token(token)` uses `load_user_by_uid` unless the
+caller passes something else; `None` still means "re-mint from the token's own
+claims" but now has to be typed out. A refresh token lives
+`JWT_REFRESH_TOKEN_LIFETIME` (7 days by default), so re-minting from its own
 claims resurrects a staff role revoked in between (AS-2 REPLACE) and
-re-credentials a closed account. There is no path that may skip the loader.
+re-credentials a closed account. Making the loader opt-in meant every consumer
+call site was one forgotten argument away from that; from 0.39.0 the safe
+behaviour is what you get for free, in core AND in every consumer.
 
-**Not yet closed** (0.38.0, listed so it is not rediscovered as news):
+**Revocation is fleet-wide, not per-service** (`core/revocation_store.py`,
+0.39.0). Both blacklists used to write through `django.core.cache.cache`, and
+Django builds the real key from the *deployment's* `KEY_PREFIX` — which every
+service sets differently, on purpose. Sharing one Redis is not sharing a
+namespace: `auth` wrote `auth:1:jwt_blacklist:<jti>` while `profiles` looked
+for `stapel_profiles:1:jwt_blacklist:<jti>`, so a revoked token kept working
+everywhere except where it was revoked. `revocation_cache()` borrows the
+deployment's cache connection (same backend, same `LOCATION`, same `OPTIONS`)
+with `KEY_PREFIX`/`VERSION` forced to fleet values, so every peer computes the
+same key on every backend.
+
+```python
+# both optional; if you change either, change it in EVERY peer service
+STAPEL_JWT_REVOCATION_CACHE = "default"                  # alias to borrow
+STAPEL_JWT_REVOCATION_NAMESPACE = "stapel_revocation"    # the shared prefix
+```
+
+System checks (tag `stapel_blacklist`): `stapel_core.revocation.E001` — the
+named alias is absent and there is no `default`, so bans are written nowhere;
+`W004` — the alias is absent but `default` exists; `W003` (security-critical)
+— a non-default namespace, which is legitimate for two fleets on one store and
+is the original defect if it is one service's local opinion. Plus the existing
+`stapel_core.blacklist.W001` (fail-open hatch) and `W002` (LocMem, so
+revocation is per-worker).
+
+**Not yet closed** (0.39.0, listed so it is not rediscovered as news):
 `JWTLogoutView` blacklists a jti taken from an *unverified* decode, so a
 forged unsigned token carrying a victim's `jti`+`exp` revokes that victim's
 token (low exploitability — `jti` is a `uuid4`); `CsrfExemptAPIMiddleware`
@@ -1305,7 +1334,14 @@ exempts an `/api/` request whose only credential is the Django **session**
 cookie, which its own docstring says it should not; refresh tokens are
 neither rotated nor bound to a tracked session row, so "log out everywhere"
 depends entirely on the blacklist; and `JWT_CREATE_USERS_FROM_TOKEN=True`
-(consumer mode, default off) is a full staff-minting primitive by design.
+(consumer mode, default off) is a full staff-minting primitive by design —
+including **resurrecting a deleted user** from the token's claims, which no
+gate here can distinguish from "a user this service has never seen". Closing
+that one needs a deletion tombstone the issuer publishes, which is design
+work, not a patch. Until then a consumer service holds the line by leaving
+`JWT_CREATE_USERS_FROM_TOKEN` off, or by banning the user
+(`blacklist_user`) as part of deleting them — which, from 0.39.0, actually
+reaches every peer.
 
 ### Privilege gateway — `STAPEL_GATEWAY` (`gateway/`)
 

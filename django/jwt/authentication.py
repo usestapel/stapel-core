@@ -8,28 +8,23 @@ for DRF views and Swagger documentation.
 import logging
 from rest_framework import authentication
 
+from stapel_core.core.revocation_store import revocation_cache
+
 logger = logging.getLogger(__name__)
 
-# User-level blacklist key prefix — uses raw Redis to bypass Django KEY_PREFIX,
-# so the blacklist works across all services (auth, catalog, profiles, etc.)
+# User-level blacklist key, written inside the SHARED revocation namespace
+# (stapel_core.core.revocation_store) so one ban is visible to every service
+# that verifies tokens signed by the same key.
+#
+# This used to reach for `cache.client.get_client()` — a raw django_redis
+# handle — precisely to bypass Django's per-service cache KEY_PREFIX. That
+# workaround was right about the problem and wrong about the scope: it worked
+# on exactly one backend and silently fell back to the prefix-scoped (i.e.
+# per-service, i.e. broken) path on every other, and it left the OTHER half
+# of revocation — the per-jti TokenBlacklist — with no bypass at all. The
+# namespace is now the mechanism, both halves use it, and no backend is
+# special.
 _USER_BLACKLIST_PREFIX = 'user_blacklisted:'
-
-
-def _get_redis_client():
-    """Return a raw Redis client, or None when the backend is not django_redis.
-
-    Only django_redis exposes ``.client``, and only through it can we bypass
-    Django's cache ``KEY_PREFIX`` so one ban is visible to every service.
-    ``None`` is a normal answer, not a failure — callers fall back to the
-    Django cache framework, which works on every backend. Exceptions are
-    *not* swallowed here: whether an unreachable store means "not banned" or
-    "cannot tell" is the caller's decision, and it used to be silently
-    answered "not banned".
-    """
-    from django.core.cache import cache
-    if hasattr(cache, 'client'):
-        return cache.client.get_client()
-    return None
 
 
 def _blacklist_fail_open() -> bool:
@@ -47,14 +42,9 @@ def blacklist_user(user_id: str, ttl: int = 7200) -> bool:
     """
     Blacklist a user so all their tokens are rejected.
 
-    Prefers raw Redis so the key is visible across all services regardless of
-    Django's cache ``KEY_PREFIX``, and falls back to the Django cache
-    framework on any other backend. The fallback matters: with Django's
-    default LocMemCache this function used to only log an error, so a ban was
-    a permanent no-op and nothing said so. The fallback is scoped by whatever
-    ``KEY_PREFIX`` the backend carries, so on a non-django_redis cache a ban
-    reaches every service sharing that cache and prefix — an enforced local
-    ban beats an unenforceable global one.
+    Written into the shared revocation namespace, so the ban is visible to
+    every service pointed at the same store regardless of each one's own
+    cache ``KEY_PREFIX`` — on every backend, not only django_redis.
 
     Args:
         user_id: UUID of the user to blacklist
@@ -66,12 +56,7 @@ def blacklist_user(user_id: str, ttl: int = 7200) -> bool:
     """
     key = f'{_USER_BLACKLIST_PREFIX}{user_id}'
     try:
-        redis_client = _get_redis_client()
-        if redis_client is not None:
-            redis_client.setex(key, ttl, '1')
-        else:
-            from django.core.cache import cache
-            cache.set(key, '1', ttl)
+        revocation_cache().set(key, '1', ttl)
     except Exception as e:
         logger.error(f"Cannot blacklist user {user_id}: {e}")
         return False
@@ -83,12 +68,7 @@ def unblacklist_user(user_id: str) -> bool:
     """Remove user from blacklist. Returns True when the store accepted it."""
     key = f'{_USER_BLACKLIST_PREFIX}{user_id}'
     try:
-        redis_client = _get_redis_client()
-        if redis_client is not None:
-            redis_client.delete(key)
-        else:
-            from django.core.cache import cache
-            cache.delete(key)
+        revocation_cache().delete(key)
     except Exception as e:
         logger.error(f"Cannot unblacklist user {user_id}: {e}")
         return False
@@ -106,11 +86,7 @@ def is_user_blacklisted(user_id: str) -> bool:
     """
     key = f'{_USER_BLACKLIST_PREFIX}{user_id}'
     try:
-        redis_client = _get_redis_client()
-        if redis_client is not None:
-            return bool(redis_client.exists(key))
-        from django.core.cache import cache
-        return bool(cache.get(key))
+        return bool(revocation_cache().get(key))
     except Exception as e:
         logger.error(f"Error checking user blacklist for {user_id}: {e}")
         return not _blacklist_fail_open()

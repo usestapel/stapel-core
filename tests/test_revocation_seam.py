@@ -29,6 +29,18 @@ USER = {"user_id": "u1", "email": "u1@example.com"}
 
 LONG = timedelta(hours=1)
 IS_USER_BLACKLISTED = "stapel_core.django.jwt.authentication.is_user_blacklisted"
+#: Both blacklists reach the store through the shared revocation namespace
+#: (0.39.0), so "the store is down" is simulated there, not on this service's
+#: own cache connection.
+BLACKLIST_STORE = "stapel_core.core.token_blacklist.revocation_cache"
+
+
+def _store_down():
+    from unittest.mock import MagicMock
+
+    down = MagicMock()
+    down.get.side_effect = RuntimeError("down")
+    return down
 
 
 # ---------------------------------------------------------------------------
@@ -79,13 +91,13 @@ class TestManagerRefusesRevokedTokens:
 
     def test_store_down_fails_closed(self):
         access, _ = self.manager.create_tokens(USER)
-        with patch("django.core.cache.cache.get", side_effect=RuntimeError("down")):
+        with patch(BLACKLIST_STORE, return_value=_store_down()):
             assert self.manager.validate_access_token(access) is None
 
     @override_settings(STAPEL_BLACKLIST_FAIL_OPEN=True)
     def test_store_down_fail_open_hatch_admits(self):
         access, _ = self.manager.create_tokens(USER)
-        with patch("django.core.cache.cache.get", side_effect=RuntimeError("down")):
+        with patch(BLACKLIST_STORE, return_value=_store_down()):
             assert self.manager.validate_access_token(access) is not None
 
 
@@ -162,23 +174,27 @@ class TestProviderRefusesRevokedAndBanned:
             assert provider.validate_token(access) is None
 
     def test_revoked_refresh_token_mints_nothing(self, provider):
+        # `None` = re-mint from the token's own claims. Explicit here because
+        # USER is a synthetic id with no database row, and because what this
+        # test pins is revocation, not the loader (0.39.0 made the database
+        # loader the default; tests/test_revocation_namespace.py pins that).
         _, refresh = provider.create_tokens_from_data(USER)
         with patch(IS_USER_BLACKLISTED, return_value=False):
-            assert provider.refresh_access_token(refresh) is not None
+            assert provider.refresh_access_token(refresh, None) is not None
             assert provider.blacklist_token(refresh) is True
-            assert provider.refresh_access_token(refresh) is None
+            assert provider.refresh_access_token(refresh, None) is None
 
     def test_banned_user_gets_no_new_access_token(self, provider):
         """The mint is the operation that outlives the presented credential."""
         _, refresh = provider.create_tokens_from_data(USER)
         with patch(IS_USER_BLACKLISTED, return_value=True):
-            assert provider.refresh_access_token(refresh) is None
+            assert provider.refresh_access_token(refresh, None) is None
 
     def test_clean_token_and_unbanned_user_still_pass(self, provider):
         access, refresh = provider.create_tokens_from_data(USER)
         with patch(IS_USER_BLACKLISTED, return_value=False):
             assert provider.validate_token(access)["user_id"] == "u1"
-            assert provider.refresh_access_token(refresh) is not None
+            assert provider.refresh_access_token(refresh, None) is not None
 
 
 # ---------------------------------------------------------------------------

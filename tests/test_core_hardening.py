@@ -64,14 +64,18 @@ def test_csrf_non_api_untouched():
 
 
 def test_blacklist_fails_closed_when_cache_down(monkeypatch):
-    from django.core.cache import cache
+    # The store is reached through the SHARED revocation namespace, not
+    # `django.core.cache.cache` — a per-service cache prefix is exactly what
+    # used to isolate revocation between services (0.39.0).
+    from unittest.mock import MagicMock
 
+    from stapel_core.core import token_blacklist as tb
     from stapel_core.core.token_blacklist import TokenBlacklist
 
-    def boom(*a, **k):
-        raise RuntimeError("redis down")
+    down = MagicMock()
+    down.get.side_effect = RuntimeError("redis down")
+    monkeypatch.setattr(tb, "revocation_cache", lambda: down)
 
-    monkeypatch.setattr(cache, "get", boom)
     assert TokenBlacklist().is_blacklisted("some-jti") is True
     with override_settings(STAPEL_BLACKLIST_FAIL_OPEN=True):
         assert TokenBlacklist().is_blacklisted("some-jti") is False

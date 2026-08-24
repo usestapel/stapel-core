@@ -1,7 +1,6 @@
 """Coverage tests for stapel_core.django.jwt authentication, provider, backends and session."""
 import time
 import uuid
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import jwt as pyjwt
@@ -38,14 +37,17 @@ class FakeUser:
 
 
 # ---------------------------------------------------------------------------
-# User-level redis blacklist helpers
+# User-level blacklist helpers
+#
+# These used to reach for `cache.client.get_client()` — a raw django_redis
+# handle — to bypass Django's per-service cache KEY_PREFIX, and fell back to
+# the prefix-scoped (i.e. per-service, i.e. broken) path on every other
+# backend. 0.39.0 replaced the workaround with the shared revocation
+# namespace, so there is one seam to patch and no special backend.
 # ---------------------------------------------------------------------------
 
-class _RedisCache:
-    """Fake django-redis style cache exposing .client.get_client()."""
-
-    def __init__(self, redis):
-        self.client = SimpleNamespace(get_client=lambda: redis)
+#: The shared revocation namespace, as imported into the module under test.
+USER_BLACKLIST_STORE = "stapel_core.django.jwt.authentication.revocation_cache"
 
 
 class _ExplodingCache:
@@ -54,69 +56,66 @@ class _ExplodingCache:
 
 
 class TestUserBlacklistHelpers:
-    def test_blacklist_user_uses_raw_redis(self):
-        redis = MagicMock()
-        with patch("django.core.cache.cache", _RedisCache(redis)):
-            blacklist_user("u1", ttl=60)
-        redis.setex.assert_called_once_with("user_blacklisted:u1", 60, "1")
+    def test_blacklist_user_writes_to_the_shared_namespace(self):
+        store = MagicMock()
+        with patch(USER_BLACKLIST_STORE, return_value=store):
+            assert blacklist_user("u1", ttl=60) is True
+        store.set.assert_called_once_with("user_blacklisted:u1", "1", 60)
 
-    def test_blacklist_user_without_redis_falls_back_to_django_cache(self):
-        # LocMemCache (conftest) has no .client attribute -> no redis client.
-        # It used to only log an error, which made the ban a permanent no-op.
-        from django.core.cache import cache
-        cache.delete("user_blacklisted:locmem-user")
+    def test_ban_round_trips_on_the_real_store(self):
+        # It used to only log an error on a non-django_redis backend, which
+        # made the ban a permanent no-op with nothing saying so.
         assert blacklist_user("locmem-user") is True
         assert is_user_blacklisted("locmem-user") is True
         assert unblacklist_user("locmem-user") is True
         assert is_user_blacklisted("locmem-user") is False
 
     def test_blacklist_user_reports_failure(self):
-        with patch("django.core.cache.cache", _ExplodingCache()):
+        with patch(USER_BLACKLIST_STORE, return_value=_ExplodingCache()):
             assert blacklist_user("u1") is False
             assert unblacklist_user("u1") is False
 
-    def test_unblacklist_user_with_redis(self):
-        redis = MagicMock()
-        with patch("django.core.cache.cache", _RedisCache(redis)):
+    def test_unblacklist_user_deletes_from_the_shared_namespace(self):
+        store = MagicMock()
+        with patch(USER_BLACKLIST_STORE, return_value=store):
             unblacklist_user("u1")
-        redis.delete.assert_called_once_with("user_blacklisted:u1")
+        store.delete.assert_called_once_with("user_blacklisted:u1")
 
-    def test_unblacklist_user_without_redis_noop(self):
+    def test_unblacklist_unknown_user_is_a_noop(self):
         assert unblacklist_user("u1") is True  # must not raise
 
     def test_is_user_blacklisted_true(self):
-        redis = MagicMock()
-        redis.exists.return_value = 1
-        with patch("django.core.cache.cache", _RedisCache(redis)):
+        store = MagicMock()
+        store.get.return_value = "1"
+        with patch(USER_BLACKLIST_STORE, return_value=store):
             assert is_user_blacklisted("u1") is True
+        store.get.assert_called_once_with("user_blacklisted:u1")
 
     def test_is_user_blacklisted_false(self):
-        redis = MagicMock()
-        redis.exists.return_value = 0
-        with patch("django.core.cache.cache", _RedisCache(redis)):
+        store = MagicMock()
+        store.get.return_value = None
+        with patch(USER_BLACKLIST_STORE, return_value=store):
             assert is_user_blacklisted("u1") is False
 
-    def test_is_user_blacklisted_without_redis_reads_django_cache(self):
-        # No raw-redis client is not "not banned": the Django cache framework
-        # answers, and an unbanned user is simply absent from it.
+    def test_an_unbanned_user_is_simply_absent(self):
         assert is_user_blacklisted("never-banned") is False
 
     def test_is_user_blacklisted_fails_closed_when_store_is_down(self):
         # Was pinned as False ("error swallowed"), i.e. an unreachable store
         # silently unbanned everyone. Revocation must outlive the store.
-        with patch("django.core.cache.cache", _ExplodingCache()):
+        with patch(USER_BLACKLIST_STORE, return_value=_ExplodingCache()):
             assert is_user_blacklisted("u1") is True
 
     def test_is_user_blacklisted_fail_open_hatch(self):
         from django.test import override_settings
-        with patch("django.core.cache.cache", _ExplodingCache()):
+        with patch(USER_BLACKLIST_STORE, return_value=_ExplodingCache()):
             with override_settings(STAPEL_BLACKLIST_FAIL_OPEN=True):
                 assert is_user_blacklisted("u1") is False
 
-    def test_is_user_blacklisted_fails_closed_on_redis_error(self):
-        redis = MagicMock()
-        redis.exists.side_effect = RuntimeError("connection refused")
-        with patch("django.core.cache.cache", _RedisCache(redis)):
+    def test_is_user_blacklisted_fails_closed_on_store_error(self):
+        store = MagicMock()
+        store.get.side_effect = RuntimeError("connection refused")
+        with patch(USER_BLACKLIST_STORE, return_value=store):
             assert is_user_blacklisted("u1") is True
 
 
@@ -246,11 +245,18 @@ class TestJWTProvider:
         )
         assert provider.validate_token(access)["user_id"] == "d1"
 
-    def test_refresh_access_token(self, provider):
+    def test_refresh_reads_the_database_by_default(self, provider):
+        """0.39.0: the loader is the default, so an id with no row mints nothing."""
         _, refresh = provider.create_tokens_from_data(
             {"user_id": "r1", "email": "r@example.com"}
         )
-        new_access = provider.refresh_access_token(refresh)
+        assert provider.refresh_access_token(refresh) is None
+
+    def test_refresh_from_claims_when_the_caller_says_so(self, provider):
+        _, refresh = provider.create_tokens_from_data(
+            {"user_id": "r1", "email": "r@example.com"}
+        )
+        new_access = provider.refresh_access_token(refresh, None)
         assert provider.validate_token(new_access)["user_id"] == "r1"
 
     def test_blacklist_token_lifecycle(self, provider):

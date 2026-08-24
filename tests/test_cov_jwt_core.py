@@ -246,6 +246,11 @@ class TestJWTHandlerGaps:
 # TokenBlacklist error paths
 # ---------------------------------------------------------------------------
 
+#: The one seam both blacklists reach the store through (0.39.0): the shared
+#: revocation namespace, not this service's own cache connection.
+BLACKLIST_STORE = "stapel_core.core.token_blacklist.revocation_cache"
+
+
 class TestTokenBlacklistErrors:
     def _broken_cache(self):
         broken = MagicMock()
@@ -257,28 +262,28 @@ class TestTokenBlacklistErrors:
 
     def test_blacklist_token_error_returns_false(self):
         bl = TokenBlacklist(key_prefix="err_bl")
-        with patch("django.core.cache.cache", self._broken_cache()):
+        with patch(BLACKLIST_STORE, return_value=self._broken_cache()):
             assert bl.blacklist_token("jti-x", timedelta(seconds=60)) is False
 
     def test_is_blacklisted_fails_closed_by_default(self):
         bl = TokenBlacklist(key_prefix="err_bl")
-        with patch("django.core.cache.cache", self._broken_cache()):
+        with patch(BLACKLIST_STORE, return_value=self._broken_cache()):
             assert bl.is_blacklisted("jti-x") is True
 
     @override_settings(STAPEL_BLACKLIST_FAIL_OPEN=True)
     def test_is_blacklisted_fail_open_when_configured(self):
         bl = TokenBlacklist(key_prefix="err_bl")
-        with patch("django.core.cache.cache", self._broken_cache()):
+        with patch(BLACKLIST_STORE, return_value=self._broken_cache()):
             assert bl.is_blacklisted("jti-x") is False
 
     def test_remove_from_blacklist_error_returns_false(self):
         bl = TokenBlacklist(key_prefix="err_bl")
-        with patch("django.core.cache.cache", self._broken_cache()):
+        with patch(BLACKLIST_STORE, return_value=self._broken_cache()):
             assert bl.remove_from_blacklist("jti-x") is False
 
     def test_clear_all_error_returns_false(self):
         bl = TokenBlacklist(key_prefix="err_bl")
-        with patch("django.core.cache.cache", self._broken_cache()):
+        with patch(BLACKLIST_STORE, return_value=self._broken_cache()):
             assert bl.clear_all() is False
 
 
