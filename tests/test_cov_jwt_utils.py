@@ -246,14 +246,15 @@ class TestGetOrCreateUserFromJWT:
             is_superuser=False,
             is_active=False,
         )
-        # The sync still runs; the return value is None because an inactive
-        # user authenticates nobody (0.38.0). Read the row, not the return.
-        assert jwt_utils.get_or_create_user_from_jwt(data) is None
+        assert jwt_utils.get_or_create_user_from_jwt(data) is not None
         user.refresh_from_db()
         assert user.is_staff is False
         assert user.is_superuser is False
-        # is_active IS synced (both directions)
-        assert user.is_active is False
+        # is_active is NOT synced, in either direction (0.43.0): a claim that
+        # can write this column can reactivate a row and then satisfy the
+        # gate that reads it. Deactivation travels in the revocation
+        # namespace — tests/test_deactivation_broadcast.py.
+        assert user.is_active is True
 
     def test_existing_user_roles_replaced_from_claim(self):
         User = get_user_model()

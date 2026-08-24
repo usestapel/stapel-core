@@ -291,6 +291,13 @@ def _tombstoned(uid) -> bool:
     return is_user_tombstoned(uid)
 
 
+def _deactivated(uid) -> bool:
+    """Imported inside the call so tests (and callers) patch ONE name."""
+    from .deactivation import is_user_deactivated
+
+    return is_user_deactivated(uid)
+
+
 def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     """
     Get or create the Django user a validated token speaks for.
@@ -310,11 +317,15 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     account kept authenticating on every one of them until its access token
     expired on its own.
 
-    The check runs AFTER the sync below, deliberately: in consumer mode the
-    ``is_active`` claim is replayed onto the local row first, so a user this
-    service had stale-disabled is reactivated by the authoritative claim and
-    then passes. In authoritative mode the local database wins and a closed
-    account is refused, which is the whole point of closing it.
+    Consumer mode learns lifecycle from the fleet-wide revocation namespace,
+    NOT from the token: ``user_deactivated:<uid>`` is consulted before any
+    claim is trusted, and the ``is_active`` claim no longer moves the local
+    row at all. It used to — replayed onto the row *before* this gate — so a
+    token minted while the account was live carried ``is_active: true`` for
+    the rest of its lifetime, reactivated the shadow row, and then passed the
+    check it had just satisfied. Deactivation reached the issuer and nobody
+    else (measured on a deployed fleet, 0.41.0). A gate a credential can
+    satisfy by asserting its own conclusion is not a gate.
 
     Args:
         user_data: User data from a token that has ALREADY been validated
@@ -335,6 +346,16 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
         if uid and _tombstoned(uid):
             logger.warning(
                 "JWT authentication refused: user %s was deleted at the issuer",
+                uid,
+            )
+            return None
+        # Deactivation, same shape and the same reason it cannot be inferred
+        # locally: the shadow row says whatever the last token wrote, and the
+        # token in hand says the account was live when it was minted. Only
+        # the issuer knows, so the issuer publishes (0.43.0).
+        if uid and _deactivated(uid):
+            logger.warning(
+                "JWT authentication refused: user %s is deactivated at the issuer",
                 uid,
             )
             return None
@@ -402,14 +423,14 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
                 if list(user.staff_roles or []) != claim_roles:
                     user.staff_roles = claim_roles
                     updated = True
-            # Account lifecycle, same rule as roles: replace only when the
-            # claim is present. Absence = no information — a token minted
-            # before the claim existed must not activate anybody.
-            if "is_active" in user_data:
-                jwt_is_active = bool(user_data["is_active"])
-                if user.is_active != jwt_is_active:
-                    user.is_active = jwt_is_active
-                    updated = True
+            # Account lifecycle is NOT synced from the claim, in either
+            # direction (0.43.0). A token carries the lifecycle state of the
+            # moment it was minted and asserts it for the rest of its life,
+            # so letting it write `is_active` let it reactivate a row and
+            # then pass the gate that reads that row. Fleet-wide lifecycle
+            # travels in the revocation namespace (`user_deactivated:<uid>`,
+            # checked above); what is left in this column is whatever THIS
+            # service decided locally, which a bearer token may not overrule.
         # else: authoritative-user-store mode (auth service / monolith with
         # stapel-auth): the local DB is canonical, a token must never write
         # staff attributes OR account lifecycle back into it. (This fixes the

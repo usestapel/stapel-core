@@ -203,6 +203,21 @@ class CommonDjangoConfig(AppConfig):
 
         connect_deletion_tombstone()
 
+        # Deactivation broadcast (stapel_core.django.jwt.deactivation): a
+        # post_save receiver on AUTH_USER_MODEL publishes "this uid is
+        # deactivated" — and lifts it on reactivation — into the same
+        # fleet-wide namespace. Connected here for the same reason as the
+        # tombstone: a consumer-mode verifier learns lifecycle only from
+        # claims, and a token minted while the account was live asserts
+        # is_active=true until it expires. The alternative was an operator
+        # procedure ("deactivate AND ban"), which is the shape this pair
+        # already rejected once.
+        from stapel_core.django.jwt.deactivation import (
+            connect_deactivation_broadcast,
+        )
+
+        connect_deactivation_broadcast()
+
         # Admin visibility (admin-suite AS-3): re-register contrib service
         # tables (auth.Group, sessions.Session) under declaration-aware admins
         # and apply STAPEL_ADMIN["MODELS"] overrides (None = unregister,

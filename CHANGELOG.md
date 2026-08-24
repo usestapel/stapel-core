@@ -1,5 +1,98 @@
 # Changelog
 
+## [0.43.0] — 2026-08-24
+
+### Security — deactivation stopped at the issuer
+
+Measured on a deployed fleet at 0.41.0. `is_active=False` set at the issuer,
+same unexpired access token, immediately after:
+
+```
+iron-auth       /auth/api/v1/sessions/   -> 401   (issuer mode, correct)
+iron-profiles   /profiles/api/v1/me      -> 200   <-- still served
+iron-workspaces                          -> 200   <-- still served
+iron-billing                             -> 200   <-- still served
+```
+
+Two independent causes, either one sufficient.
+
+**The claim satisfied the gate meant to judge it.** In consumer mode
+(`JWT_CREATE_USERS_FROM_TOKEN=True`) the `is_active` claim was replayed onto
+the local shadow row *before* the `is_active` gate read that row. A token
+minted while the account was live carries `is_active: true` for the rest of its
+lifetime, so it reactivated the row and then passed the check it had just
+satisfied. The ordering was deliberate and documented — the reasoning being
+that the issuer is authoritative — but a claim is not the issuer, it is a
+snapshot of the issuer taken when the token was minted.
+
+**And nothing told the peers.** Even with the ordering fixed, a consumer-mode
+service learns lifecycle only from claims, so deactivation would have waited
+for the next mint — up to an access-token lifetime, or forever if the user
+never signs in again.
+
+The interim remedy (`blacklist_user`, working fleet-wide since 0.39.0) made the
+only correct operator procedure "deactivate **and** ban". That is the
+remember-to-do-it shape this package already rejected for deletion when the
+tombstone became a `post_delete` receiver rather than a caller's duty.
+
+**Added — `stapel_core.django.jwt.deactivation`**
+
+- `user_deactivated:<uid>` — a fourth key space in the shared revocation
+  namespace, alongside `jwt_blacklist:` (is this token revoked),
+  `user_blacklisted:` (is this person banned) and `user_deleted:` (is this
+  account gone). Four questions, four keys.
+- A `post_save` receiver on `AUTH_USER_MODEL`, connected in
+  `CommonDjangoConfig.ready`, publishes on `is_active=False`. The state change
+  carries its own announcement; no caller has to remember.
+- `deactivate_user(uid)`, `lift_deactivation(uid)`, `is_user_deactivated(uid)`.
+  Reads fail **CLOSED**, through the same single `STAPEL_BLACKLIST_FAIL_OPEN`
+  hatch as the blacklists and the tombstone. TTL is `tombstone_ttl()` — shared
+  deliberately, because both answer "how long can a credential naming this uid
+  still be presented", and a second knob is how the halves of revocation drift
+  apart.
+- Consumer-mode verifiers consult it in `get_or_create_user_from_jwt`, before
+  any claim is trusted. Issuer mode does not — its database is the account, and
+  it pays no cache read.
+
+### Reactivation LIFTS the record — this is NOT the deletion rule
+
+`lift_tombstone` exists only for an operator who deleted the wrong row, because
+every automatic reason to lift a tombstone is a way for a token to undo a
+deletion. **Deactivation is different on purpose**: suspending and restoring an
+account is an ordinary, expected, repeatable operation, so the same receiver
+deletes the key when a user is saved with `is_active=True`. An account that
+cannot be un-suspended is a bug, not a hardening. Do not copy the tombstone's
+no-automatic-lift rule here by analogy.
+
+### Changed — the `is_active` claim no longer writes the local column
+
+**In either direction.** It is not "write only the restrictive direction": a
+claim that can write this column at all is a claim that participates in the
+decision it is supposed to be judged by. In consumer mode the column now
+records only what *that* service decided locally, which a bearer token cannot
+overrule; fleet-wide lifecycle lives in the key space. `is_staff`,
+`is_superuser`, `staff_roles`, `email`, `phone`, `auth_type` and `is_anonymous`
+sync exactly as before (AS-2 unchanged).
+
+Only the authoritative store publishes — the receiver returns early in consumer
+mode. A peer broadcasting its own shadow row's state could *lift* the issuer's
+deactivation, which is this same failure inverted.
+
+### Upgrading
+
+- **Deployments can drop the "deactivate and ban" procedure.** Existing
+  `user_blacklisted:` entries keep working and are untouched.
+- **`User.objects.filter(...).update(is_active=False)` still does not
+  publish** — Django emits no `post_save` for queryset updates. Call
+  `deactivate_user(uid)` alongside it, or deactivate through instances. This is
+  the one hole the receiver cannot close, and it is named rather than left to be
+  discovered.
+- **Consumer-mode shadow rows that a claim previously set `is_active=False`
+  will no longer be reactivated by a claim.** In practice there should be none
+  (an issuer refuses to mint for an inactive user, so `is_active: false` rarely
+  reaches a token at all), but if your peers hold such rows, set them active
+  once — the fleet-wide state is the key space now.
+
 ## [0.42.0] — 2026-08-24
 
 ### Security — the OAuth seam could not ask who a token was minted for

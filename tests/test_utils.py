@@ -312,17 +312,30 @@ class TestGetOrCreateUserFromJwt:
         user = get_or_create_user_from_jwt(downgrade)
         assert not user.is_superuser  # REPLACE: downgrade now lands
 
-    def test_updates_is_active(self):
+    def test_the_is_active_claim_does_not_write_the_column(self):
+        """0.43.0: lifecycle is not synced from the token, in either direction.
+
+        A token asserts the lifecycle state of the moment it was minted for
+        the rest of its life, so a claim that could write this column could
+        reactivate a row and then pass the gate that reads it — which is
+        what happened on a deployed fleet. Fleet-wide deactivation travels
+        in the revocation namespace instead (`user_deactivated:<uid>`,
+        consulted before any claim is trusted); see
+        tests/test_deactivation_broadcast.py.
+        """
         data = self._data(is_active=True)
         user = get_or_create_user_from_jwt(data)
         assert user.is_active
 
-        deactivated = self._data(user_id=str(user.pk), is_active=False, email=data["email"], username=data["username"])
-        # The claim is still written down; the caller gets None, because a
-        # deactivated account must not authenticate (0.38.0).
-        assert get_or_create_user_from_jwt(deactivated) is None
+        claims_inactive = self._data(
+            user_id=str(user.pk),
+            is_active=False,
+            email=data["email"],
+            username=data["username"],
+        )
+        assert get_or_create_user_from_jwt(claims_inactive) is not None
         user.refresh_from_db()
-        assert not user.is_active
+        assert user.is_active, "the claim wrote itself onto the row"
 
     @override_settings(JWT_CREATE_USERS_FROM_TOKEN=False)
     def test_returns_none_for_unknown_user_when_creation_disabled(self):

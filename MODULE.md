@@ -1372,9 +1372,10 @@ refresh (bounded by the access-token lifetime, not per request), and no new
 failure mode: the refresh path already fails closed on an unreachable store via
 the user-ban check.
 
-Three key spaces, deliberately distinct, so the three questions never answer
+Four key spaces, deliberately distinct, so the four questions never answer
 each other's: `jwt_blacklist:<jti>` (is this token revoked), `user_blacklisted:<uid>`
-(is this person banned), `user_deleted:<uid>` (is this account gone).
+(is this person banned), `user_deleted:<uid>` (is this account gone),
+`user_deactivated:<uid>` (is this account suspended).
 
 TTL derives from the deployment's own `JWT_REFRESH_TOKEN_LIFETIME`, so
 lengthening refresh tokens lengthens tombstones automatically;
@@ -1383,10 +1384,44 @@ below the refresh lifetime. `stapel_core.revocation.E002` refuses a boot that
 configures it shorter — a tombstone that ends before the credential does is
 not a trade-off, it is an unclosed hole with a number on it.
 
-All three revocation reads fail **CLOSED** on an unreachable store, flipped
+All four revocation reads fail **CLOSED** on an unreachable store, flipped
 together by the single `STAPEL_BLACKLIST_FAIL_OPEN` hatch. For the tombstone
 that means a consumer-mode service loses availability while its cache is
 down, rather than a deleted person losing their deletion.
+
+**Deactivation is a fact too, and it reaches the peers** (`django/jwt/deactivation.py`, 0.43.0).
+Measured on a deployed fleet at 0.41.0: `is_active=False` at the issuer, same
+unexpired token — the issuer answered 401 and every consumer-mode peer kept
+answering 200. Two causes, either sufficient. The `is_active` claim was
+replayed onto the local shadow row **before** the `is_active` gate read that
+row, so a token minted while the account was live asserted `is_active: true`,
+reactivated the row, and passed the check it had just satisfied — a gate a
+credential can satisfy by asserting its own conclusion is not a gate. And
+nothing published the change, so a peer would have learned of it only at the
+next mint, or never.
+
+Now: a `post_save` receiver on `AUTH_USER_MODEL` (connected in
+`CommonDjangoConfig.ready`, like the tombstone) publishes `user_deactivated:<uid>`,
+consumer-mode verifiers consult it before trusting any claim, and **the
+`is_active` claim no longer moves the local column in either direction**. In
+consumer mode that column now records only what *that* service decided
+locally, which a bearer token may not overrule; fleet-wide lifecycle lives in
+the key space. Issuer mode is unchanged and pays no cache read — its database
+is the account.
+
+**Reactivation lifts the record, and that is the deliberate difference from
+the deletion tombstone.** `lift_tombstone` exists only for an operator who
+deleted the wrong row, because every automatic reason to lift a tombstone is a
+way for a token to undo a deletion. Suspending and restoring an account is an
+ordinary, repeatable operation, so the same receiver deletes the key on
+`is_active=True`. Do not copy the tombstone's no-automatic-lift rule here by
+analogy.
+
+Only the authoritative store publishes: the receiver returns early in consumer
+mode, because a peer broadcasting its own shadow row's state could *lift* the
+issuer's deactivation — the same failure, inverted. The one hole the receiver
+cannot close is `User.objects.filter(...).update(is_active=False)`, which emits
+no signal; call `deactivate_user(uid)` alongside it.
 
 **Not yet closed** (0.40.0, listed so it is not rediscovered as news):
 refresh tokens are neither **rotated** nor **bound to a tracked session row**,
@@ -1990,6 +2025,7 @@ mechanism; the `stapel_mounts` private names re-export from there unchanged.
 
 ## Anti-patterns
 
+- **Do not sync an account-lifecycle flag from a token claim.** A token asserts the state of the moment it was minted for the rest of its life, so a claim that can write `is_active` can reactivate a row and then satisfy the gate that reads it. Lifecycle travels in the revocation namespace; the local column is a local decision.
 - **Do not resolve an identity from a token you did not mint without checking its audience.** `OAuthProvider.get_user_data` answers "who is the holder of this token", never "may this token speak for that person here". Run `check_audience` first for any caller-supplied token, and leave `verifies_audience = False` on a provider you cannot actually introspect — a provider that looks verified but is not is worse than one that plainly refuses.
 - **Do not import other stapel modules from core** (or from each other).
   Cross-module communication is comm Actions/Functions/Tasks by string name
