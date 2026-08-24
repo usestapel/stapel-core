@@ -36,9 +36,10 @@ points below; a generic fix or gap belongs **upstream** (see
   `check_translation_catalogs` gate. `STAPEL_I18N["LOCALES"]` is the single
   project-languages knob.
 - `django` — service conventions: transactional outbox, task store,
-  `StapelResponse` / `StapelErrorResponse` / error-key registry, OpenAPI
-  helpers and postprocessing hooks, JWT auth middleware, common settings,
-  management commands.
+  `StapelResponse` / `StapelErrorResponse` / error-key registry, the
+  serializer seam and thin-view base (`SerializerSeamMixin` /
+  `StapelAPIView`), OpenAPI helpers and postprocessing hooks, JWT auth
+  middleware, common settings, management commands.
 - `media` — one media interface over swappable storage backends
   (images-and-cdn.md §1): `media.describe(ref)` returns the render-metadata
   snapshot (`{mime, bytes, width, height, aspect, duration_ms, preview_b64,
@@ -714,6 +715,88 @@ pairing gate accepts). `UNDECLARED_OVERRIDES` (`"error"` default, `"warn"`) is
 the one policy switch:
 the escape hatch for a host onboarding a legacy catalog it did not write.
 Fleet libraries run the default.
+
+### Serializer seam & thin views (`django/api/views.py`)
+
+The layered stance (system-design §8.1) asks a view to be *thin*: validate with
+a serializer, hand a DTO to the service layer, render through a serializer,
+return `StapelResponse`. Nothing in that shape is module-specific — and yet
+nineteen stapel modules hand-wrote the same `SerializerSeamMixin`, because the
+core did not ship one (`docs/reference/module-extension-gaps.md`, meettoday-gap
+item 2). 0.37.0 ships it once.
+
+```python
+from stapel_core.django.api.views import SerializerSeamMixin, StapelAPIView
+
+class CheckoutView(StapelAPIView):
+    request_serializer_class = CheckoutRequestSerializer
+    response_serializer_class = CheckoutResponseSerializer
+
+    def post(self, request):
+        data = self.validated_request_data(request)
+        url, sid = services.create_checkout_session(**data)
+        return self.serialized_response(CheckoutResponse(url, sid))
+```
+
+**`SerializerSeamMixin`** — `request_serializer_class` /
+`response_serializer_class` class attributes, read only through
+`get_request_serializer_class()` / `get_response_serializer_class()`. A host
+swaps a direction by subclassing and setting the attribute, or overrides the
+getter for a per-request decision; it never copies an HTTP method body and
+never forks the library. `None` on either side is a *value*, not an error — it
+says "this direction carries no serialized payload" (raw `request.FILES`, a
+204). Views with several serializers per direction keep the suffix and add a
+purpose prefix: `list_response_serializer_class` +
+`get_list_response_serializer_class()`.
+
+**`StapelAPIView`** — `APIView` + the seam + the two moves the hand-written
+bodies were already making, three hundred call sites over:
+`validated_request_data(request, partial=False)` (raises DRF 400 on invalid
+input, `ImproperlyConfigured` when the view declares no request serializer —
+a view bug is not a client error) and `serialized_response(payload,
+status=200, many=False)` (renders through the response seam; passes the
+payload through untouched when the seam is `None`). Neither helper is
+mandatory — a branchy body keeps calling the getters directly.
+
+**What it deliberately does not do:** it never defines DRF's own
+`get_serializer_class()`. `GenericAPIView` and every `ViewSet` already define
+that method, and shadowing it from a mixin placed first in the MRO would
+silently disable per-action serializer selection. ViewSet-based modules
+(stapel-listings) keep their own per-action seam.
+
+#### Migration recipe for a consumer library
+
+Per-lib, one release each — do not batch across libraries:
+
+1. `from stapel_core.django.api.views import SerializerSeamMixin` (add
+   `StapelAPIView` if you also want the two helpers).
+2. Delete the local `class SerializerSeamMixin` / `SerializerSeamsMixin`
+   definition. Nothing else changes: the class attributes and getter names are
+   identical, so every `class FooView(SerializerSeamMixin, APIView)` and every
+   `self.get_response_serializer_class()` call site stays as written.
+3. Modules that named it `SerializerSeamsMixin` (plural — stapel-profiles,
+   stapel-workspaces) import under the old name rather than touching every
+   view header: `from stapel_core.django.api.views import SerializerSeamMixin
+   as SerializerSeamsMixin`.
+4. Modules that folded the seam into a base view (stapel-gdpr's `GDPRAPIView`)
+   keep the base view and re-base it: `class GDPRAPIView(StapelAPIView)`.
+5. Floor-bump the `stapel-core` pin to `>=0.37.0` in `pyproject.toml`, run the
+   suite, release the library (minor — the deletion is not a behaviour change,
+   but the dependency floor moved).
+6. `stapel-tools`' library template (`_library_templates.py`) emits the copy
+   into every *new* library — fix the template in the same sweep, or new
+   libraries keep being born with the duplicate.
+
+Two copies are **deliberate divergences and stay local** — do not "unify" them:
+
+- **stapel-listings** (`views.py:80`) — a ViewSet module. Its mixin defines
+  `get_serializer_class()` (DRF's own hook) as a fallback, and
+  `ListingViewSet` overrides it for per-action selection. Different seam,
+  different method, on purpose.
+- **stapel-mailtrap** (`views.py:30`) — response direction only. Adopting the
+  canonical mixin is safe (it merely adds an unused `request_serializer_class
+  = None`), but the narrowing was intentional; migrate it only when the module
+  grows a request-validating endpoint.
 
 ### Error registry (`django/api/errors.py`)
 

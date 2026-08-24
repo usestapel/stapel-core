@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.37.0] — 2026-08-24
+
+### The serializer seam, written once instead of nineteen times
+
+`SerializerSeamMixin` is the seam that makes a stapel view swappable without a
+fork: a host names a different serializer on a subclass and the library's HTTP
+method bodies keep working. It is declared in system-design §8.1, it is quoted
+in every library's MODULE.md — and the core never shipped it. So every module
+wrote it: nineteen copies, byte-identical below the docstring, one of them
+inside `stapel-tools`' library template so that every *future* library is born
+with the duplicate too.
+
+Nineteen copies of eight lines is not a maintenance cost worth a release on its
+own. What makes it one is what the copies mean. A seam is a promise to a host
+project, and a promise re-typed per library is a promise that can drift per
+library — quietly, because nothing tests a mixin that only forwards attributes.
+Two copies had already drifted (below), and neither drift was visible from any
+other module. The framework's job is to make that class of divergence
+impossible to write, not to notice it later.
+
+`stapel_core.django.api.views` now carries:
+
+- **`SerializerSeamMixin`** — the canonical superset: the two class attributes,
+  the two getters, `None` meaning "this direction carries no serializer" rather
+  than an error. Behaviourally identical to the seventeen copies that agreed;
+  a consumer deletes its local class, imports this one, and no call site moves.
+- **`StapelAPIView`** — `APIView` + the seam + the two moves the hand-written
+  bodies were already making at three hundred call sites:
+  `validated_request_data(request)` and `serialized_response(payload)`. A view
+  that asks for a request serializer it never declared now raises
+  `ImproperlyConfigured`, not a 400: a view bug must not be reported to the
+  client as their mistake.
+
+Both are pinned by 23 tests over the semantics consumers actually rely on —
+override resolution through the getter *and* through the attribute, per-request
+getter overrides, MRO placement left of `APIView`, and the `None` direction.
+
+**What was deliberately not unified.** Two of the nineteen are real divergences,
+not drift, and this release leaves them alone: stapel-listings is a ViewSet
+module whose mixin hooks DRF's own `get_serializer_class()` for per-action
+selection, and stapel-mailtrap declares the response direction only. Averaging
+those into the canon would have been the same mistake as the duplication, in
+the other direction.
+
+Consequently this mixin **never defines `get_serializer_class()`**. DRF's
+`GenericAPIView` and every `ViewSet` already define it; a mixin sitting first in
+the MRO that shadowed it would silently disable per-action serializer selection
+in exactly the modules that need it most. That absence is a contract, and a test
+asserts it.
+
+Consumers are not migrated here — each removal is that library's own release.
+MODULE.md carries the per-lib recipe (import, delete the local copy, floor-bump
+the pin to `>=0.37.0`), including the two libraries that spell it
+`SerializerSeamsMixin`, the one that folded it into a base view, and the
+`stapel-tools` template that must be fixed or new libraries keep inheriting the
+copy.
+
+Additive only: nothing in 0.36.0 changes shape.
+
 ## [0.36.0] — 2026-08-24
 
 ### Observability, and a paginator that could not walk backwards
