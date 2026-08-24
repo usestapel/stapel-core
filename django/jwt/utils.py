@@ -141,24 +141,47 @@ def _create_users_from_token() -> bool:
 
 def load_user_by_uid(uid: str) -> Optional[Dict[str, Any]]:
     """
-    Load user data from database by email.
+    Load fresh user data from the database by primary key.
 
-    This function is used by TokenManager to refresh user data
-    when generating new access tokens.
+    This is the **re-mint loader**: ``TokenManager.refresh_access_token``
+    calls it so that a new access token carries what the database says now,
+    not what the presented refresh token claimed when it was issued (up to
+    ``JWT_REFRESH_TOKEN_LIFETIME``, 7 days by default). Every refresh path in
+    the package passes it — the middleware's two, and the explicit
+    ``JWTRefreshView``.
+
+    Returning ``None`` is how a refresh is REFUSED, so this function decides
+    who may still be re-credentialled, and it refuses two cases:
+
+    * the user no longer exists — a deleted account cannot be re-minted;
+    * the user is no longer active — deactivation ("close this account",
+      "suspend this employee") must take effect on the next refresh, not up
+      to a week later. Without this, a refresh token outlived the account it
+      spoke for.
 
     Args:
-        email: User's email address
+        uid: User primary key, as carried in the token's ``user_id`` claim
 
     Returns:
-        Dictionary with user data or None if user not found
+        Dictionary with fresh user data, or None if the user is missing,
+        deactivated, or unreadable
     """
     User = _get_user_model()
     try:
         user = User.objects.get(pk=uid)
-        return serialize_user_to_jwt_data(user)
     except User.DoesNotExist:
         logger.warning(f"User not found: {uid}")
         return None
+    except Exception as e:
+        logger.error(f"Error loading user by uid: {e}")
+        return None
+
+    if not getattr(user, "is_active", True):
+        logger.warning(f"Refusing to re-mint for deactivated user: {uid}")
+        return None
+
+    try:
+        return serialize_user_to_jwt_data(user)
     except Exception as e:
         logger.error(f"Error loading user by uid: {e}")
         return None
@@ -234,18 +257,44 @@ def _ensure_user_in_staff_group(user) -> bool:
 
 def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     """
-    Get or create Django user from JWT data.
+    Get or create the Django user a validated token speaks for.
 
-    This is used by middleware to sync users across services.
-    Uses email as the unique identifier to avoid ID type conflicts between services.
+    This is the one seam every JWT authentication path in the package shares
+    — the middleware, the DRF authentication class, ``JWTAuthBackend`` and
+    the channels middleware all resolve their principal through it, and all
+    four already treat ``None`` as "authenticate nobody". So this is where
+    the account-lifecycle gate belongs, not repeated at four call sites where
+    the fifth caller written next month would forget it.
+
+    **An inactive user is nobody.** Django's own contract is that
+    ``is_active=False`` cannot authenticate (``ModelBackend`` enforces it via
+    ``user_can_authenticate``), but ``django.contrib.auth.login()`` does not
+    check — and the JWT paths call ``login()`` directly, having verified a
+    signature rather than a password. Without this gate a closed or suspended
+    account kept authenticating on every one of them until its access token
+    expired on its own.
+
+    The check runs AFTER the sync below, deliberately: in consumer mode the
+    ``is_active`` claim is replayed onto the local row first, so a user this
+    service had stale-disabled is reactivated by the authoritative claim and
+    then passes. In authoritative mode the local database wins and a closed
+    account is refused, which is the whole point of closing it.
 
     Args:
-        user_data: User data from JWT token
+        user_data: User data from a token that has ALREADY been validated
 
     Returns:
-        Django User instance or None if creation failed
+        Django User instance, or None if the user could not be resolved or
+        is not active
     """
     user = _get_or_create_user_from_jwt(user_data)
+
+    if user is not None and not getattr(user, "is_active", True):
+        logger.warning(
+            "JWT authentication refused: user %s is not active",
+            user_data.get("user_id"),
+        )
+        return None
 
     # Bridge to stapel_core.access (AS-1): stamp the validated claim onto the
     # request user instance so MandateBackend's claim_roles source reads the

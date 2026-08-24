@@ -13,7 +13,7 @@ from django.http import JsonResponse
 from django.views import View
 
 from .provider import jwt_provider
-from .utils import extract_jwt_from_request, set_jwt_cookies
+from .utils import extract_jwt_from_request, load_user_by_uid, set_jwt_cookies
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +96,18 @@ class JWTRefreshView(View):
                     'message': 'No refresh token provided'
                 }, status=400)
 
-            # Refresh via the provider (preserves user data from the refresh token).
-            new_access_token = jwt_provider.refresh_access_token(refresh_token)
+            # Re-mint from the DATABASE (load_user_by_uid), never from the
+            # refresh token's own claims — identical to what the middleware
+            # does on its two refresh paths, and for the identical reason: a
+            # refresh token lives up to JWT_REFRESH_TOKEN_LIFETIME (7 days by
+            # default), so re-minting from its claims resurrects a staff
+            # role/flag that was revoked in between, and hands a fresh access
+            # token to an account that has since been deactivated or deleted.
+            # This endpoint used to be the one refresh path that skipped the
+            # loader; the whole point of the seam is that it has no exceptions.
+            new_access_token = jwt_provider.refresh_access_token(
+                refresh_token, load_user_by_uid
+            )
 
             if not new_access_token:
                 return JsonResponse({

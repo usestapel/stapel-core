@@ -318,7 +318,10 @@ class TestGetOrCreateUserFromJwt:
         assert user.is_active
 
         deactivated = self._data(user_id=str(user.pk), is_active=False, email=data["email"], username=data["username"])
-        user = get_or_create_user_from_jwt(deactivated)
+        # The claim is still written down; the caller gets None, because a
+        # deactivated account must not authenticate (0.38.0).
+        assert get_or_create_user_from_jwt(deactivated) is None
+        user.refresh_from_db()
         assert not user.is_active
 
     @override_settings(JWT_CREATE_USERS_FROM_TOKEN=False)

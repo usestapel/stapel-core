@@ -1,5 +1,127 @@
 # Changelog
 
+## [0.38.0] — 2026-08-24
+
+### Security — the admin login view checked that you had a password, not that you were staff
+
+**Upgrade note — every deployment that mounts `JWTCookieLoginView` (this is
+the fleet's admin login) must read this. A consumer had it live in
+production.**
+
+`JWTCookieLoginView` (`django/jwt/login_views.py`) is the admin login view:
+its template is `admin/login.html`, its redirect target is the admin index,
+and its `dispatch()` refuses to *keep* a non-staff session. But it never
+named an `authentication_form`, so Django fell back to the plain
+`AuthenticationForm` — which checks `is_active` and nothing else — instead of
+`django.contrib.admin.forms.AdminAuthenticationForm`, which enforces
+`is_staff`. `form_valid()` then called `login()`, `jwt_provider.create_tokens(user)`
+and `set_jwt_cookies()` with no staff check of any kind. The three `is_staff`
+reads in that file all sat in the already-authenticated branch of
+`dispatch()`; the credential-processing branch had none.
+
+At the consumer that meant: **any active account's own username and password
+minted a full fleet-wide JWT access/refresh pair.** The tokens are the
+deployment's credential everywhere, so this walked past the deployment's
+password-login gate, its lockout service (credential stuffing therefore ran
+unthrottled), its TOTP step-up, and its tracked-session creation — the
+resulting session had no tracked row, was invisible to session listings, and
+survived both "log out everywhere" and password-change revocation.
+
+The view is now staff-only, through two independent gates:
+
+- `get_form_class()` resolves to `AdminAuthenticationForm` — imported lazily
+  inside the method, because importing `django.contrib.admin.forms` at module
+  scope pulls in the User model and raises `AppRegistryNotReady` for any
+  project that imports this module before `django.setup()`.
+- `form_valid()` refuses a non-staff user **again**, before `login()` and
+  before any token is minted, and clears any stale auth cookies on the way
+  out.
+
+Both, deliberately. A subclass naming its own `authentication_form` — an
+ordinary thing to do, to add a captcha — would otherwise silently reopen a
+full authentication bypass; and the form alone would let a permissive
+subclass report "logged in" and strand the user. The refusal is worded
+exactly like Django's own ("...for a staff account"), so the response does
+not confirm to an attacker that the password was correct.
+
+**This is not configurable, on purpose.** A setting that can turn a staff
+gate off is a staff gate that is off in whichever environment nobody audited.
+A deployment that legitimately needs a non-admin cookie login writes a
+different view.
+
+*What can break:* a deployment that was using this view as its general user
+login — which is the vulnerability, not a feature — will find non-staff
+logins refused. Those users were receiving admin-grade credentials.
+
+### Security — the refresh endpoint re-minted from week-old claims
+
+`JWTRefreshView` (`django/jwt/views.py`) called
+`jwt_provider.refresh_access_token(refresh_token)` **without** the
+`load_user_by_uid` callback that `django/jwt/middleware.py` passes on both of
+its refresh paths — where the comment already said why: otherwise "a revoked
+staff role/flag would resurrect on refresh under REPLACE (AS-2)". So the one
+*explicit* refresh endpoint was the one path that re-minted from the refresh
+token's own claims, for up to `JWT_REFRESH_TOKEN_LIFETIME` (7 days by
+default). Revoke an admin's staff flag, and their next refresh handed it
+back.
+
+It now passes the loader, exactly as the middleware does. A revocation or a
+demotion takes effect on the next refresh, everywhere, with no path exempt.
+
+*Still open, stated plainly:* this endpoint has no tracked-session
+requirement and does not rotate the refresh token. Both are design work, not
+a patch; "log out everywhere" therefore still rests entirely on the
+blacklist.
+
+### Security — an inactive account authenticated on every JWT path, and kept its session
+
+The class behind the two defects above is the same one, one layer down:
+`is_active` appeared nowhere in `django/jwt/` as a *rejection* condition —
+only as a claim being serialized or written back. `django.contrib.auth.login()`
+does not check `user_can_authenticate()`; that lives in `authenticate()`,
+which every JWT path bypasses by design, because the credential it verifies
+is a signature and not a password. Three consequences, all fixed here:
+
+- **`get_or_create_user_from_jwt()`** (`django/jwt/utils.py`) — the one seam
+  the middleware, the DRF authentication class, `JWTAuthBackend` and the
+  channels middleware all resolve their principal through — now returns
+  `None` for an inactive user. All four already treated `None` as
+  "authenticate nobody", so all four inherit the gate and no fifth caller can
+  forget it. The check runs *after* the claim sync, so consumer mode still
+  reactivates a stale-disabled row from the authoritative claim first.
+- **`EmailAuthBackend.get_user()`** (`django/jwt/session.py`) and
+  **`JWTAuthBackend.get_user()`** (`django/jwt/backends.py`) — both overrode
+  Django's `get_user` and dropped its `user_can_authenticate()` call. That
+  method resolves `request.user` from the session on every request *after*
+  the one that authenticated, so a deactivated account kept a live session
+  for the whole life of the session cookie: deactivation only took effect at
+  the next login, which is precisely the login that will not happen.
+- **`load_user_by_uid()`** (`django/jwt/utils.py`) — the re-mint loader every
+  refresh path now passes — refuses a deactivated user, so a refresh token can
+  no longer outlive the account it speaks for.
+
+*What can break:* a deployment that relied on `is_active=False` users
+continuing to authenticate. Django's own contract has never allowed that.
+`get_or_create_user_from_jwt()` returning `None` is the visible API change:
+callers that used it as "sync this row and hand it back" now get `None` for
+an inactive user. The write behaviour (GDPR-01: a bearer token never edits
+account lifecycle in authoritative mode) is unchanged — read the row, not the
+return value.
+
+### The seam, so the next caller cannot reopen it
+
+`MODULE.md` gains **JWT credential seam — who may receive tokens**: the three
+choke points (`jwt_provider` for all minting, `load_user_by_uid` for every
+re-mint identity, `get_or_create_user_from_jwt` for every resolved
+principal), what each refuses, and the four holes of this class that are
+*known and not yet closed* — logout blacklisting on an unverified decode,
+`CsrfExemptAPIMiddleware` exempting session-cookie-only `/api/` requests, the
+absence of refresh rotation and tracked sessions, and
+`JWT_CREATE_USERS_FROM_TOKEN=True` being a staff-minting primitive by design
+(default off). Listed so they are not rediscovered as news.
+
+26 tests in `tests/test_admin_login_gate.py`; 13 of them fail on 0.37.0.
+
 ## [0.37.0] — 2026-08-24
 
 ### The serializer seam, written once instead of twenty-four times

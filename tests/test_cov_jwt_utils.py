@@ -246,12 +246,14 @@ class TestGetOrCreateUserFromJWT:
             is_superuser=False,
             is_active=False,
         )
-        result = jwt_utils.get_or_create_user_from_jwt(data)
-        result.refresh_from_db()
-        assert result.is_staff is False
-        assert result.is_superuser is False
+        # The sync still runs; the return value is None because an inactive
+        # user authenticates nobody (0.38.0). Read the row, not the return.
+        assert jwt_utils.get_or_create_user_from_jwt(data) is None
+        user.refresh_from_db()
+        assert user.is_staff is False
+        assert user.is_superuser is False
         # is_active IS synced (both directions)
-        assert result.is_active is False
+        assert user.is_active is False
 
     def test_existing_user_roles_replaced_from_claim(self):
         User = get_user_model()
@@ -347,9 +349,11 @@ class TestGetOrCreateUserFromJWT:
         data = self._data(
             user_id=str(user.pk), email="closed1@example.com", is_active=True
         )
-        result = jwt_utils.get_or_create_user_from_jwt(data)
-        result.refresh_from_db()
-        assert result.is_active is False
+        # None: a closed account is refused outright (0.38.0), on top of the
+        # claim not being written back.
+        assert jwt_utils.get_or_create_user_from_jwt(data) is None
+        user.refresh_from_db()
+        assert user.is_active is False
 
     @override_settings(JWT_CREATE_USERS_FROM_TOKEN=False)
     def test_active_account_is_not_disabled_by_a_token_either(self):
@@ -371,9 +375,9 @@ class TestGetOrCreateUserFromJWT:
         )
         data = self._data(user_id=str(user.pk), email="silent1@example.com")
         del data["is_active"]
-        result = jwt_utils.get_or_create_user_from_jwt(data)
-        result.refresh_from_db()
-        assert result.is_active is False
+        assert jwt_utils.get_or_create_user_from_jwt(data) is None
+        user.refresh_from_db()
+        assert user.is_active is False
 
     def test_absent_email_claim_does_not_null_the_column(self):
         User = get_user_model()

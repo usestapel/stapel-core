@@ -79,10 +79,18 @@ class EmailAuthBackend(ModelBackend):
         column), which raises rather than returning None. Swallowing that
         into None is what keeps the request anonymous and lets the JWT
         middleware re-authenticate, instead of 500-ing the request.
+
+        ``user_can_authenticate()`` runs here for the same reason
+        ``ModelBackend.get_user`` runs it: this method resolves
+        ``request.user`` on EVERY request after login, so an override that
+        drops it lets a deactivated account keep a live session for the whole
+        life of the session cookie — deactivation would only take effect at
+        the next login, which is precisely the login that will not happen.
         """
         user_model = get_user_model()
         try:
-            return user_model.objects.get(pk=user_id)
+            user = user_model.objects.get(pk=user_id)
         except (user_model.DoesNotExist, ValueError, TypeError) as exc:
             logger.debug("Session user %r not resolvable: %s", user_id, exc)
             return None
+        return user if self.user_can_authenticate(user) else None

@@ -69,15 +69,24 @@ class JWTAuthBackend(BaseBackend):
         """
         Get user by ID.
 
-        Required by Django authentication system.
+        Required by Django authentication system: this is what resolves
+        ``request.user`` from the session on every request AFTER the one that
+        authenticated. It therefore has to re-apply the account-lifecycle
+        gate — ``ModelBackend.get_user`` does (``user_can_authenticate``), and
+        an override that quietly drops it lets a deactivated account keep a
+        live session until the session cookie itself expires.
 
         Args:
             user_id: User primary key
 
         Returns:
-            User instance or None
+            User instance, or None if unknown or not active
         """
         try:
-            return User.objects.get(pk=user_id)
+            user = User.objects.get(pk=user_id)
         except User.DoesNotExist:
             return None
+        if not getattr(user, "is_active", True):
+            logger.debug("Session user %r is not active; resolving to None", user_id)
+            return None
+        return user

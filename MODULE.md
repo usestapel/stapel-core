@@ -1265,6 +1265,48 @@ implemented here (add a backend, flip `BACKEND`/`ROUTES`). Consumers (Studio
 steel thread): LLM-call ledger with the five-component usage split, gateway
 audit (SN-4), delivery logs.
 
+### JWT credential seam — who may receive tokens (`django/jwt/`)
+
+Three named choke points, and every path in the package goes through one of
+them. This is the seam a security fix edits; a caller-side check is not a fix
+here, because the next caller will not have it.
+
+| Choke point | Owns | Refuses |
+|---|---|---|
+| `jwt_provider` (`django/jwt/provider.py`) | ALL minting: `create_tokens(user)`, `create_tokens_from_data(data)`, `refresh_access_token(token, load_user_data=None)` | a revoked jti, a user-level ban (`is_user_blacklisted`) — before the mint, never after |
+| `load_user_by_uid` (`django/jwt/utils.py`) | the re-mint identity on EVERY refresh path | a deleted user, an **inactive** user (0.38.0) |
+| `get_or_create_user_from_jwt` (`django/jwt/utils.py`) | the principal every authentication path resolves — middleware, DRF class, `JWTAuthBackend`, channels | an unresolvable user, an **inactive** user (0.38.0) |
+
+**Minting from credentials happens in exactly one view.**
+`JWTCookieLoginView` (`django/jwt/login_views.py`) is the admin login form —
+its template is `admin/login.html` — and it is **staff-only, not
+configurable**: `get_form_class()` resolves to Django's
+`AdminAuthenticationForm` (lazily, so importing the module before
+`django.setup()` still works) and `form_valid()` independently refuses a
+non-staff user before `login()` and before `create_tokens()`. Both, because
+either alone is a bypass: a subclass naming its own `authentication_form`
+would defeat the first, and the first alone would let a permissive form
+report success and strand the user. A deployment that needs a **non-admin**
+cookie login writes a different view — a setting that can switch a staff gate
+off is a staff gate that is off in whichever environment nobody audited.
+
+**Refreshing re-reads the database, everywhere.** `JWTRefreshView`
+(`django/jwt/views.py`) and both middleware refresh paths
+(`django/jwt/middleware.py`) pass `load_user_by_uid`. A refresh token lives
+`JWT_REFRESH_TOKEN_LIFETIME` (7 days by default); re-minting from its own
+claims resurrects a staff role revoked in between (AS-2 REPLACE) and
+re-credentials a closed account. There is no path that may skip the loader.
+
+**Not yet closed** (0.38.0, listed so it is not rediscovered as news):
+`JWTLogoutView` blacklists a jti taken from an *unverified* decode, so a
+forged unsigned token carrying a victim's `jti`+`exp` revokes that victim's
+token (low exploitability — `jti` is a `uuid4`); `CsrfExemptAPIMiddleware`
+exempts an `/api/` request whose only credential is the Django **session**
+cookie, which its own docstring says it should not; refresh tokens are
+neither rotated nor bound to a tracked session row, so "log out everywhere"
+depends entirely on the blacklist; and `JWT_CREATE_USERS_FROM_TOKEN=True`
+(consumer mode, default off) is a full staff-minting primitive by design.
+
 ### Privilege gateway — `STAPEL_GATEWAY` (`gateway/`)
 
 The mechanism behind "the agent gets the *capability*, never the

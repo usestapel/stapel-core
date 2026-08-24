@@ -122,7 +122,12 @@ class TestJWTRefreshView:
         assert body["status"] == "success"
         assert body["access_token"] == "new.access.tok"
         assert resp.cookies["stapel_jwt"].value == "new.access.tok"
-        provider.refresh_access_token.assert_called_once_with("ref.tok")
+        # The DB loader is not optional here: without it the endpoint
+        # re-mints from the refresh token's own (up to 7-day stale) claims.
+        # See tests/test_admin_login_gate.py for the behavioural pins.
+        from stapel_core.django.jwt.utils import load_user_by_uid
+
+        provider.refresh_access_token.assert_called_once_with("ref.tok", load_user_by_uid)
 
     @override_settings(JWT_REFRESH_ALLOWED=True)
     def test_error_returns_500(self):
