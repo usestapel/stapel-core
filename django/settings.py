@@ -66,6 +66,8 @@ __all__ = [
     "JWT_PUBLIC_KEY",
     "JWT_ISSUER",
     "JWT_AUDIENCE",
+    # WebSocket
+    "STAPEL_WS_ALLOWED_ORIGINS",
     # Service API
     "SERVICE_API_KEY",
     "SERVICE_API_KEYS",
@@ -211,6 +213,19 @@ JWT_COOKIE_DOMAIN = os.getenv('JWT_COOKIE_DOMAIN', None)  # None = host-only, se
 JWT_COOKIE_SECURE = os.getenv('JWT_COOKIE_SECURE', 'True').lower() == 'true'
 JWT_COOKIE_HTTPONLY = os.getenv('JWT_COOKIE_HTTPONLY', 'True').lower() == 'true'
 JWT_COOKIE_SAMESITE = os.getenv('JWT_COOKIE_SAMESITE', 'Lax')
+# WebSocket origin allowlist. A cookie-authenticated handshake is admitted
+# only from an origin listed here — a cookie is ambient authority and
+# WebSockets are protected by neither the same-origin policy nor CORS, so an
+# unguarded socket is cross-site WebSocket hijacking. EMPTY IS NOT A WILDCARD:
+# with nothing declared, cookie handshakes are refused (close 4403) and
+# `manage.py check` reports stapel_core.jwt.E001. Entries need the port when
+# it is not the scheme's default. STAPEL_REALTIME['ALLOWED_ORIGINS'] is read
+# as a fallback so a stapel-realtime host declares its origins once.
+STAPEL_WS_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv('STAPEL_WS_ALLOWED_ORIGINS', '').split(',')
+    if o.strip()
+]
 JWT_AUTO_REFRESH_ENABLED = os.getenv('JWT_AUTO_REFRESH_ENABLED', 'False').lower() == 'true'
 JWT_REFRESH_THRESHOLD = int(os.getenv('JWT_REFRESH_THRESHOLD', '300'))  # 5 minutes default
 # Only auth service should be allowed to refresh tokens (set True in auth service settings)

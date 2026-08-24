@@ -42,6 +42,8 @@ def load_jwt_config_from_settings():
         prefix_part = f"/{prefix}" if prefix else ""
         jwks_url = f"{issuer}{prefix_part}/.well-known/jwks.json"
 
+    _cookie_name, _refresh_cookie_name = jwt_cookie_names()
+
     config_params = {
         "algorithm": algorithm,
         "access_token_lifetime": timedelta(
@@ -56,10 +58,8 @@ def load_jwt_config_from_settings():
         ),  # None = don't verify audience
         "jwks_url": jwks_url,
         # Cookie settings - must match between set_jwt_cookies and delete_cookie
-        "cookie_name": getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt"),
-        "refresh_cookie_name": getattr(
-            settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
-        ),
+        "cookie_name": _cookie_name,
+        "refresh_cookie_name": _refresh_cookie_name,
         "cookie_domain": getattr(settings, "JWT_COOKIE_DOMAIN", None),
         # Default True: a service that never declared the setting still
         # gets a TLS-only cookie. Opting out is an explicit False.
@@ -102,6 +102,25 @@ def load_jwt_config_from_settings():
         config_params["secret_key"] = secret
 
     return JWTConfig(**config_params)
+
+
+def jwt_cookie_names() -> tuple[str, str]:
+    """``(access_cookie_name, refresh_cookie_name)`` — the ONE resolution.
+
+    Every place that touches a JWT cookie resolves its name here: the HTTP
+    middleware's extractor, ``set_jwt_cookies``, the config loader, the admin
+    login view's logout branch, and — since 0.44.0 — the Channels handshake
+    extractor. The names used to be re-derived with a literal default at each
+    call site; five copies of ``getattr(settings, "JWT_COOKIE_NAME",
+    "stapel_jwt")`` is how a deployment ends up setting one cookie and reading
+    another.
+    """
+    from django.conf import settings
+
+    return (
+        getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt"),
+        getattr(settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"),
+    )
 
 
 def _get_user_model():
@@ -609,13 +628,7 @@ def extract_jwt_from_request(request) -> tuple[Optional[str], Optional[str]]:
     Returns:
         Tuple of (access_token, refresh_token)
     """
-    from django.conf import settings
-
-    # Get cookie names from settings or use defaults
-    cookie_name = getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt")
-    refresh_cookie_name = getattr(
-        settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
-    )
+    cookie_name, refresh_cookie_name = jwt_cookie_names()
 
     # Try to get from cookies first
     access_token = request.COOKIES.get(cookie_name)
@@ -642,10 +655,7 @@ def set_jwt_cookies(response, access_token: str, refresh_token: Optional[str] = 
     from django.conf import settings
 
     # Get settings or use defaults
-    cookie_name = getattr(settings, "JWT_COOKIE_NAME", "stapel_jwt")
-    refresh_cookie_name = getattr(
-        settings, "JWT_REFRESH_COOKIE_NAME", "stapel_refresh_jwt"
-    )
+    cookie_name, refresh_cookie_name = jwt_cookie_names()
     cookie_domain = getattr(settings, "JWT_COOKIE_DOMAIN", None)
     # Default True, matching get_jwt_config: absent setting means TLS-only.
     cookie_secure = getattr(settings, "JWT_COOKIE_SECURE", True)

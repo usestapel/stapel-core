@@ -1,5 +1,119 @@
 # Changelog
 
+## [0.44.0] — 2026-08-24
+
+### The socket a browser could never open
+
+A browser **cannot** set an `Authorization` header on `new WebSocket()`. The
+product authenticates HTTP with an httpOnly JWT **cookie**. And
+`stapel_core.django.jwt.channels._extract_token` read exactly three things:
+the `Authorization` header, the `Sec-WebSocket-Protocol` subprotocol, and
+`?token=`. There was no cookie branch.
+
+So every real browser handshake closed **4401**. The react pair read 4401 as a
+permanent refusal and stopped retrying, and the product fell through to a
+polling half — for months. The socket was built, mounted, proxied and
+smoke-tested. The smoke test passed an `Authorization` header **a browser can
+never send**, so it proved nothing about the only path that matters.
+
+That is the lesson worth keeping, and it is a test-quality lesson before it is
+a code one: *the suite was green over a client that does not exist.* Every
+test added here drives the handshake a browser actually makes — the JWT cookie
+in the handshake headers, and no `Authorization` header at all
+(`_browser_scope` asserts its absence).
+
+**Added — the cookie is the fourth credential channel.** Cookie names resolve
+through the new `stapel_core.django.jwt.utils.jwt_cookie_names()`, the same
+call the HTTP extractor, `set_jwt_cookies`, the config loader and the admin
+login view now make, so the socket can never read a cookie the HTTP side does
+not set. The cookie is tried **last**: an explicit credential (header,
+subprotocol, `?token=`) always wins, and only a browser with nothing else
+falls through to the ambient one.
+
+**Added — the refresh cookie is honoured on the handshake.** An access cookie
+lasts an hour by default; the refresh cookie behind it lasts days. A tab left
+open past expiry reconnects holding both, and a 4401 there is the same close
+that taught the client to give up. Gated on `JWT_REFRESH_ALLOWED` (the flag
+the HTTP middleware reads) and re-minted through `load_user_by_uid`, so a
+deactivated, deleted or tombstoned uid is refused here as it is on HTTP. A
+handshake has no response to set a cookie on, so the new token is stamped into
+`scope["stapel_refreshed_access_token"]` for the host to hand back.
+
+`scope["stapel_auth_source"]` now names the channel the credential arrived on.
+
+### SECURITY — cookie-authenticated WS handshakes now REQUIRE an origin allowlist
+
+**Every deployment that serves WebSockets to browsers must declare one.**
+Without it, cookie handshakes are refused (close **4403**) and
+`manage.py check` fails with `stapel_core.jwt.E001`.
+
+A cookie is **ambient authority**. The browser attaches it to a WebSocket
+handshake started by *any* page on the internet, and WebSockets are protected
+by neither the same-origin policy nor CORS — there is no preflight, and the
+cross-site handshake succeeds without the attacker's page ever reading the
+cookie. Shipping the cookie branch alone would have turned a broken socket
+into **Cross-Site WebSocket Hijacking**, so the branch and the guard ship
+together in one release and are not separable.
+
+The guard **fails closed**. An empty allowlist is a misconfiguration, not a
+wildcard, and a malformed entry is dropped rather than honoured — a typo must
+not be the thing that decides a deployment does not get a guard.
+
+Declare the origins, **with their ports**:
+
+```python
+STAPEL_WS_ALLOWED_ORIGINS = [
+    "https://app.example.com",
+    "http://localhost:5173",
+]
+```
+
+`STAPEL_REALTIME["ALLOWED_ORIGINS"]` is read as a fallback (as a plain
+settings dict — core still does not import `stapel-realtime`), so a host
+already running the realtime substrate declares its origins **once**. Two
+lists that can disagree is how two layers end up giving contradictory verdicts
+about one socket.
+
+**Only the cookie is gated.** `Authorization`, the subprotocol and `?token=`
+are not ambient: an attacker's page cannot produce a credential it has never
+seen, so an `Origin` check adds nothing there — while requiring one would
+refuse every service-to-service and native client, which legitimately send
+none. The refusals stay distinguishable: a rejected origin closes **4403**, a
+rejected credential still closes **4401**.
+
+**New checks** (`stapel_core.django.jwt.ws_origin`, registered from
+`CommonDjangoConfig.ready`; it imports no `channels`):
+
+| id | level | fires when |
+|---|---|---|
+| `stapel_core.jwt.E001` | error, **security-critical** — no blanket `SILENCED_SYSTEM_CHECKS` line can mute it | this deployment serves WebSockets *and* authenticates browsers by cookie, and no allowlist is declared |
+| `stapel_core.jwt.E002` | error | an allowlist entry that is not a `scheme://host[:port]` origin, so it can never match — the `studio.localhost` vs `http://studio.localhost:8600` incident |
+
+E-level even though the runtime fails closed, because that refusal **is** the
+shipped defect in its other form: a socket every browser is turned away from,
+a client that reads the close as permanent, and a product that quietly polls.
+The operator learns it at deploy time, not from a support ticket months later.
+
+**Coordination with `stapel_chat.E014`.** stapel-chat 0.4.0 reports the same
+fact at its own layer. Both read the same allowlist, so the two verdicts agree
+by construction — chat cannot say "guarded" while core says "unguarded". The
+mechanism belongs here so every consumer of the core socket inherits it: a
+chat module's check cannot protect a video socket. Consumers should delegate
+to `ws_origin.websocket_origin_allowlist()` and
+`ws_origin.cookie_websocket_auth_reachable()` rather than re-reading settings,
+and chat's `E012` probe (`_extract_token` with a cookie scope) keeps working —
+it clears on this release.
+
+### Upgrade
+
+1. Declare `STAPEL_WS_ALLOWED_ORIGINS` (or `STAPEL_REALTIME["ALLOWED_ORIGINS"]`)
+   on every service that serves browser WebSockets. Include the port whenever
+   it is not the scheme's default.
+2. Run `manage.py check`. `stapel_core.jwt.E001` names the services that still
+   need it; `E002` names an entry that would never have matched.
+3. Nothing else changes for clients that already send a subprotocol or
+   `?token=` — they were never ambient and are not gated.
+
 ## [0.43.0] — 2026-08-24
 
 ### Security — deactivation stopped at the issuer

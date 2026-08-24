@@ -92,6 +92,7 @@ it only fills in keys this file does not know about yet. See
 | STAPEL_TRUST_PROXY_SSL_HEADER | env | Believe `X-Forwarded-Proto` (only behind a proxy that overwrites it). | no | False |
 | STAPEL_PUBLIC_API_SCHEMA | env | Serve the OpenAPI schema / Swagger / ReDoc to anonymous callers. | no | False |
 | JWT_COOKIE_SAMESITE | env | Auth cookie SameSite policy. | no | Lax |
+| STAPEL_WS_ALLOWED_ORIGINS | env | Comma-separated WebSocket origin allowlist, WITH ports. Required wherever browsers open cookie-authenticated sockets: empty is NOT a wildcard — cookie handshakes are refused (4403) and `manage.py check` fails with `stapel_core.jwt.E001`. `STAPEL_REALTIME['ALLOWED_ORIGINS']` is read as a fallback. | no | |
 | SENTRY_DSN | env | Sentry DSN; empty disables Sentry. | no | |
 | SENTRY_ENVIRONMENT | env | Sentry environment tag. | no | dev |
 | STAPEL_SECRETS_PROVIDER | env | Bootstrap dotted path of the secret provider (before django.setup). | no | env provider |

@@ -125,8 +125,9 @@ class JWTCookieLoginView(LoginView):
     @staticmethod
     def _clear_jwt_cookies(response):
         """Delete both auth cookies with the deployment's cookie attributes."""
-        cookie_name = getattr(settings, 'JWT_COOKIE_NAME', 'stapel_jwt')
-        refresh_cookie_name = getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'stapel_refresh_jwt')
+        from .utils import jwt_cookie_names
+
+        cookie_name, refresh_cookie_name = jwt_cookie_names()
         cookie_domain = getattr(settings, 'JWT_COOKIE_DOMAIN', None)
         cookie_samesite = getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax')
         response.delete_cookie(cookie_name, path='/', domain=cookie_domain, samesite=cookie_samesite)

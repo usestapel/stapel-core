@@ -1,13 +1,20 @@
 """Tests for stapel_core.django.jwt.channels — Channels JWT auth middleware.
 
-Covers: token extraction from all three channels (Authorization header,
-Sec-WebSocket-Protocol subprotocol in both shapes, ?token= query param) and
-their precedence; the full authenticate/reject flow (valid / expired / missing
-/ blacklisted token, banned user); rejection with close code 4401 before
-accept; silent (no-error-log) rejection on exceptions; non-websocket
-pass-through; and the optional-dependency contract (submodule is not imported
-on a normal Django start, and importing it without `channels` raises a clear
-ImportError).
+Covers: token extraction from all four channels (Authorization header,
+Sec-WebSocket-Protocol subprotocol in both shapes, ?token= query param, and
+the JWT cookie) and their precedence; the full authenticate/reject flow
+(valid / expired / missing / blacklisted token, banned user); rejection with
+close code 4401 before accept; silent (no-error-log) rejection on exceptions;
+non-websocket pass-through; and the optional-dependency contract.
+
+The class of defect this file exists to prevent
+-----------------------------------------------
+Every test below the ``TestBrowserCookieHandshake`` heading authenticates the
+way a BROWSER actually does: the JWT cookie in the handshake headers and no
+``Authorization`` header at all. Until 0.44.0 every test in this file drove a
+path a browser cannot take — a header ``new WebSocket()`` cannot set — so the
+suite was green while the only handshake that mattered closed 4401 in
+production for months. A green test over an impossible client proves nothing.
 """
 
 import asyncio
@@ -17,6 +24,7 @@ import subprocess
 import sys
 
 import pytest
+from django.test import override_settings
 
 from stapel_core.django.jwt import channels as ch
 
@@ -36,6 +44,26 @@ def _ws_scope(headers=None, subprotocols=None, query_string=b""):
         scope["headers"] = headers
     if subprotocols is not None:
         scope["subprotocols"] = subprotocols
+    return scope
+
+
+ALLOWED = "https://app.example.com"
+EVIL = "https://evil.example.net"
+
+
+def _browser_scope(cookie="stapel_jwt=cookie.tok.en", origin=ALLOWED, extra=()):
+    """A handshake shaped like the one a real browser sends.
+
+    A cookie header the browser attached by itself, an Origin header it always
+    sends, and — deliberately — NO Authorization header, because
+    ``new WebSocket()`` cannot set one.
+    """
+    headers = [(b"cookie", cookie.encode())]
+    if origin is not None:
+        headers.append((b"origin", origin.encode()))
+    headers.extend(extra)
+    scope = _ws_scope(headers=headers)
+    assert not any(name == b"authorization" for name, _ in headers)
     return scope
 
 
@@ -134,6 +162,78 @@ class TestExtractToken:
             query_string=b"token=QUERY",
         )
         assert ch._extract_token(scope) == "SUBPROTO"
+
+
+# ---------------------------------------------------------------------------
+# The cookie channel — the one a browser actually has (0.44.0)
+# ---------------------------------------------------------------------------
+
+class TestExtractCookie:
+    """A browser cannot set Authorization on new WebSocket(); it CAN send the
+    httpOnly JWT cookie, because it attaches that by itself."""
+
+    def test_jwt_cookie_is_read(self):
+        # THE regression test: on 0.43.0 this returns None and every browser
+        # handshake closes 4401.
+        scope = _ws_scope(headers=[(b"cookie", b"stapel_jwt=aaa.bbb.ccc")])
+        assert ch._extract_token(scope) == "aaa.bbb.ccc"
+
+    def test_jwt_cookie_among_other_cookies(self):
+        scope = _ws_scope(headers=[(
+            b"cookie",
+            b"sessionid=xyz; stapel_jwt=aaa.bbb.ccc; csrftoken=q",
+        )])
+        assert ch._extract_token(scope) == "aaa.bbb.ccc"
+
+    def test_source_is_reported_as_cookie(self):
+        scope = _ws_scope(headers=[(b"cookie", b"stapel_jwt=tok")])
+        assert ch._extract_credential(scope) == ("tok", None, ch.SOURCE_COOKIE)
+
+    def test_refresh_cookie_is_read_alongside(self):
+        scope = _ws_scope(headers=[(
+            b"cookie", b"stapel_jwt=acc; stapel_refresh_jwt=ref",
+        )])
+        assert ch._extract_credential(scope) == ("acc", "ref", ch.SOURCE_COOKIE)
+
+    def test_refresh_cookie_alone_is_still_a_credential(self):
+        # The access cookie expires first; refusing here is the 4401 that
+        # taught the client the socket was permanently refused.
+        scope = _ws_scope(headers=[(b"cookie", b"stapel_refresh_jwt=ref")])
+        assert ch._extract_credential(scope) == (None, "ref", ch.SOURCE_COOKIE)
+
+    @override_settings(JWT_COOKIE_NAME="custom_jwt")
+    def test_cookie_name_follows_the_http_side(self):
+        # Resolved through utils.jwt_cookie_names — the same call HTTP makes,
+        # so the socket cannot read a cookie the HTTP side never sets.
+        assert ch._extract_token(
+            _ws_scope(headers=[(b"cookie", b"custom_jwt=tok")])
+        ) == "tok"
+        assert ch._extract_token(
+            _ws_scope(headers=[(b"cookie", b"stapel_jwt=tok")])
+        ) is None
+
+    def test_unrelated_cookies_are_not_a_credential(self):
+        scope = _ws_scope(headers=[(b"cookie", b"sessionid=xyz; theme=dark")])
+        assert ch._extract_credential(scope) == (None, None, None)
+
+    def test_malformed_cookie_header_does_not_raise(self):
+        scope = _ws_scope(headers=[(b"cookie", b"=;;;garbage")])
+        assert ch._extract_token(scope) is None
+
+    # The cookie is LAST: an explicit credential always wins, and only a
+    # browser with nothing else falls through to the ambient one.
+    def test_explicit_channels_beat_the_cookie(self):
+        for scope in (
+            _ws_scope(headers=[(b"authorization", b"Bearer EXPLICIT"),
+                               (b"cookie", b"stapel_jwt=COOKIE")]),
+            _ws_scope(headers=[(b"cookie", b"stapel_jwt=COOKIE")],
+                      subprotocols=["bearer", "EXPLICIT"]),
+            _ws_scope(headers=[(b"cookie", b"stapel_jwt=COOKIE")],
+                      query_string=b"token=EXPLICIT"),
+        ):
+            token, _, source = ch._extract_credential(scope)
+            assert token == "EXPLICIT"
+            assert source != ch.SOURCE_COOKIE
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +408,250 @@ class TestMiddlewareCall:
         stack = ch.JWTAuthMiddlewareStack(inner)
         assert isinstance(stack, ch.JWTAuthMiddleware)
         assert stack.inner is inner
+
+
+# ---------------------------------------------------------------------------
+# TestBrowserCookieHandshake — the client that actually exists (0.44.0)
+#
+# Every test here sends what a browser sends and nothing a browser cannot:
+# the JWT cookie in the handshake headers, an Origin header, and NO
+# Authorization header. _browser_scope asserts the absence.
+# ---------------------------------------------------------------------------
+
+class TestBrowserCookieHandshake:
+    @pytest.fixture(autouse=True)
+    def _authenticating(self, monkeypatch):
+        self.user = object()
+        self.claims = {"user_id": "u1", "email": "u@x.com"}
+        self.seen = []
+
+        def _auth(token):
+            self.seen.append(token)
+            return (self.user, self.claims)
+
+        monkeypatch.setattr(ch, "_authenticate_token", _auth)
+
+    def _run_handshake(self, scope, allowed_origins=None):
+        inner = _RecordingInner()
+        # Constructed the way a host constructs it — one argument — so these
+        # tests fail on an older core with the production SYMPTOM (handshake
+        # closed) rather than with a TypeError about a new keyword.
+        mw = (
+            ch.JWTAuthMiddleware(inner)
+            if allowed_origins is None
+            else ch.JWTAuthMiddleware(inner, allowed_origins=allowed_origins)
+        )
+        send = _Sender()
+        _run(mw(scope, _connect_receiver(), send))
+        return inner, send
+
+    # ---- accept ----------------------------------------------------------
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=[ALLOWED])
+    def test_cookie_from_an_allowed_origin_is_accepted(self):
+        """FAILS ON 0.43.0: no cookie branch, so this closes 4401.
+
+        This is the whole incident in one assertion — the handshake a real
+        browser makes, admitted.
+        """
+        inner, send = self._run_handshake(_browser_scope())
+
+        assert inner.called
+        assert inner.scope["user"] is self.user
+        assert inner.scope["stapel_claims"] == self.claims
+        assert inner.scope["stapel_auth_source"] == ch.SOURCE_COOKIE
+        assert send.sent == [{"type": "websocket.accept"}]
+        assert self.seen == ["cookie.tok.en"]
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=["http://localhost:5173"])
+    def test_origin_matching_ignores_case_and_default_ports(self):
+        inner, _ = self._run_handshake(
+            _browser_scope(origin="HTTP://LocalHost:5173")
+        )
+        assert inner.called
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=[], STAPEL_REALTIME={
+        "ALLOWED_ORIGINS": [ALLOWED],
+    })
+    def test_realtime_allowlist_is_honoured_so_it_is_declared_once(self):
+        """A host already running stapel-realtime must not declare twice —
+        two lists that can disagree is how two layers give contradictory
+        verdicts about the same socket."""
+        inner, _ = self._run_handshake(_browser_scope())
+        assert inner.called
+
+    # ---- refuse ----------------------------------------------------------
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=[ALLOWED])
+    def test_cross_origin_cookie_handshake_is_refused(self):
+        """Cross-Site WebSocket Hijacking, refused.
+
+        The attacker's page cannot read the cookie, but the browser attaches
+        it anyway and no same-origin policy or CORS preflight stands in the
+        way. Only the Origin check does.
+        """
+        inner, send = self._run_handshake(_browser_scope(origin=EVIL))
+
+        assert not inner.called
+        assert send.sent == [{"type": "websocket.close", "code": 4403}]
+        assert send.sent[0]["code"] == ch.CLOSE_CODE_FORBIDDEN
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=[ALLOWED])
+    def test_refusal_happens_before_the_token_is_ever_validated(self):
+        """An unlisted origin must not even learn whether the victim's cookie
+        is currently valid."""
+        inner, send = self._run_handshake(_browser_scope(origin=EVIL))
+        assert self.seen == []
+        assert not inner.called
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=[])
+    def test_empty_allowlist_fails_closed(self):
+        """An empty allowlist is a misconfiguration, NOT a wildcard."""
+        inner, send = self._run_handshake(_browser_scope())
+        assert not inner.called
+        assert send.sent == [{"type": "websocket.close", "code": 4403}]
+
+    def test_no_allowlist_setting_at_all_fails_closed(self):
+        with override_settings():
+            from django.conf import settings
+            for name in ("STAPEL_WS_ALLOWED_ORIGINS", "STAPEL_REALTIME"):
+                if hasattr(settings, name):
+                    delattr(settings._wrapped, name)
+            inner, send = self._run_handshake(_browser_scope())
+        assert not inner.called
+        assert send.sent == [{"type": "websocket.close", "code": 4403}]
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=[ALLOWED])
+    def test_cookie_handshake_without_origin_is_refused(self):
+        """Browsers always send Origin on a handshake. A client that does not
+        is one that could have sent a non-ambient credential instead."""
+        inner, send = self._run_handshake(_browser_scope(origin=None))
+        assert not inner.called
+        assert send.sent == [{"type": "websocket.close", "code": 4403}]
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=["app.example.com"])
+    def test_malformed_allowlist_entry_refuses_rather_than_falls_open(self):
+        """A typo must not be the thing that decides there is no guard."""
+        inner, send = self._run_handshake(_browser_scope())
+        assert not inner.called
+        assert send.sent == [{"type": "websocket.close", "code": 4403}]
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=[ALLOWED])
+    def test_invalid_cookie_token_still_closes_4401_not_4403(self, monkeypatch):
+        """The origin was fine; the credential was not. The two refusals stay
+        distinguishable so an operator can tell them apart in a log."""
+        monkeypatch.setattr(ch, "_authenticate_token", lambda t: (None, None))
+        inner, send = self._run_handshake(_browser_scope())
+        assert not inner.called
+        assert send.sent == [{"type": "websocket.close", "code": 4401}]
+
+    @override_settings(STAPEL_WS_ALLOWED_ORIGINS=[])
+    def test_unguarded_refusal_warns_once_not_per_handshake(self, caplog):
+        inner = _RecordingInner()
+        mw = ch.JWTAuthMiddleware(inner)
+        with caplog.at_level(logging.WARNING, logger=ch.logger.name):
+            for _ in range(5):
+                _run(mw(_browser_scope(), _connect_receiver(), _Sender()))
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1
+        assert "stapel_core.jwt.E001" in warnings[0].getMessage()
+
+    # ---- the non-ambient channels are deliberately NOT gated -------------
+
+    def test_subprotocol_token_is_not_gated_by_origin(self):
+        """A subprotocol token is not ambient: an attacker's page cannot
+        produce one it has never seen. Gating it would refuse every
+        service-to-service and native client, which send no Origin at all."""
+        inner, send = self._run_handshake(
+            _ws_scope(subprotocols=["bearer", "tok"],
+                      headers=[(b"origin", EVIL.encode())])
+        )
+        assert inner.called
+        assert inner.scope["stapel_auth_source"] == ch.SOURCE_SUBPROTOCOL
+
+    def test_header_and_query_tokens_are_not_gated_by_origin(self):
+        for scope, source in (
+            (_ws_scope(headers=[(b"authorization", b"Bearer tok"),
+                                (b"origin", EVIL.encode())]),
+             ch.SOURCE_HEADER),
+            (_ws_scope(query_string=b"token=tok",
+                       headers=[(b"origin", EVIL.encode())]),
+             ch.SOURCE_QUERY),
+        ):
+            inner, _ = self._run_handshake(scope)
+            assert inner.called
+            assert inner.scope["stapel_auth_source"] == source
+
+
+class TestCookieRefreshOnHandshake:
+    """An access cookie lasts an hour; the refresh cookie behind it lasts
+    days. A tab left open past expiry reconnects holding both — and a 4401
+    there is the close that taught the client to stop retrying."""
+
+    def _provider(self, monkeypatch, new_token):
+        prov = type("P", (), {})()
+        prov.refresh_access_token = lambda rt, loader: new_token
+        monkeypatch.setattr(
+            "stapel_core.django.jwt.provider.jwt_provider", prov, raising=True
+        )
+
+    @override_settings(JWT_REFRESH_ALLOWED=True)
+    def test_expired_access_cookie_falls_through_to_the_refresh_cookie(
+        self, monkeypatch
+    ):
+        user, claims = object(), {"user_id": "u1"}
+        self._provider(monkeypatch, "fresh.access.token")
+        monkeypatch.setattr(
+            ch, "_authenticate_token",
+            lambda t: (user, claims) if t == "fresh.access.token" else (None, None),
+        )
+        out = ch._authenticate_cookie("expired.access", "live.refresh")
+        assert out == (user, claims, "fresh.access.token")
+
+    @override_settings(JWT_REFRESH_ALLOWED=False)
+    def test_refresh_is_gated_on_the_same_flag_http_reads(self, monkeypatch):
+        self._provider(monkeypatch, "fresh.access.token")
+        monkeypatch.setattr(ch, "_authenticate_token", lambda t: (None, None))
+        assert ch._authenticate_cookie("expired", "refresh") == (None, None, None)
+
+    @override_settings(JWT_REFRESH_ALLOWED=True)
+    def test_refused_refresh_is_not_authenticated(self, monkeypatch):
+        self._provider(monkeypatch, None)  # tombstoned/deleted/inactive uid
+        monkeypatch.setattr(ch, "_authenticate_token", lambda t: (None, None))
+        assert ch._authenticate_cookie("expired", "refresh") == (None, None, None)
+
+    @override_settings(JWT_REFRESH_ALLOWED=True)
+    def test_valid_access_cookie_never_reaches_the_refresh_path(self, monkeypatch):
+        user, claims = object(), {"user_id": "u1"}
+        def _boom(rt, loader):
+            pytest.fail("refresh attempted with a valid access cookie")
+        prov = type("P", (), {})()
+        prov.refresh_access_token = _boom
+        monkeypatch.setattr(
+            "stapel_core.django.jwt.provider.jwt_provider", prov, raising=True
+        )
+        monkeypatch.setattr(ch, "_authenticate_token", lambda t: (user, claims))
+        assert ch._authenticate_cookie("good", "refresh") == (user, claims, None)
+
+    @override_settings(JWT_REFRESH_ALLOWED=True, STAPEL_WS_ALLOWED_ORIGINS=[ALLOWED])
+    def test_refreshed_token_is_stamped_into_the_scope(self, monkeypatch):
+        """A handshake has no response to set a cookie on, so the host is the
+        only thing that can hand the fresh token back."""
+        user, claims = object(), {"user_id": "u1"}
+        self._provider(monkeypatch, "fresh.access.token")
+        monkeypatch.setattr(
+            ch, "_authenticate_token",
+            lambda t: (user, claims) if t == "fresh.access.token" else (None, None),
+        )
+        inner = _RecordingInner()
+        mw = ch.JWTAuthMiddleware(inner)
+        scope = _browser_scope(
+            cookie="stapel_jwt=expired; stapel_refresh_jwt=live"
+        )
+        _run(mw(scope, _connect_receiver(), _Sender()))
+
+        assert inner.called
+        assert inner.scope["stapel_refreshed_access_token"] == "fresh.access.token"
 
 
 # ---------------------------------------------------------------------------

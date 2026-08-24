@@ -62,6 +62,14 @@ class CommonDjangoConfig(AppConfig):
         # reflects the caller's Origin, which is audit CDN-01 reproduced in
         # Python for every service, with no nginx involved.
         from stapel_core.django import cors_checks as _cors_checks  # noqa: F401
+        # WebSocket origin-allowlist checks (django.jwt.ws_origin): E-level
+        # when this deployment serves sockets and authenticates browsers by
+        # cookie while declaring no allowlist. A cookie is ambient authority
+        # and WebSockets are protected by neither the same-origin policy nor
+        # CORS, so the socket middleware refuses those handshakes (fails
+        # closed) — which means the deployment's browser sockets do not work
+        # and nothing but this check says why. Imports no `channels`.
+        from stapel_core.django.jwt import ws_origin as _ws_origin_checks  # noqa: F401
         # Revocation escape-hatch check (stapel_core.django.blacklist_checks):
         # W-level when STAPEL_BLACKLIST_FAIL_OPEN is on — both blacklists fail
         # closed by default, and the one setting that reopens them is
