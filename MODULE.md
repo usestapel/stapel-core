@@ -27,7 +27,10 @@ points below; a generic fix or gap belongs **upstream** (see
   (`@requires_verification`), pluggable factor registry, per-user policy
   resolved via the `auth.verification.policy` comm Function, and a **fleet-wide**
   challenge/grant store (`core/fleet_cache.py`) so a factor completed in one
-  service counts in the peer that demanded it.
+  service counts in the peer that demanded it. Every record it writes has a
+  public verb that removes it again — `drop_challenge`,
+  `drop_verification_token`, `revoke_grants` — each returning a `DropReport`
+  rather than `None` (0.46.0).
 - `flows` — self-documenting business scenarios (`Flow`, `@flow_step`,
   `flow_registry`) with doc generation and a CI completeness gate.
 - `i18n` — domain-agnostic shipping of localized content: per-app
@@ -473,6 +476,48 @@ versus `stapel_profiles:1:…`). Grants now use `stapel_core.core.fleet_cache`,
 the same mechanism revocation has used since 0.39.0. The key is fleet-stable
 because the identity is: `user.pk` is the UUID the JWT `user_id` claim carries,
 and consumer-mode services materialise the local row under that same pk.
+
+**Dropping a record is a reported fact, not a gesture** (0.46.0). Until 0.46.0
+this module could create a challenge, read it and complete it, and had no
+public way to *remove* one. A consumer testing the expired-challenge path had
+to reach into the private `grants._cache()` — or compute the key itself against
+`django.core.cache.cache`, which is what stapel-auth 0.28.0 did. Once 0.45.0
+moved the store onto the fleet namespace that plain-cache delete computed a
+different key, removed nothing, and was indistinguishable from a delete that
+worked: the test's setup silently did nothing and its assertion "verified" an
+emptiness that had never been created. The release died on it.
+
+| Verb | Removes | Returns |
+|---|---|---|
+| `drop_challenge(challenge_id)` | the challenge | `DropReport` |
+| `drop_verification_token(token)` | one stateless `X-Verification-Token` | `DropReport` |
+| `revoke_grants(user_id, scopes)` | the user's grants for those scopes | `list[DropReport]`, one per scope, in order |
+
+Each reads the key **this module** computes, deletes it, reads it **back**, and
+reports one of three outcomes that must never be folded into one another
+(`DropOutcome`): `DROPPED` (it was there, a read-back confirms it is gone),
+`NOT_FOUND` (nothing was stored under that key — already spent, aged out, or
+*the writer computed a different key*), `STILL_PRESENT` (the delete ran and the
+record is still readable; never success). `DropReport` is falsy unless the
+outcome is `DROPPED`, so `assert drop_challenge(cid)` is a real assertion — a
+bare `str`-Enum would be truthy on every member, including the one the
+primitive exists to expose. `NOT_FOUND` logs a warning and `STILL_PRESENT` an
+error, both naming the namespace, so a caller who ignores the return value
+still cannot obtain a quiet no-op.
+
+These are deliberately operational primitives that tests also use, in the
+ordinary public API rather than a `testing` sidecar: a step-up nobody
+requested, an erasure, a session known to be compromised are the same removal
+`record_failed_attempt` already performs when the attempt budget runs out. A
+"for tests only" function operations would reach for anyway is better named
+honestly than quarantined where the contract does not describe it — the
+private version of this seam is exactly what cost a consumer a release.
+
+`revoke_grants` does **not** reach a minted verification token: `TOKEN_KEY` is
+keyed by the token itself, so it cannot be enumerated from a user id and a
+holder still satisfies `has_grant(user, scope, token=...)` for the token's full
+`max_age`. Use `drop_verification_token` when you hold the value; when you do
+not, its lifetime is the only bound.
 
 Custom factors: subclass `VerificationFactor` (define `id`, implement
 `verify`, optionally `available_for` / `initiate`) and call
@@ -1666,7 +1711,9 @@ could not be followed. What the gate reads now, in order:
 Session-recorded proofs are bounded by `MAX_AGE` (900s by default) but are
 **not** reached by `revoke_grants()`, which deletes from the shared store —
 flushing the session (or the user's whole session store) is what ends one
-early.
+early. Nor is a presented token: `revoke_grants()` returns a `DropReport` per
+scope (0.46.0) and those reports describe grants only; killing a token takes
+`drop_verification_token(token)`.
 
 The `dac_escalation` / `step_up_denied` signals are forwarded to the eventstore
 (`AUDIT_SINK`) + `NOTIFY` shim, **best-effort** (a sink failure never breaks

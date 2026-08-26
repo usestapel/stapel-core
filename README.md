@@ -24,7 +24,7 @@ pip install stapel-core
 
 | Fact | Value |
 |---|---|
-| Version | `0.45.0` |
+| Version | `0.46.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | Django | `Django>=5.1,<6.1` |
 | Usage surface | 53 |
@@ -157,6 +157,48 @@ System checks (W-level, never blocking): `stapel_core.netintel.W001`
 (`PROVIDER` unimportable), `W002` (not a `NetIntelProvider`), `W003` (the
 seam is configured or depended on, but `PROVIDER` is still the default
 `NullProvider`, so every rule keyed on network class is dead code).
+
+---
+
+### `stapel_core.verification` — Step-up verification
+
+Attach an OTP/TOTP/passkey requirement to any endpoint without baking factor
+logic into it. Without a fresh grant the request is refused with 403 and a
+structured challenge envelope; any one of the listed factors completes it.
+
+```python
+from stapel_core.verification import requires_verification
+
+class PayoutView(APIView):
+    @requires_verification(scope="payout", factors=["otp_email", "totp"], max_age=300)
+    def post(self, request): ...
+```
+
+Challenges, grants and stateless tokens live in a **fleet-wide** cache
+namespace (`STAPEL_VERIFICATION["GRANT_NAMESPACE"]`), not the service's own
+`KEY_PREFIX`, so a step-up completed in one service counts in the peer that
+demanded it.
+
+Every record has a public verb that removes it again — and each one **reports
+what it did** instead of returning `None`:
+
+| Verb | Removes | Returns |
+|---|---|---|
+| `drop_challenge(challenge_id)` | the challenge | `DropReport` |
+| `drop_verification_token(token)` | one stateless verification token | `DropReport` |
+| `revoke_grants(user_id, scopes)` | that user's grants | `list[DropReport]` |
+
+```python
+from stapel_core.verification import drop_challenge
+
+assert drop_challenge(challenge["challenge_id"])          # truthy only if DROPPED
+```
+
+The report's `outcome` is `DROPPED`, `NOT_FOUND` or `STILL_PRESENT`, and
+`NOT_FOUND` / `STILL_PRESENT` are logged with the namespace. **Never delete
+these keys through `django.core.cache.cache`**: it computes a different key,
+removes nothing, and cannot tell you so — the mistake that killed a consumer
+release before 0.46.0.
 
 ---
 

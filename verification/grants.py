@@ -26,6 +26,30 @@ User identity is fleet-stable, so the key is too: ``user.pk`` is the UUID the
 JWT ``user_id`` claim carries, and consumer-mode services materialise the
 local row under that same pk (``load_user_by_uid``).
 
+Dropping is a measured fact, not a gesture (0.46.0)
+---------------------------------------------------
+Every record here is created by a named public function, and until 0.46.0 not
+one of them could be *removed* by one: a consumer that needed a challenge gone
+— an expired-path test, an operator killing a step-up nobody asked for, an
+erasure — had to reach into ``grants._cache()`` or, worse, compute the key
+itself against ``django.core.cache.cache``.
+
+The second option was silently wrong from the moment the namespace moved. A
+plain-cache delete computes ``<service>:1:stapel:verification:challenge:<id>``
+while this module reads ``stapel_verification:1:...``, so it removes nothing
+and cannot say anything useful about the record the caller means: Django's
+``cache.delete`` answers about ITS key, not ours. stapel-auth 0.28.0 shipped a
+test built on that delete — the setup did nothing at all, and the assertion
+"verified" an emptiness nobody had created.
+
+So the terminal verbs — :func:`drop_challenge`, :func:`drop_verification_token`
+and :func:`revoke_grants` — do not return ``None`` and do not hand back a raw
+backend boolean. Each reads the key THIS module writes, deletes it, reads it
+BACK, and returns a :class:`DropReport` saying which of three different things
+happened (``DROPPED`` / ``NOT_FOUND`` / ``STILL_PRESENT``). ``NOT_FOUND`` and
+``STILL_PRESENT`` are also logged, naming the namespace, so a caller who
+ignores the return value still cannot get a no-op quietly.
+
 Configuration lives in ``STAPEL_VERIFICATION`` and, like the revocation pair,
 must match across peers if changed:
 
@@ -38,13 +62,18 @@ must match across peers if changed:
 """
 from __future__ import annotations
 
+import logging
 import secrets
 import time
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from stapel_core.core.fleet_cache import fleet_cache
 
 from .conf import verification_settings
+
+logger = logging.getLogger(__name__)
 
 CHALLENGE_KEY = "stapel:verification:challenge:{challenge_id}"
 GRANT_KEY = "stapel:verification:grant:{user_id}:{scope}"
@@ -86,6 +115,88 @@ def _cache():
 
 
 # ---------------------------------------------------------------------------
+# Dropping — the terminal verb, and what it reports
+# ---------------------------------------------------------------------------
+
+
+class DropOutcome(str, Enum):
+    """What a drop actually did to the store.
+
+    Three different facts, and none of them may be folded into another — the
+    same rule :class:`~stapel_core.verification.codes.CodeOutcome` states for
+    reads. Collapsing them is precisely the defect: a delete that removed
+    nothing is not a delete that worked.
+    """
+
+    #: A record was there under this key; a read-back confirms it is gone.
+    DROPPED = "dropped"
+    #: Nothing was stored under this key. Already spent, aged out — or the
+    #: writer computed a DIFFERENT key (a different ``GRANT_NAMESPACE``, or a
+    #: caller reaching for ``django.core.cache.cache`` instead of this module).
+    NOT_FOUND = "not_found"
+    #: The delete ran and the record is STILL readable. The store did not obey;
+    #: never report this as success.
+    STILL_PRESENT = "still_present"
+
+
+@dataclass(frozen=True)
+class DropReport:
+    """The verdict of a drop, plus enough context to explain a ``NOT_FOUND``.
+
+    Falsy unless the record was found and is now gone, so the ordinary
+    ``assert drop_challenge(cid)`` is a real assertion rather than a truthy
+    enum member that passes on every outcome.
+    """
+
+    outcome: DropOutcome
+    #: What was being dropped: ``"challenge"``, ``"grant"``, ``"token"``.
+    what: str
+    #: The unprefixed key, as this module computes it.
+    key: str
+    #: The fleet namespace the key was computed under. The first thing to
+    #: compare against the writer's when an expected record was ``NOT_FOUND``.
+    namespace: str
+
+    def __bool__(self) -> bool:
+        return self.outcome is DropOutcome.DROPPED
+
+
+def _drop(key: str, what: str) -> DropReport:
+    """Delete *key* and report what that did, having read the store back.
+
+    Read, delete, read again. The read-back is what makes ``DROPPED`` a
+    measurement instead of a claim, and it costs one cache round-trip on a
+    path that runs once per challenge at most.
+    """
+    cache = _cache()
+    namespace = grant_namespace()
+    existed = cache.get(key) is not None
+    cache.delete(key)
+    survived = cache.get(key) is not None
+
+    if survived:
+        outcome = DropOutcome.STILL_PRESENT
+        logger.error(
+            "verification %s NOT dropped: %r is still readable in namespace %r "
+            "after delete — the store did not obey; do not treat this as success",
+            what, key, namespace,
+        )
+    elif existed:
+        outcome = DropOutcome.DROPPED
+    else:
+        outcome = DropOutcome.NOT_FOUND
+        logger.warning(
+            "verification %s drop found nothing at %r in namespace %r. If you "
+            "expected a record here, whatever wrote it computed a different key "
+            "— check GRANT_NAMESPACE/GRANT_CACHE agree with the writer, and that "
+            "the writer went through stapel_core.verification and not "
+            "django.core.cache.cache.",
+            what, key, namespace,
+        )
+    return DropReport(outcome=outcome, what=what, key=key, namespace=namespace)
+
+
+# ---------------------------------------------------------------------------
 # Challenges
 # ---------------------------------------------------------------------------
 
@@ -114,6 +225,31 @@ def create_challenge(user, scope: str, factors: list[str], max_age: int) -> dict
 
 def get_challenge(challenge_id: str) -> dict | None:
     return _cache().get(CHALLENGE_KEY.format(challenge_id=challenge_id))
+
+
+def drop_challenge(challenge_id: str) -> DropReport:
+    """Drop the challenge *challenge_id*; returns what that actually did.
+
+    Keyed by id, like :func:`get_challenge` — the id is what a client holds
+    from the 403 envelope, and what a test holds from
+    :func:`create_challenge`.
+
+    This is deliberately BOTH an operational and a testing primitive, in the
+    ordinary public API rather than a ``testing`` sidecar. Operations need it:
+    a step-up nobody requested, an erasure, a session known to be compromised
+    — the same removal :func:`record_failed_attempt` performs when the attempt
+    budget runs out, triggered by a different cause. And a "for tests only"
+    function that operations will reach for anyway is better named honestly
+    than quarantined into a module the contract does not describe: the version
+    of this seam that WAS private is the reason a consumer's release died on a
+    delete that removed nothing.
+
+    Truthy only when a challenge was there and is now gone::
+
+        assert drop_challenge(challenge["challenge_id"])   # a real assertion
+        assert get_challenge(challenge["challenge_id"]) is None
+    """
+    return _drop(CHALLENGE_KEY.format(challenge_id=challenge_id), "challenge")
 
 
 def record_failed_attempt(challenge: dict) -> bool:
@@ -169,9 +305,35 @@ def has_grant(user, scope: str, *, token: str | None = None) -> bool:
     return False
 
 
-def revoke_grants(user_id: str, scopes: list[str]) -> None:
-    for scope in scopes:
-        _cache().delete(GRANT_KEY.format(user_id=user_id, scope=scope))
+def revoke_grants(user_id: str, scopes: list[str]) -> list[DropReport]:
+    """Drop *user_id*'s grants for *scopes*; one report per scope, in order.
+
+    Returned rather than dropped on the floor since 0.46.0 (it used to return
+    ``None``): "revoke everywhere" is a security operation, and one that
+    removed nothing must not be indistinguishable from one that worked.
+
+    Note what this does NOT reach: a stateless verification token minted by
+    :func:`complete_challenge` is keyed by the token itself, not by user, so it
+    cannot be enumerated from a user id and survives this call for its full
+    ``max_age``. A holder of that token still satisfies
+    :func:`has_grant`. Drop it with :func:`drop_verification_token` if you hold
+    it; if you do not, the only bound is its lifetime.
+    """
+    return [
+        _drop(GRANT_KEY.format(user_id=user_id, scope=scope), "grant")
+        for scope in scopes
+    ]
+
+
+def drop_verification_token(token: str) -> DropReport:
+    """Drop the stateless verification token *token*; reports what that did.
+
+    The counterpart of the token :func:`complete_challenge` mints. Until
+    0.46.0 nothing public could remove one — not even :func:`revoke_grants`,
+    which deletes grants and cannot see tokens (see its note) — so a leaked
+    ``X-Verification-Token`` stayed good until its TTL ran out.
+    """
+    return _drop(TOKEN_KEY.format(token=token), "token")
 
 
 # ---------------------------------------------------------------------------

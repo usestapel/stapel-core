@@ -1,5 +1,131 @@
 # Changelog
 
+## [0.46.0] — 2026-08-26
+
+### A delete that removed nothing looked exactly like a delete that worked
+
+`stapel_core.verification` exported `create_challenge`, `get_challenge` and
+`complete_challenge` — and nothing that **drops** a challenge. So a consumer
+testing the expired-challenge path had to reach around the module: into the
+private `grants._cache()`, or straight at `django.core.cache.cache` with a
+hand-computed key.
+
+stapel-auth 0.28.0 took the second road and **published nothing**. Its test
+simulated an expired challenge by deleting the key through the plain cache.
+When core 0.45.0 moved challenges, grants and tokens onto the fleet-wide
+namespace, that delete began computing
+`<service>:1:stapel:verification:challenge:<id>` while the module reads
+`stapel_verification:1:…` — it removed nothing, and there was no way to tell.
+The test's setup silently did nothing and its assertion "verified" an
+emptiness that had never been created. The release died on it.
+
+The consumer patched its own helper. The seam stayed private, so the next
+consumer was going to make the same mistake.
+
+**The lesson is not "there was no delete function".** It is that a delete which
+removed nothing was indistinguishable from one that worked.
+
+### Added — the terminal verbs, and they report what they did
+
+| Verb | Removes | Returns |
+|---|---|---|
+| `drop_challenge(challenge_id)` | the challenge | `DropReport` |
+| `drop_verification_token(token)` | one stateless `X-Verification-Token` | `DropReport` |
+| `revoke_grants(user_id, scopes)` | that user's grants for those scopes | `list[DropReport]`, one per scope, in order |
+
+All three are exported from `stapel_core.verification`, alongside the new
+`DropOutcome` and `DropReport`. Each reads the key **this module** computes,
+deletes it, and reads it **back** — so `DROPPED` is a measurement, not a claim.
+
+`DropOutcome` names three facts that must never be folded into one another
+(the rule `CodeOutcome` already states for reads):
+
+* `DROPPED` — a record was there and a read-back confirms it is gone.
+* `NOT_FOUND` — nothing was stored under that key. Already spent, aged out, or
+  **the writer computed a different key** — a different `GRANT_NAMESPACE`, or a
+  caller reaching for `django.core.cache.cache`. This is the defect above,
+  named.
+* `STILL_PRESENT` — the delete ran and the record is still readable. The store
+  did not obey; never report it as success.
+
+`DropReport` is **falsy unless the outcome is `DROPPED`**, so the obvious
+`assert drop_challenge(cid)` is a real assertion. A bare `str`-Enum would not
+do: every member of one is truthy, so that one-liner would pass on `NOT_FOUND`
+— the exact outcome the primitive exists to expose. `NOT_FOUND` logs a warning
+and `STILL_PRESENT` an error, both naming the namespace and telling the reader
+what to compare, so a caller who ignores the return value still cannot obtain a
+quiet no-op.
+
+**Placed in the ordinary public API on purpose, not in a `testing` sidecar.**
+These are operational primitives that tests also use: a step-up nobody
+requested, an erasure, a session known to be compromised are the same removal
+`record_failed_attempt` already performs when the attempt budget runs out. A
+"for tests only" function that operations will reach for anyway should be
+named honestly rather than quarantined somewhere the contract does not
+describe — the private version of this seam is what cost a consumer a release.
+
+### Changed — `revoke_grants` returns reports instead of `None`
+
+Additive: nothing could depend on the `None`. "Revoke everywhere" is a
+security operation, and one that removed nothing must not be
+indistinguishable from one that worked.
+
+### Documented — what `revoke_grants` does not reach
+
+A verification token minted by `complete_challenge` is keyed by the token
+itself (`TOKEN_KEY`), so it cannot be enumerated from a user id: it survives
+`revoke_grants` for its full `max_age` and its holder still satisfies
+`has_grant(user, scope, token=…)`. Until 0.46.0 nothing public could remove
+one at all. `drop_verification_token` closes that when the value is in hand;
+when it is not, the token's lifetime remains the only bound.
+
+### Audited, not fixed here — the same shape elsewhere
+
+Every other place this library creates state a consumer can only clear through
+a private accessor, or clears it with a call that cannot say whether anything
+went. Named so the next reader does not have to find them again:
+
+* **`verification.policy.invalidate_policy_cache(user_id)`** — public and
+  exported, but returns `None`, and it goes through `django.core.cache.cache`:
+  the one part of `stapel_core.verification` that did **not** move to
+  `fleet_cache` in 0.45.0. Invalidating a policy in the auth service therefore
+  does not invalidate it in the peer that enforces it, which keeps the stale
+  answer for `POLICY_CACHE_TTL` (60s). Self-healing, but a user who turns a
+  scope on can be unprotected in a peer for up to a minute. Moving it is a
+  wire-format change between peers, like `GRANT_NAMESPACE` was, so it gets its
+  own release rather than riding this one.
+* **`verification.codes.OneTimeCodeStore.discard()` / `.unblock()`** — both
+  return `None`, and `discard()` swallows `StoreUnavailable` besides, so "the
+  store was down", "there was nothing to discard" and "dropped" are one value.
+  In the module whose own docstring insists absence and wrongness are different
+  facts. Its `check()` already returns a verdict; the drop verbs want the same
+  `DropReport` treatment.
+* **`core.token_blacklist.TokenBlacklist.remove_from_blacklist()` /
+  `.clear_all()`** — return `True` when the call did not raise, not when
+  something was removed.
+* **`django.jwt.authentication.unblacklist_user()`** — the same. Its sibling
+  `blacklist_user` already documents that "a caller that ignores the result
+  cannot tell a ban from a no-op"; the concern was never carried to the delete
+  path.
+* **`django.jwt.tombstone.lift_tombstone()`** — the same, and the most costly
+  of them: the operator calling it is restoring a wrongly-deleted user, and a
+  `True` that lifted nothing leaves that user locked out with no signal.
+* **`django.mandate.invalidate_mandate_cache()`** — returns `None`, on the
+  service-local cache, while what invalidates it (the revocation broadcast) is
+  fleet-wide.
+
+### Tests
+
+`tests/test_challenge_drop.py` (18 tests). The regression the original defect
+needed is `TestTheDropIsNeverSilent`: a challenge written under one fleet
+namespace, dropped under another, must come back `NOT_FOUND` — visibly a
+no-op, not silently one — and the record must still be there afterwards. The
+plain-cache delete that shipped in the consumer is kept in the suite beside it
+(`test_a_plain_cache_delete_has_nothing_to_say`) so the reason the primitive
+exists stays visible: it returns a truthful `False` about a key this module
+never writes, which is no evidence at all about the record the caller means.
+On 0.45.0 the file does not import.
+
 ## [0.45.0] — 2026-08-24
 
 ### The gate asked for a credential the browser it guarded could not produce

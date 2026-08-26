@@ -22,6 +22,13 @@ The same package owns :class:`OneTimeCodeStore` (``codes.py``): the TTL-scoped,
 hashed store an OTP flow keeps its codes in instead of a database table. It is
 storage only — lifetimes, attempt budgets and delivery stay with the caller.
 
+Every record the store creates has a public verb that removes it again:
+``drop_challenge``, ``drop_verification_token``, ``revoke_grants``. They
+report a :class:`~stapel_core.verification.grants.DropReport` rather than
+``None``, because a delete that removed nothing must not look like one that
+worked — reach for these instead of ``django.core.cache.cache``, which
+computes a different key entirely (``grants.py``, 0.46.0).
+
 Client cycle: 403 with ``verification`` → run the factor UI against the
 auth service's verification endpoints → retry the original request (the
 grant is stored server-side per user+scope; stateless clients may instead
@@ -46,11 +53,16 @@ from .factors import (
     strong_factors,
 )
 from .grants import (
+    DropOutcome,
+    DropReport,
     complete_challenge,
     create_challenge,
+    drop_challenge,
+    drop_verification_token,
     get_challenge,
     grant_verification,
     has_grant,
+    revoke_grants,
     verification_enrollment_payload,
     verification_error_payload,
 )
@@ -75,6 +87,11 @@ __all__ = [
     "create_challenge",
     "get_challenge",
     "complete_challenge",
+    "drop_challenge",
+    "drop_verification_token",
+    "revoke_grants",
+    "DropOutcome",
+    "DropReport",
     "grant_verification",
     "has_grant",
     "verification_enrollment_payload",
