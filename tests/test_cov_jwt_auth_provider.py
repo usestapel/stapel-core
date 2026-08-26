@@ -8,6 +8,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import RequestFactory
 
+from stapel_core.core.drop import DropOutcome
 from stapel_core.django.jwt.authentication import (
     JWTCookieAuthentication,
     blacklist_user,
@@ -67,13 +68,15 @@ class TestUserBlacklistHelpers:
         # made the ban a permanent no-op with nothing saying so.
         assert blacklist_user("locmem-user") is True
         assert is_user_blacklisted("locmem-user") is True
-        assert unblacklist_user("locmem-user") is True
+        assert unblacklist_user("locmem-user")
         assert is_user_blacklisted("locmem-user") is False
 
     def test_blacklist_user_reports_failure(self):
         with patch(USER_BLACKLIST_STORE, return_value=_ExplodingCache()):
             assert blacklist_user("u1") is False
-            assert unblacklist_user("u1") is False
+            report = unblacklist_user("u1")
+        assert report.outcome is DropOutcome.UNAVAILABLE
+        assert not report
 
     def test_unblacklist_user_deletes_from_the_shared_namespace(self):
         store = MagicMock()
@@ -81,8 +84,11 @@ class TestUserBlacklistHelpers:
             unblacklist_user("u1")
         store.delete.assert_called_once_with("user_blacklisted:u1")
 
-    def test_unblacklist_unknown_user_is_a_noop(self):
-        assert unblacklist_user("u1") is True  # must not raise
+    def test_unblacklist_an_unbanned_user_says_it_removed_nothing(self):
+        """Was ``is True`` — "the call did not raise" — until 0.47.0."""
+        report = unblacklist_user("u1")
+        assert report.outcome is DropOutcome.NOT_FOUND
+        assert not report
 
     def test_is_user_blacklisted_true(self):
         store = MagicMock()

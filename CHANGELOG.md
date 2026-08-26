@@ -1,5 +1,170 @@
 # Changelog
 
+## [0.47.0] — 2026-08-26
+
+### A truthful answer to the wrong question is worse than silence
+
+0.46.0 fixed the verification drops and its audit named six more calls with the
+same shape, deliberately left for their own release. This is that release.
+
+**The shape is not "the function returned nothing."** Django's `cache.delete`
+returns `False`, not `None` — so it was never the absence of a return value
+that hid the defect. The return was a *truthful answer about a key that module
+never writes*, which is no evidence at all about the record the caller meant. A
+truthful answer to the wrong question looks like information, which is exactly
+what makes it worse than silence.
+
+Four of the six said even less than that. `lift_tombstone`,
+`unblacklist_user`, `remove_from_blacklist` and `clear_all` returned `True` for
+**"the call did not raise"** — one value for "removed it", "there was nothing
+there", "it is still readable" and "the store never answered".
+
+### One vocabulary, in `stapel_core.core.drop`
+
+`DropOutcome` and `DropReport` moved out of `verification.grants` (which
+re-exports them, unchanged, so `stapel_core.verification` imports keep working)
+into `core/drop.py`, with `measured_drop` / `drop_cache_key` / `measured_clear`.
+A second enum per module would fold the facts back together at the seam.
+
+`DropOutcome` gained a fourth member:
+
+* `UNAVAILABLE` — the store could not be reached, so **nothing is known** about
+  the record. Not a removal, and not evidence of absence either. The same fact
+  `CodeOutcome.UNAVAILABLE` and `StoreUnavailable` already name for reads.
+
+Everything but `DROPPED` is logged, naming the namespace the key was computed
+under, so a caller who ignores the return value still cannot obtain a quiet
+no-op. `DropReport` stays falsy unless `DROPPED`.
+
+### Fixed — what each verb now returns, and how it is measured
+
+| Verb | Was | Now |
+|---|---|---|
+| `django.jwt.tombstone.lift_tombstone(uid)` | `True` if it did not raise | `DropReport` — read, delete, read back, against the fleet revocation namespace |
+| `django.jwt.authentication.unblacklist_user(uid)` | `True` if it did not raise | `DropReport`, same namespace |
+| `core.token_blacklist.TokenBlacklist.remove_from_blacklist(jti)` | `True` if it did not raise | `DropReport`, same namespace |
+| `core.token_blacklist.TokenBlacklist.clear_all()` | `True` if it did not raise | `DropReport`, measured with a probe |
+| `verification.codes.OneTimeCodeStore.discard(id)` | `None`, swallowing `StoreUnavailable` | `DropReport`; the outage is now `UNAVAILABLE` |
+| `verification.codes.OneTimeCodeStore.unblock(id)` | `None` | `DropReport` |
+| `django.mandate.invalidate_mandate_cache(user_id)` | `None` | `DropReport` (+ `absence_is_normal=` for the broadcast path) |
+| `verification.policy.invalidate_policy_cache(user_id)` | `None` | `DropReport` — **namespace move deferred, see below** |
+| `django.workspaces.invalidate_membership_cache(ws, user)` | `None` | `DropReport` (found in this sweep, same shape) |
+
+**`lift_tombstone` is the costly one, which is why it is first.** The operator
+calling it is restoring a **wrongly deleted user**. A `True` that lifted
+nothing told them the person was back while that person stayed locked out of
+every consumer-mode service in the fleet, with nothing anywhere saying
+otherwise. `NOT_FOUND` there does not mean "admitted": it means nothing was
+tombstoned under *this* deployment's revocation namespace, and the peer holding
+the tombstone still refuses.
+
+**`unblacklist_user` was the same shape in the same key space.** Its sibling
+`blacklist_user` has documented since 0.39.0 that "a caller that ignores the
+result cannot tell a ban from a no-op"; the concern was simply never carried to
+the delete path.
+
+**`clear_all` genuinely cannot read back what it removed** — there is no key to
+re-read and nothing enumerates what was there — which is precisely where `True`
+for "did not raise" is most comforting and least true. It now writes a probe,
+clears, and reads the probe back, so it measures the one thing that *is*
+measurable: whether the clear reached the namespace this library writes.
+`STILL_PRESENT` on a backend whose `clear()` is a no-op, `UNAVAILABLE` on one
+that does not retain what it is given (a dummy backend, where a clear can never
+be verified at all). It does **not** claim that only revocation keys were
+removed, and says so.
+
+**`OneTimeCodeStore.discard` swallowed `StoreUnavailable`**, so "the store was
+down", "there was nothing to discard" and "dropped" were one value — in the
+module whose own header insists absence and wrongness are different facts. It
+still does not raise (a discard is usually the best-effort tail of some other
+operation), but the outage is now in the return value and in the log, which is
+the difference between best-effort and unknowable.
+
+### Documented — `OneTimeCodeStore` is service-local on purpose
+
+Recorded rather than left as an accident of history: this store stayed on
+`django.core.cache.cache` when 0.45.0 moved challenges, grants and tokens onto
+the fleet namespace, and that is correct. **Both halves of a one-time code
+happen in one service** — the same service issues, delivers and checks it; what
+must travel is the *outcome*, and the grant does. Fleet-sharing it would
+publish a hashed bearer credential to every peer, make the per-identifier
+attempt budget and block shared state a peer could exhaust or clear, and stop
+the send-rate window being a property of the service that sends. The reports
+these verbs return carry `namespace="service-local:<KEY_PREFIX>"`, so the scope
+is visible rather than assumed. The same reasoning, written out, applies to the
+mandate cache: each peer caches its own answer and drops it from the same
+fleet-wide revocation broadcast.
+
+### Deferred — the policy cache's namespace is a wire format
+
+`verification.policy` is the last part of `stapel_core.verification` still on
+`django.core.cache.cache`. Invalidating a policy in the auth service therefore
+does **not** invalidate it in the peer that enforces it, which keeps the stale
+answer for `POLICY_CACHE_TTL` (60s) — self-healing, bounded, but a user who
+turns a scope ON can be unprotected in a peer for up to a minute.
+
+Moving it onto `fleet_cache` is a **wire-format change between peers**, exactly
+as `GRANT_NAMESPACE` was: two peers on different sides of the change both read
+a cache neither writes. So it is not bundled into an otherwise additive
+release. `invalidate_policy_cache` now reports `namespace="service-local:…"`,
+which makes the gap visible in the return value instead of invisible in a
+`None`; `tests/test_drop_reports.py::TestPolicyInvalidationMeasures` pins the
+stale peer copy so the deferral cannot be forgotten.
+
+### Fixed — a workspaces outage was rendering as 403, not 503
+
+Reported during this sweep by the stapel-forms owner, verified against 0.45.0,
+and the same family: "did not raise" read as "answered no".
+
+`django.workspaces.require_capability` logged a `FunctionCallError` and
+returned `None` — a **denial** — when the provider had rendered no verdict at
+all; `_require_capability_fallback`'s membership lookup swallowed
+`WorkspaceLookupUnavailable` besides. Downstream, a consumer's authorization
+layer had an `unavailable → 503` branch that **could never fire**: a workspaces
+outage produced 403, indistinguishable from a genuine refusal, and an operator
+watching had nothing to tell the two apart.
+
+Now there are three answers, never two: a membership, `None` (a verdict), or
+`WorkspaceLookupUnavailable` (the question could not be asked). `strict=False`
+restores the old shape for a soft, non-authorization caller — but it is not the
+default, because the default is what the caller who never thought about it
+gets. `require_role`'s default flipped to `strict=True` with it, for the same
+reason; `get_membership` keeps `strict=False` because it is a *reader* with
+legitimate non-authorization callers, and its docstring has said since 0.31.0
+that anyone rendering its `None` as 403 must ask for strict.
+
+**For the stapel-forms owner:** `test_a_workspaces_outage_still_renders_403_not_503`
+is expected to go **red** against core 0.47.0. That red is the signal the fix
+landed, and the caveat published in every capability entry's `gates.behavior`
+("a 403 means either not-granted or no-verdict") can come out of the contract.
+Publishing it there rather than leaving it undocumented is why this got fixed
+at all.
+
+### Tests
+
+`tests/test_drop_reports.py` (24). Each verb is exercised in the shape that
+made the old return useless: a record written under ONE namespace and dropped
+under another — two fleets, or two services sharing one store — or a store that
+cannot answer. The proofs that the old return said nothing were run against the
+0.46.0 bodies verbatim before deleting them: `old_lift_tombstone` returns
+`True` across a namespace mismatch while `is_user_tombstoned` still answers
+`True`; `old_clear_all` returns `True` on a backend that ignores `clear()`;
+`old_discard` returns `None` whether the store worked or was down;
+`plain_cache.delete("a-key-nobody-wrote")` returns `False`, the truthful answer
+to the wrong question. On 0.46.0 the new file does not import at all.
+
+`tests/test_workspaces_capability.py` carries the no-verdict pair
+(`test_a_provider_that_raised_is_not_a_denial`,
+`test_a_membership_lookup_with_no_verdict_is_not_a_denial`) in place of the old
+`test_remote_failure_is_fail_closed_and_not_cached`, which asserted the defect.
+
+Log assertions attach a handler to the module's own logger rather than using
+`caplog`: whether caplog observes anything depends on the host's LOGGING
+config, and a log assertion that silently observes nothing is the same genre of
+defect as the delete under test.
+
+Suite 3220 passed.
+
 ## [0.46.0] — 2026-08-26
 
 ### A delete that removed nothing looked exactly like a delete that worked

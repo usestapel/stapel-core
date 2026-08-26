@@ -101,7 +101,7 @@ class TestRevocationCrossesServices:
         with override_settings(CACHES=AUTH_SERVICE):
             blacklist_user(uid, ttl=3600)
         with override_settings(CACHES=PROFILES_SERVICE):
-            assert unblacklist_user(uid) is True
+            assert unblacklist_user(uid), "the unban removed nothing"
         with override_settings(CACHES=AUTH_SERVICE):
             assert is_user_blacklisted(uid) is False
 

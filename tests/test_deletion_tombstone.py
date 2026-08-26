@@ -21,6 +21,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 
+from stapel_core.core.drop import DropOutcome
 from stapel_core.core.revocation_store import reset_revocation_cache
 from stapel_core.django.jwt.tombstone import (
     TOMBSTONE_PREFIX,
@@ -313,12 +314,16 @@ class TestTombstoneFailsClosed:
         store = MagicMock()
         store.delete.side_effect = RuntimeError("down")
         with patch(TOMBSTONE_STORE, return_value=store):
-            assert lift_tombstone("anyone") is False
+            report = lift_tombstone("anyone")
+        assert report.outcome is DropOutcome.UNAVAILABLE
+        assert not report
 
     def test_lift_removes_a_tombstone(self):
         tombstone_user("liftable")
         assert is_user_tombstoned("liftable") is True
-        assert lift_tombstone("liftable") is True
+        report = lift_tombstone("liftable")
+        assert report.outcome is DropOutcome.DROPPED
+        assert report
         assert is_user_tombstoned("liftable") is False
 
 

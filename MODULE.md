@@ -30,7 +30,9 @@ points below; a generic fix or gap belongs **upstream** (see
   service counts in the peer that demanded it. Every record it writes has a
   public verb that removes it again — `drop_challenge`,
   `drop_verification_token`, `revoke_grants` — each returning a `DropReport`
-  rather than `None` (0.46.0).
+  rather than `None` (0.46.0). Since 0.47.0 **every removal in the package**
+  speaks that one vocabulary (`core/drop.py`): a delete measures what it did
+  instead of claiming it.
 - `flows` — self-documenting business scenarios (`Flow`, `@flow_step`,
   `flow_registry`) with doc generation and a CI completeness gate.
 - `i18n` — domain-agnostic shipping of localized content: per-app
@@ -512,6 +514,56 @@ requested, an erasure, a session known to be compromised are the same removal
 "for tests only" function operations would reach for anyway is better named
 honestly than quarantined where the contract does not describe it — the
 private version of this seam is exactly what cost a consumer a release.
+
+**One vocabulary for every removal in the package** (`core/drop.py`, 0.47.0).
+The 0.46.0 audit named six more calls of the same shape and left them; they are
+fixed here, and `DropOutcome` / `DropReport` moved out of `verification.grants`
+so they are not re-invented per module. The shape is *not* "the function
+returned nothing": Django's `cache.delete` returns `False`, not `None` — **the
+return was a truthful answer about a key the module never writes, which is no
+evidence about the record the caller meant.** A truthful answer to the wrong
+question is worse than silence, because it looks like information. Four of the
+six said even less: `True` for "the call did not raise".
+
+| Verb | Was | Now |
+|---|---|---|
+| `jwt.tombstone.lift_tombstone(uid)` | `True` if it did not raise | `DropReport` — the operator is restoring a **wrongly deleted user**; a `True` that lifted nothing left that person locked out fleet-wide with no signal |
+| `jwt.authentication.unblacklist_user(uid)` | `True` if it did not raise | `DropReport` — the concern `blacklist_user` documented, finally carried to the delete path |
+| `TokenBlacklist.remove_from_blacklist(jti)` | `True` if it did not raise | `DropReport` |
+| `TokenBlacklist.clear_all()` | `True` if it did not raise | `DropReport`, measured with a **probe** (see below) |
+| `OneTimeCodeStore.discard()` / `.unblock()` | `None`, and `discard` swallowed `StoreUnavailable` | `DropReport`, with `UNAVAILABLE` as its own outcome |
+| `mandate.invalidate_mandate_cache(user_id)` | `None` | `DropReport`; the report names the per-service scope |
+| `verification.policy.invalidate_policy_cache(user_id)` | `None` | `DropReport` (the namespace **move** is deferred — see below) |
+| `workspaces.invalidate_membership_cache(ws, user)` | `None` | `DropReport` |
+
+`DropOutcome` gained a fourth member, `UNAVAILABLE`: the store could not be
+reached, so nothing is known about the record — not a removal, and not evidence
+of absence either. All four are logged bar `DROPPED`.
+
+**Where a verb genuinely cannot read back, it says so.** `clear_all()` empties
+a whole connection and nothing enumerates what was there, so `True` for "did not
+raise" was the most comforting of the six lies. It now measures the one thing
+that *is* measurable — that `clear()` reached the namespace this library writes
+— by writing a probe first and reading it back after, and it documents that it
+does **not** claim only revocation keys were removed.
+
+**Two of these caches are deliberately service-local, and say so in the
+report.** `OneTimeCodeStore` stays on `django.core.cache.cache` because the
+issue and the check of a one-time code happen in one service; sharing it would
+publish a bearer credential to every peer and make the attempt budget, block
+and send-window shared state. The mandate cache stays local because the
+*invalidation* is the fleet-wide part — each peer drops its own copy from the
+same broadcast. Their reports carry `namespace="service-local:<KEY_PREFIX>"`,
+so a `DROPPED` is visibly a measurement about this process only.
+
+**Deferred, deliberately: the policy cache's namespace.**
+`verification.policy` is the last part of `stapel_core.verification` still on
+`django.core.cache.cache`, so invalidating a policy in auth does not invalidate
+it in the peer that enforces it and the peer serves the stale answer for
+`POLICY_CACHE_TTL`. Moving it is a wire format between peers, exactly as
+`GRANT_NAMESPACE` was, so it gets its own release rather than riding an
+additive one. What 0.47.0 fixes is that the reach is now visible in the return
+value instead of invisible in a `None`.
 
 `revoke_grants` does **not** reach a minted verification token: `TOKEN_KEY` is
 keyed by the token itself, so it cannot be enumerated from a user id and a
@@ -1055,6 +1107,23 @@ disables). `workspace.member_removed` / `workspace.member_suspended` drop the
 entry as they arrive (subscribed from `ready()`), so the TTL bounds the bus
 failing rather than the normal path. A grant may lag by up to the TTL — that
 direction fails toward refusal. A non-answer is never cached.
+`invalidate_mandate_cache()` returns a `DropReport` (0.47.0) — an invalidation
+over an authorization answer is the last place a no-op may be silent — and the
+broadcast subscriber passes `absence_is_normal=True`, because a peer that never
+cached that user is the ordinary case there and a warning per event teaches the
+reader to ignore the one that matters.
+
+**The workspace client answers three things, never two** (`django/workspaces.py`,
+0.47.0). Granted, denied, and *could not be asked* — the third is
+`WorkspaceLookupUnavailable`, which callers turn into 503. `require_capability`
+used to log a `FunctionCallError` and return `None`, and the degrade path's
+membership lookup swallowed the same exception, so a workspaces outage reached
+the caller as a **denial**: a user locked out by an outage and a user correctly
+refused got the same 403, and the consumer's `unavailable → 503` branch could
+never fire. `require_capability` and `require_role` now default to
+`strict=True`; `get_membership` keeps `strict=False` because it is a reader with
+legitimate non-authorization callers, and any caller rendering its `None` as 403
+must ask for strict.
 
 ### Silenced checks — `django/check_guard.py`
 
@@ -1523,7 +1592,10 @@ is the account.
 **Reactivation lifts the record, and that is the deliberate difference from
 the deletion tombstone.** `lift_tombstone` exists only for an operator who
 deleted the wrong row, because every automatic reason to lift a tombstone is a
-way for a token to undo a deletion. Suspending and restoring an account is an
+way for a token to undo a deletion. That operator now gets a `DropReport`
+instead of `True`-if-it-did-not-raise (0.47.0): the person they are restoring
+stays locked out fleet-wide if the lift found nothing, and until 0.47.0 nothing
+said so. Suspending and restoring an account is an
 ordinary, repeatable operation, so the same receiver deletes the key on
 `is_active=True`. Do not copy the tombstone's no-automatic-lift rule here by
 analogy.

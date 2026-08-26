@@ -24,7 +24,7 @@ pip install stapel-core
 
 | Fact | Value |
 |---|---|
-| Version | `0.46.0` |
+| Version | `0.47.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | Django | `Django>=5.1,<6.1` |
 | Usage surface | 53 |
@@ -194,11 +194,23 @@ from stapel_core.verification import drop_challenge
 assert drop_challenge(challenge["challenge_id"])          # truthy only if DROPPED
 ```
 
-The report's `outcome` is `DROPPED`, `NOT_FOUND` or `STILL_PRESENT`, and
-`NOT_FOUND` / `STILL_PRESENT` are logged with the namespace. **Never delete
-these keys through `django.core.cache.cache`**: it computes a different key,
-removes nothing, and cannot tell you so — the mistake that killed a consumer
-release before 0.46.0.
+The report's `outcome` is `DROPPED`, `NOT_FOUND`, `STILL_PRESENT` or
+`UNAVAILABLE`, and everything but `DROPPED` is logged with the namespace.
+**Never delete these keys through `django.core.cache.cache`**: it computes a
+different key, removes nothing, and cannot tell you so — the mistake that
+killed a consumer release before 0.46.0. Note what that call actually returns
+there: `False`, not `None`. It was never the absence of a return value that hid
+the defect; the return was a truthful answer about a key the module never
+writes, which is no evidence about the record you meant.
+
+Since 0.47.0 **every removal in the package** speaks this one vocabulary
+(`stapel_core.core.drop`), measured the same way — read, delete, read back:
+`lift_tombstone`, `unblacklist_user`, `TokenBlacklist.remove_from_blacklist` /
+`clear_all`, `OneTimeCodeStore.discard` / `unblock`,
+`invalidate_mandate_cache`, `invalidate_policy_cache` and
+`invalidate_membership_cache`. The four that returned `True` for "the call did
+not raise" no longer do; the costliest of them, `lift_tombstone`, is called by
+an operator restoring a wrongly deleted user.
 
 ---
 

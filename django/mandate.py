@@ -76,6 +76,12 @@ from __future__ import annotations
 import logging
 from enum import Enum
 
+from stapel_core.core.drop import (
+    DropOutcome,
+    DropReport,
+    drop_cache_key,
+    service_namespace,
+)
 from stapel_core.django.check_guard import declare_security_critical
 
 logger = logging.getLogger(__name__)
@@ -165,11 +171,42 @@ def _cache_key(user_id) -> str:
     return f"mandate:anywhere:{user_id}"
 
 
-def invalidate_mandate_cache(user_id) -> None:
-    """Forget the cached answer for *user_id*. Idempotent."""
+def invalidate_mandate_cache(user_id, *, absence_is_normal: bool = False) -> DropReport:
+    """Forget the cached answer for *user_id*. Idempotent; reports what it did.
+
+    Until 0.47.0 this returned ``None``, which for a cache over an
+    **authorization** answer is the one shape that must not be silent: the
+    thing it exists to undo is a revoked mandate that keeps opening doors.
+
+    The cache is SERVICE-LOCAL, and deliberately so — each peer caches the
+    answer it received, and the broadcast that invalidates it
+    (:data:`MANDATE_REVOKING_ACTIONS`) is fleet-wide, so every peer drops its
+    own copy as the event arrives. That is why the report's ``namespace``
+    reads ``service-local:<KEY_PREFIX>``: a ``DROPPED`` here is a measurement
+    about THIS process's cache and says nothing about a peer's. Moving the key
+    onto the fleet namespace would make one peer's delete clear all of them,
+    but it is a wire format between peers, so it is not smuggled into a release
+    that is otherwise additive.
+
+    *absence_is_normal* keeps the ``NOT_FOUND`` line at DEBUG. The broadcast
+    subscriber passes it: a peer that never cached an answer for this user is
+    the ordinary case there, and a warning on every revocation event would
+    train the reader to ignore the one that matters.
+    """
     from django.core.cache import cache
 
-    cache.delete(_cache_key(user_id))
+    return drop_cache_key(
+        cache,
+        _cache_key(user_id),
+        what="cached mandate answer",
+        namespace=service_namespace(),
+        log=logger,
+        hint=(
+            "this cache is per-service by design; a peer holds its own copy "
+            "and drops it from the same revocation broadcast"
+        ),
+        absence_is_normal=absence_is_normal,
+    )
 
 
 def _on_mandate_revoked(event) -> None:
@@ -177,7 +214,16 @@ def _on_mandate_revoked(event) -> None:
     payload = getattr(event, "payload", None) or {}
     user_id = payload.get("user_id")
     if user_id:
-        invalidate_mandate_cache(user_id)
+        report = invalidate_mandate_cache(user_id, absence_is_normal=True)
+        if report.outcome in (DropOutcome.STILL_PRESENT, DropOutcome.UNAVAILABLE):
+            # Already logged as an error by the drop itself; named again here
+            # because of what it means on THIS path — the bound on a stale
+            # mandate has just silently become the TTL instead of the event.
+            logger.error(
+                "mandate revocation for %s did not clear this service's cache "
+                "(%s); the stale answer stands until it ages out",
+                user_id, report.outcome.value,
+            )
 
 
 def subscribe_mandate_invalidation() -> None:

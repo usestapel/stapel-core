@@ -14,6 +14,7 @@ import jwt as pyjwt
 import pytest
 from django.test import override_settings
 
+from stapel_core.core.drop import DropOutcome
 from stapel_core.core.config import JWTConfig
 from stapel_core.core.jwt_handler import JWTHandler
 from stapel_core.core.token_blacklist import TokenBlacklist
@@ -276,15 +277,19 @@ class TestTokenBlacklistErrors:
         with patch(BLACKLIST_STORE, return_value=self._broken_cache()):
             assert bl.is_blacklisted("jti-x") is False
 
-    def test_remove_from_blacklist_error_returns_false(self):
+    def test_remove_from_blacklist_reports_an_outage_as_an_outage(self):
         bl = TokenBlacklist(key_prefix="err_bl")
         with patch(BLACKLIST_STORE, return_value=self._broken_cache()):
-            assert bl.remove_from_blacklist("jti-x") is False
+            report = bl.remove_from_blacklist("jti-x")
+        assert report.outcome is DropOutcome.UNAVAILABLE
+        assert not report
 
-    def test_clear_all_error_returns_false(self):
+    def test_clear_all_reports_an_outage_as_an_outage(self):
         bl = TokenBlacklist(key_prefix="err_bl")
         with patch(BLACKLIST_STORE, return_value=self._broken_cache()):
-            assert bl.clear_all() is False
+            report = bl.clear_all()
+        assert report.outcome is DropOutcome.UNAVAILABLE
+        assert not report
 
 
 # ---------------------------------------------------------------------------

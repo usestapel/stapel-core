@@ -7,6 +7,16 @@ result is cached briefly in Redis (or the local cache) so a single
 request burst doesn't fan out into N HTTP calls.
 
 Service-to-service authentication uses the SERVICE_API_KEY header.
+
+Three answers, never two
+------------------------
+Every helper here answers an AUTHORIZATION question, and each of them can be
+in one of three states: granted, denied, or *could not be asked*. The third is
+not a variety of the second. ``WorkspaceLookupUnavailable`` is how it is said —
+callers turn it into 503, never 403 — and the two places that used to swallow
+it (``require_capability`` on ``FunctionCallError``, and the degrade path's
+membership lookup) stopped in 0.47.0. A user locked out by an outage and a user
+correctly refused must not receive the same answer.
 """
 
 from __future__ import annotations
@@ -20,6 +30,7 @@ from uuid import UUID
 import requests
 from django.core.cache import cache
 
+from stapel_core.core.drop import DropReport, drop_cache_key, service_namespace
 from stapel_core.django.peers import service_answered
 
 logger = logging.getLogger(__name__)
@@ -213,12 +224,22 @@ def get_membership(workspace_id, user_id, *, strict: bool = False) -> Optional[M
 
 
 def require_role(
-    workspace_id, user_id, minimum: str, *, strict: bool = False
+    workspace_id, user_id, minimum: str, *, strict: bool = True
 ) -> Optional[Membership]:
     """Return membership if the user has at least `minimum`, else None.
 
     `strict` forwards to :func:`get_membership` — with it, a lookup that
-    reached no verdict raises instead of being reported as insufficient role.
+    reached no verdict raises :class:`WorkspaceLookupUnavailable` instead of
+    being reported as insufficient role.
+
+    **The default flipped to ``True`` in 0.47.0**, with
+    :func:`require_capability`. The two ``require_*`` verbs are authorization
+    gates: whatever they return goes straight into a 403, so a default that
+    turns an outage into "insufficient role" hands the caller a fabricated
+    verdict. :func:`get_membership` keeps ``strict=False`` because it is a
+    *reader* with legitimate non-authorization callers (showing a role,
+    deciding what to prefetch) — but any caller that renders its ``None`` as
+    403 must pass ``strict=True``, as its own docstring has said since 0.31.0.
     """
     membership = get_membership(workspace_id, user_id, strict=strict)
     if membership and _role_at_least(membership.role, minimum):
@@ -244,8 +265,14 @@ def _capability_matches(capability: str, granted: str) -> bool:
 
 
 def _require_capability_fallback(workspace_id, user_id, capability: str) -> Optional[Membership]:
-    """Degrade path for pre-capability workspaces: membership + builtin map."""
-    membership = get_membership(workspace_id, user_id)
+    """Degrade path for pre-capability workspaces: membership + builtin map.
+
+    ``strict=True``: this path exists to answer an authorization question, and
+    a membership lookup that reached no verdict must not be reported here as
+    "no such capability". It swallowed the exception until 0.47.0, which is how
+    a workspaces outage reached a caller as a plain deny.
+    """
+    membership = get_membership(workspace_id, user_id, strict=True)
     if membership is None:
         return None
     granted = BUILTIN_ROLES.get(membership.role, {}).get("capabilities", [])
@@ -254,15 +281,44 @@ def _require_capability_fallback(workspace_id, user_id, capability: str) -> Opti
     return None
 
 
-def require_capability(workspace_id, user_id, capability: str) -> Optional[Membership]:
+def require_capability(
+    workspace_id, user_id, capability: str, *, strict: bool = True
+) -> Optional[Membership]:
     """Return membership if the user holds *capability* in the workspace.
 
     Asks the ``workspaces.check_capability`` comm Function (workspaces 0.6+),
     caching the verdict briefly like :func:`get_membership`. Against an old
     workspaces deployment where the Function is not registered/routed, it
     degrades to :func:`get_membership` plus the builtin role→capability
-    fallback table (custom roles are unknowable there and deny). A remote
-    call failure is fail-closed: ``None``, not cached, next call retries.
+    fallback table (custom roles are unknowable there and deny).
+
+    Three answers, not two (0.47.0)
+    -------------------------------
+    * a membership → the user holds the capability;
+    * ``None`` → the workspaces service said no. A verdict;
+    * :class:`WorkspaceLookupUnavailable` → **the question could not be
+      asked**: the provider raised, the call timed out, or the membership
+      lookup behind the degrade path reached no verdict.
+
+    Until 0.47.0 the third collapsed into the second — a ``FunctionCallError``
+    was logged and ``None`` returned, and ``_require_capability_fallback``
+    swallowed the lookup failure besides. Downstream that meant an
+    authorization layer's ``unavailable → 503`` branch could never fire, so a
+    workspaces outage rendered **403**: a user locked out by an outage and a
+    user correctly refused got the same answer, and the operator watching had
+    nothing to tell them apart. stapel-forms 0.3.0 could not fix it from
+    outside and published the caveat in its machine-readable contract instead
+    (every capability entry's ``gates.behavior``), pinning the behaviour with
+    ``test_a_workspaces_outage_still_renders_403_not_503`` so the caveat would
+    die with the defect. This is that death: that test is expected to go red.
+
+    ``strict=False`` restores the old shape for a caller that genuinely wants
+    an outage to read as a deny — a soft, non-authorization use of the same
+    helper. It is not the default, because the default is what the caller who
+    never thought about it gets, and for an authorization question that must
+    be refusal-with-a-reason rather than a fabricated verdict.
+
+    A no-verdict is never cached either way: the next call retries.
     """
     key = _capability_cache_key(workspace_id, user_id, capability)
     cached = cache.get(key)
@@ -289,13 +345,33 @@ def require_capability(workspace_id, user_id, capability: str) -> Optional[Membe
             timeout=3.0,
         )
     except (FunctionNotRegistered, FunctionRouteNotConfigured) as exc:
+        # Not an outage: the seam is absent by deployment shape, and the
+        # builtin role map is a real (narrower) answer. See comm/functions.py.
         logger.debug(
             "workspaces.check_capability unavailable (%s) — degrading to "
             "membership + builtin role map", exc,
         )
-        return _require_capability_fallback(workspace_id, user_id, capability)
+        try:
+            return _require_capability_fallback(workspace_id, user_id, capability)
+        except WorkspaceLookupUnavailable:
+            if strict:
+                raise
+            logger.warning(
+                "workspaces membership lookup reached no verdict for %s/%s; "
+                "strict=False, so this is being reported as a denial",
+                workspace_id, user_id,
+            )
+            return None
     except FunctionCallError as exc:
-        logger.warning("workspaces capability check failed: %s", exc)
+        # The provider raised or the call failed: no verdict was rendered.
+        # Reporting that as a denial is how an outage becomes a 403 (see the
+        # docstring). Not cached — the next call retries.
+        logger.warning("workspaces capability check reached no verdict: %s", exc)
+        if strict:
+            raise WorkspaceLookupUnavailable(
+                f"{CAPABILITY_FUNCTION} did not render a verdict for "
+                f"{workspace_id}/{user_id}: {exc}"
+            ) from exc
         return None
 
     allowed = bool((result or {}).get("allowed"))
@@ -307,8 +383,26 @@ def require_capability(workspace_id, user_id, capability: str) -> Optional[Membe
     return None
 
 
-def invalidate_membership_cache(workspace_id, user_id) -> None:
-    cache.delete(_cache_key(workspace_id, user_id))
+def invalidate_membership_cache(workspace_id, user_id) -> DropReport:
+    """Forget this service's cached membership verdict; reports what it did.
+
+    Same shape as the drops fixed in 0.47.0, found in the same sweep: it
+    returned ``None`` over a cache holding an authorization answer. The cache
+    is per-service (``namespace`` on the report says so), so a ``DROPPED``
+    here is a measurement about this process only — a peer keeps its own copy
+    until its own :data:`CACHE_TTL_SECONDS` runs out.
+    """
+    return drop_cache_key(
+        cache,
+        _cache_key(workspace_id, user_id),
+        what="cached workspace membership",
+        namespace=service_namespace(),
+        log=logger,
+        hint=(
+            "this cache is per-service and short-lived; a peer holds its own "
+            "copy for up to CACHE_TTL_SECONDS"
+        ),
+    )
 
 
 def get_or_create_personal_workspace(user_id) -> Optional[str]:

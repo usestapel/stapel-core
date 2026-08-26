@@ -45,10 +45,16 @@ test built on that delete — the setup did nothing at all, and the assertion
 So the terminal verbs — :func:`drop_challenge`, :func:`drop_verification_token`
 and :func:`revoke_grants` — do not return ``None`` and do not hand back a raw
 backend boolean. Each reads the key THIS module writes, deletes it, reads it
-BACK, and returns a :class:`DropReport` saying which of three different things
-happened (``DROPPED`` / ``NOT_FOUND`` / ``STILL_PRESENT``). ``NOT_FOUND`` and
-``STILL_PRESENT`` are also logged, naming the namespace, so a caller who
+BACK, and returns a :class:`~stapel_core.core.drop.DropReport` saying which
+different thing happened (``DROPPED`` / ``NOT_FOUND`` / ``STILL_PRESENT``, and
+since 0.47.0 ``UNAVAILABLE`` when the store could not answer at all). Every
+outcome but ``DROPPED`` is logged, naming the namespace, so a caller who
 ignores the return value still cannot get a no-op quietly.
+
+The vocabulary itself lives in :mod:`stapel_core.core.drop` since 0.47.0: the
+0.46.0 audit found six more removals in this package that claimed instead of
+measuring, and they speak the same :class:`DropOutcome` rather than each
+inventing one.
 
 Configuration lives in ``STAPEL_VERIFICATION`` and, like the revocation pair,
 must match across peers if changed:
@@ -65,10 +71,12 @@ from __future__ import annotations
 import logging
 import secrets
 import time
-from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
+# DropOutcome is re-exported, not used here: ``stapel_core.verification``
+# imports both names from this module, which is where 0.46.0 put them and
+# where every consumer learned them.
+from stapel_core.core.drop import DropOutcome, DropReport, drop_cache_key  # noqa: F401
 from stapel_core.core.fleet_cache import fleet_cache
 
 from .conf import verification_settings
@@ -119,81 +127,31 @@ def _cache():
 # ---------------------------------------------------------------------------
 
 
-class DropOutcome(str, Enum):
-    """What a drop actually did to the store.
-
-    Three different facts, and none of them may be folded into another — the
-    same rule :class:`~stapel_core.verification.codes.CodeOutcome` states for
-    reads. Collapsing them is precisely the defect: a delete that removed
-    nothing is not a delete that worked.
-    """
-
-    #: A record was there under this key; a read-back confirms it is gone.
-    DROPPED = "dropped"
-    #: Nothing was stored under this key. Already spent, aged out — or the
-    #: writer computed a DIFFERENT key (a different ``GRANT_NAMESPACE``, or a
-    #: caller reaching for ``django.core.cache.cache`` instead of this module).
-    NOT_FOUND = "not_found"
-    #: The delete ran and the record is STILL readable. The store did not obey;
-    #: never report this as success.
-    STILL_PRESENT = "still_present"
-
-
-@dataclass(frozen=True)
-class DropReport:
-    """The verdict of a drop, plus enough context to explain a ``NOT_FOUND``.
-
-    Falsy unless the record was found and is now gone, so the ordinary
-    ``assert drop_challenge(cid)`` is a real assertion rather than a truthy
-    enum member that passes on every outcome.
-    """
-
-    outcome: DropOutcome
-    #: What was being dropped: ``"challenge"``, ``"grant"``, ``"token"``.
-    what: str
-    #: The unprefixed key, as this module computes it.
-    key: str
-    #: The fleet namespace the key was computed under. The first thing to
-    #: compare against the writer's when an expected record was ``NOT_FOUND``.
-    namespace: str
-
-    def __bool__(self) -> bool:
-        return self.outcome is DropOutcome.DROPPED
+#: What to compare when a drop here reports ``NOT_FOUND``.
+_MISS_HINT = (
+    "check GRANT_NAMESPACE/GRANT_CACHE agree with the writer, and that the "
+    "writer went through stapel_core.verification and not "
+    "django.core.cache.cache"
+)
 
 
 def _drop(key: str, what: str) -> DropReport:
     """Delete *key* and report what that did, having read the store back.
 
-    Read, delete, read again. The read-back is what makes ``DROPPED`` a
-    measurement instead of a claim, and it costs one cache round-trip on a
-    path that runs once per challenge at most.
+    The mechanism moved to :mod:`stapel_core.core.drop` in 0.47.0, when the
+    six same-shape drops the 0.46.0 audit named were fixed and needed the same
+    vocabulary — one :class:`DropOutcome` for the package, not a second one per
+    module. This function contributes the verification-specific half: which
+    connection, which namespace, and what to compare when a drop misses.
     """
-    cache = _cache()
-    namespace = grant_namespace()
-    existed = cache.get(key) is not None
-    cache.delete(key)
-    survived = cache.get(key) is not None
-
-    if survived:
-        outcome = DropOutcome.STILL_PRESENT
-        logger.error(
-            "verification %s NOT dropped: %r is still readable in namespace %r "
-            "after delete — the store did not obey; do not treat this as success",
-            what, key, namespace,
-        )
-    elif existed:
-        outcome = DropOutcome.DROPPED
-    else:
-        outcome = DropOutcome.NOT_FOUND
-        logger.warning(
-            "verification %s drop found nothing at %r in namespace %r. If you "
-            "expected a record here, whatever wrote it computed a different key "
-            "— check GRANT_NAMESPACE/GRANT_CACHE agree with the writer, and that "
-            "the writer went through stapel_core.verification and not "
-            "django.core.cache.cache.",
-            what, key, namespace,
-        )
-    return DropReport(outcome=outcome, what=what, key=key, namespace=namespace)
+    return drop_cache_key(
+        _cache(),
+        key,
+        what=what,
+        namespace=grant_namespace(),
+        log=logger,
+        hint=_MISS_HINT,
+    )
 
 
 # ---------------------------------------------------------------------------

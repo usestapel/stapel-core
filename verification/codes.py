@@ -54,6 +54,31 @@ A cache the store cannot reach yields ``UNAVAILABLE`` from
 :meth:`~OneTimeCodeStore.check` and raises :class:`StoreUnavailable` from the
 write paths. It never yields ``OK``, and the caller must not render the outage
 as a rejection: "we could not ask" is not "you may not".
+
+This store is SERVICE-LOCAL on purpose, and grants are not
+-----------------------------------------------------------
+0.45.0 moved challenges, grants and verification tokens onto the fleet-wide
+namespace (``core/fleet_cache.py``) because a factor completed in the auth
+service had to count in the peer that demanded it. This store stayed on
+``django.core.cache.cache``, and that was a decision, recorded here in 0.47.0
+rather than left as an accident of history.
+
+**The two halves of a one-time code happen in one service.** The same service
+issues the code, delivers it and checks it back; nothing else ever asks. The
+record that must travel is the *outcome* — the grant — and that one does.
+Sharing this store across the fleet would buy nothing and spend three things:
+a hashed bearer credential would become readable from every service instead of
+one, the per-identifier attempt budget and block would be shared state that a
+peer could exhaust or clear, and the send-rate window would stop being a
+property of the service that does the sending.
+
+So the rule is the one the fleet cache module states in reverse: state whose
+question and answer live in one service must NOT be fleet-shared. The practical
+consequence is visible in the reports these verbs return — their
+``namespace`` reads ``service-local:<KEY_PREFIX>``, and a
+``NOT_FOUND`` from a peer's process is expected, not a defect to chase. If a
+deployment ever splits issue and check across two services, this store is
+wrong for it and the split is what needs revisiting first.
 """
 from __future__ import annotations
 
@@ -64,6 +89,8 @@ import secrets
 import time
 from dataclasses import dataclass
 from enum import Enum
+
+from stapel_core.core.drop import DropReport, measured_drop, service_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +232,28 @@ class OneTimeCodeStore:
         except Exception as exc:  # noqa: BLE001
             raise StoreUnavailable(str(exc)) from exc
 
+    def _drop(self, key: str, what: str) -> DropReport:
+        """Remove *key* and measure it, in the vocabulary the package shares.
+
+        Goes through this class's own ``_get``/``_delete`` rather than the
+        cache directly, so an outage arrives as :class:`StoreUnavailable` and
+        is reported as ``UNAVAILABLE`` — never folded into "nothing was
+        there".
+        """
+        return measured_drop(
+            key=key,
+            what=what,
+            namespace=service_namespace(),
+            exists=lambda: self._get(key) is not None,
+            delete=lambda: self._delete(key),
+            log=logger,
+            hint=(
+                "this store is deliberately SERVICE-LOCAL (see the module "
+                "header), so a peer's copy of the same identifier is a "
+                "different record and is not reachable from here"
+            ),
+        )
+
     # ── issue ───────────────────────────────────────────────────────────────
 
     def issue(
@@ -304,12 +353,23 @@ class OneTimeCodeStore:
             logger.error("verification code store unavailable for purpose=%s", self.purpose)
             return CodeCheck(CodeOutcome.UNAVAILABLE)
 
-    def discard(self, identifier: str) -> None:
-        """Drop any pending code for *identifier* (erasure, or a spent flow)."""
-        try:
-            self._delete(self._code_key(identifier))
-        except StoreUnavailable:
-            logger.error("could not discard code for purpose=%s", self.purpose)
+    def discard(self, identifier: str) -> DropReport:
+        """Drop any pending code for *identifier* (erasure, or a spent flow).
+
+        Reports what that did, as :meth:`check` reports what it found. Until
+        0.47.0 this returned ``None`` **and swallowed**
+        :class:`StoreUnavailable`, so "the store was down", "there was nothing
+        to discard" and "dropped" were one value — in the module whose own
+        header insists absence and wrongness are different facts. An erasure
+        job that read that value as done had no way to learn it had not been.
+
+        ``UNAVAILABLE`` is the outcome that was previously invisible: the code
+        may well still be pending. The exception is still not raised — a
+        discard is usually a best-effort tail of some other operation — but it
+        is now in the return value and in the log, which is the difference
+        between best-effort and unknowable.
+        """
+        return self._drop(self._code_key(identifier), "pending code")
 
     # ── block ───────────────────────────────────────────────────────────────
 
@@ -326,8 +386,15 @@ class OneTimeCodeStore:
             return 0
         return max(int(until) - int(time.time()), 0)
 
-    def unblock(self, identifier: str) -> None:
-        self._delete(self._block_key(identifier))
+    def unblock(self, identifier: str) -> DropReport:
+        """Lift the penalty on *identifier*; reports what that did.
+
+        The support-desk verb: someone who burned their attempts is on the
+        phone. ``NOT_FOUND`` means there was no block to lift under this key
+        — which for a *support* call is worth seeing, because the identifier
+        the operator typed may not be the one the block was written for.
+        """
+        return self._drop(self._block_key(identifier), "code block")
 
     # ── send budget ─────────────────────────────────────────────────────────
 

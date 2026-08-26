@@ -10,6 +10,7 @@ from stapel_core.django.workspaces import (
     BUILTIN_ROLES,
     CAPABILITY_FUNCTION,
     Membership,
+    WorkspaceLookupUnavailable,
     _capability_matches,
     require_capability,
 )
@@ -98,7 +99,14 @@ def test_cache_is_per_capability():
     assert calls == ["members.invite", "members.remove"]
 
 
-def test_remote_failure_is_fail_closed_and_not_cached():
+def test_a_provider_that_raised_is_not_a_denial(monkeypatch):
+    """The no-verdict case. Was ``is None`` — a fabricated deny — until 0.47.0.
+
+    A provider that raised rendered NO verdict. Reporting that as "you do not
+    hold the capability" is how a workspaces outage reaches a user as 403,
+    indistinguishable from a real refusal, with the caller's `unavailable ->
+    503` branch unable to fire.
+    """
     boom = [True]
     calls = []
 
@@ -110,17 +118,46 @@ def test_remote_failure_is_fail_closed_and_not_cached():
 
     register_function(CAPABILITY_FUNCTION, check)
 
-    assert require_capability(WS_ID, USER_ID, "workspace.update") is None
-    boom[0] = False  # next call retries (failure was not cached)
+    with pytest.raises(WorkspaceLookupUnavailable):
+        require_capability(WS_ID, USER_ID, "workspace.update")
+
+    boom[0] = False  # next call retries (the non-answer was not cached)
     assert require_capability(WS_ID, USER_ID, "workspace.update") is not None
     assert len(calls) == 2
+
+
+def test_the_old_shape_is_still_reachable_but_must_be_asked_for():
+    """``strict=False`` for a soft, non-authorization caller — never default."""
+    register_function(CAPABILITY_FUNCTION, _raise("db down"))
+    assert require_capability(WS_ID, USER_ID, "workspace.update", strict=False) is None
+
+
+def test_a_membership_lookup_with_no_verdict_is_not_a_denial(monkeypatch):
+    """Same defect one layer down: the degrade path swallowed it too."""
+
+    def unavailable(workspace_id, user_id, *, strict=False):
+        if strict:
+            raise WorkspaceLookupUnavailable("workspaces is down")
+        return None
+
+    monkeypatch.setattr(ws, "get_membership", unavailable)
+    with pytest.raises(WorkspaceLookupUnavailable):
+        require_capability(WS_ID, USER_ID, "workspace.view")
+    assert require_capability(WS_ID, USER_ID, "workspace.view", strict=False) is None
 
 
 # --- degrade path (old workspaces without check_capability) ------------------
 
 
+def _raise(message):
+    def check(payload):
+        raise RuntimeError(message)
+
+    return check
+
+
 def _fake_membership(role):
-    def fake(workspace_id, user_id):
+    def fake(workspace_id, user_id, *, strict=False):
         return Membership(workspace_id=workspace_id, user_id=user_id, role=role)
 
     return fake
@@ -148,7 +185,7 @@ def test_degrade_member_viewer_view_only(monkeypatch):
 
 
 def test_degrade_non_member_denied(monkeypatch):
-    monkeypatch.setattr(ws, "get_membership", lambda w, u: None)
+    monkeypatch.setattr(ws, "get_membership", lambda w, u, *, strict=False: None)
     assert require_capability(WS_ID, USER_ID, "workspace.view") is None
 
 

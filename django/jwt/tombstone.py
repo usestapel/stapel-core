@@ -64,11 +64,20 @@ from __future__ import annotations
 
 import logging
 
+from stapel_core.core.drop import DropReport, drop_cache_key
+
 logger = logging.getLogger(__name__)
 
 #: Distinct key space from `jwt_blacklist:` (per token) and `user_blacklisted:`
 #: (per user). Different questions, different keys.
 TOMBSTONE_PREFIX = "user_deleted:"
+
+#: What to compare when a lift reports ``NOT_FOUND`` (see ``core/drop.py``).
+_MISS_HINT = (
+    "check STAPEL_JWT_REVOCATION_NAMESPACE/_CACHE agree with the service that "
+    "wrote the tombstone; a tombstone in another namespace is still enforced "
+    "by the peers that read it"
+)
 
 #: Django's own default for JWT_REFRESH_TOKEN_LIFETIME, repeated here so the
 #: TTL derivation does not silently read 0 from an unset setting.
@@ -142,22 +151,47 @@ def is_user_tombstoned(uid) -> bool:
         return not _blacklist_fail_open()
 
 
-def lift_tombstone(uid) -> bool:
-    """Remove a tombstone.
+def lift_tombstone(uid) -> DropReport:
+    """Remove a tombstone; reports what that actually did to the store.
 
     Exists for the operator who deleted the wrong row and restored it from a
     backup, and for tests. It is not part of any automatic path: nothing in
     this library lifts a tombstone on its own, because every automatic reason
     to do so would be a way for a token to undo a deletion again.
-    """
-    from stapel_core.core.revocation_store import revocation_cache
 
-    try:
-        revocation_cache().delete(_key(uid))
-    except Exception as exc:
-        logger.error("Cannot lift deletion tombstone for %s: %s", uid, exc)
-        return False
-    return True
+    **Until 0.47.0 this returned ``True`` for "the call did not raise"** — the
+    same value whether the tombstone was lifted, was never written under the
+    key this module computes (a peer on a different
+    ``STAPEL_JWT_REVOCATION_NAMESPACE``, or a caller that reached for
+    ``django.core.cache.cache``), or is still readable afterwards. That is the
+    costliest instance of the shape 0.46.0 named in
+    :mod:`stapel_core.verification.grants`, because of who is standing at the
+    keyboard: an operator restoring a **wrongly deleted user**. A ``True`` that
+    lifted nothing tells them the person is back while that person is still
+    locked out of every consumer-mode service in the fleet, with nothing
+    anywhere to say so.
+
+    Now it measures — read, delete, read back — and the restore is checkable::
+
+        report = lift_tombstone(uid)
+        assert report, report.outcome     # NOT_FOUND / STILL_PRESENT / UNAVAILABLE
+
+    ``NOT_FOUND`` is the one to read carefully here: it does NOT mean the user
+    is admitted. It means nothing was tombstoned under this deployment's
+    revocation namespace, which is either "there was nothing to lift" or "the
+    tombstone is under a namespace this process does not read" — and
+    :func:`is_user_tombstoned` in the service that HOLDS it will still refuse.
+    """
+    from stapel_core.core.revocation_store import revocation_cache, revocation_namespace
+
+    return drop_cache_key(
+        revocation_cache,
+        _key(uid),
+        what="deletion tombstone",
+        namespace=revocation_namespace(),
+        log=logger,
+        hint=_MISS_HINT,
+    )
 
 
 def _on_user_deleted(sender, instance, **kwargs):

@@ -8,7 +8,8 @@ for DRF views and Swagger documentation.
 import logging
 from rest_framework import authentication
 
-from stapel_core.core.revocation_store import revocation_cache
+from stapel_core.core.drop import DropReport, drop_cache_key
+from stapel_core.core.revocation_store import revocation_cache, revocation_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -64,15 +65,35 @@ def blacklist_user(user_id: str, ttl: int = 7200) -> bool:
     return True
 
 
-def unblacklist_user(user_id: str) -> bool:
-    """Remove user from blacklist. Returns True when the store accepted it."""
+def unblacklist_user(user_id: str) -> DropReport:
+    """Lift a user ban; reports what that actually did to the store.
+
+    ``blacklist_user`` above has documented since 0.39.0 that "a caller that
+    ignores the result cannot tell a ban from a no-op". That concern was never
+    carried across to the delete path: until 0.47.0 this returned ``True`` for
+    "the call did not raise", which is the same value whether the ban was
+    lifted, was never there, or is still readable afterwards — and lifting a
+    ban that is still in force leaves a user refused by every service in the
+    fleet while the operator has been told they are back.
+
+    Now it measures — read, delete, read back — and reports a
+    :class:`~stapel_core.core.drop.DropReport`, truthy only for ``DROPPED``.
+    ``NOT_FOUND`` means nothing was banned under THIS deployment's revocation
+    namespace, which is worth checking against the service that issued the ban
+    before telling anyone the ban is gone.
+    """
     key = f'{_USER_BLACKLIST_PREFIX}{user_id}'
-    try:
-        revocation_cache().delete(key)
-    except Exception as e:
-        logger.error(f"Cannot unblacklist user {user_id}: {e}")
-        return False
-    return True
+    return drop_cache_key(
+        revocation_cache,
+        key,
+        what="user ban",
+        namespace=revocation_namespace(),
+        log=logger,
+        hint=(
+            "check STAPEL_JWT_REVOCATION_NAMESPACE/_CACHE agree with the "
+            "service that issued the ban"
+        ),
+    )
 
 
 def is_user_blacklisted(user_id: str) -> bool:
