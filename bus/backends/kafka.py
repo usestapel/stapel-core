@@ -14,6 +14,7 @@ import time
 from typing import Callable
 
 from ..base import BusBackend
+from ..dlq import record_parked
 from ..event import Event
 
 logger = logging.getLogger(__name__)
@@ -202,10 +203,6 @@ class KafkaBus(BusBackend):
                     # Poison message: deserialization failure outside the
                     # retry loop would crash consume() and, with the offset
                     # uncommitted, wedge the partition on restart.
-                    logger.exception(
-                        "KafkaBus undecodable message on %s, sending raw to DLQ",
-                        msg.topic(),
-                    )
                     if self._send_raw_to_dlq(msg.topic(), msg.value()):
                         consumer.commit(msg)
                     continue
@@ -231,7 +228,6 @@ class KafkaBus(BusBackend):
                     except Exception:
                         retries += 1
                         if retries > 3:
-                            logger.exception("KafkaBus DLQ event_id=%s", event.event_id)
                             dlq_ok = self._send_to_dlq(msg.topic(), event)
                         else:
                             time.sleep(2 ** retries)
@@ -244,6 +240,7 @@ class KafkaBus(BusBackend):
             consumer.close()
 
     def _send_to_dlq(self, original_topic: str, event: Event) -> bool:
+        record_parked(original_topic, event)
         try:
             self.publish(_dlq_topic(original_topic), event)
             return True
@@ -253,6 +250,7 @@ class KafkaBus(BusBackend):
 
     def _send_raw_to_dlq(self, original_topic: str, raw: bytes) -> bool:
         """DLQ a message that could not even be deserialized."""
+        record_parked(original_topic, reason="undecodable")
         try:
             event = Event(
                 event_type="__undecodable__",

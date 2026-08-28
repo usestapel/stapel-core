@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.49.0] — 2026-08-28
+
+### A dead-letter queue nobody counts is a place work goes to be forgotten
+
+The second half of 0.48.0's outage. Eight login codes were parked in the DLQ
+between 2026-08-25 08:52 and 2026-08-27 20:32 UTC — eight people who asked for
+a code and never got one. Every one of them was logged at ERROR. The
+containers reported "Up", the HTTP layer kept answering "Verification code
+sent successfully" because publishing to the bus really had succeeded, and it
+ended when a human happened to look.
+
+The signal existed the whole time. **Nothing counted it, so nothing could
+alarm on it.** DLQ depth is the most load-bearing number a bus deployment has,
+and it was the one number nobody had, because parking an event was a handful
+of lines inside each backend's retry loop and every backend spelled it
+differently.
+
+### `stapel_core.bus.dlq.record_parked()`
+
+One function, called by every backend at the moment it gives up on an event.
+It increments `bus_dlq_total` — **alert on a non-zero rate; that is work being
+dropped on the floor** — labelled by `topic`, `event_type` and `reason`, and
+logs the giving-up in one consistent shape.
+
+`reason` separates the two ways an event lands here because they need
+different answers: `handler` is code that failed on a message the bus
+understood, `undecodable` is a message it could not read at all — a
+producer/consumer format split, not a handler bug.
+
+The traceback is not traded away for a tidy line: it is how this outage was
+actually diagnosed, so `record_parked` attaches it whenever it is called from
+inside an exception handler, and the per-backend `logger.exception` calls it
+replaces are gone rather than left to double-log.
+
+Wired into `kafka`, `nats` and `redis_streams`. A backend that parks an event
+without calling this is invisible in exactly the way the outage was, and
+`MODULE.md` now says so for anyone writing one.
+
+### Notes
+
+Recording never raises. The caller is already on a failure path, and a
+metrics backend that is unavailable must not turn a parked event into a crash
+that loses it entirely — there is a test that asserts precisely that.
+
 ## [0.48.0] — 2026-08-28
 
 ### A retry that reuses the dead connection is not a retry

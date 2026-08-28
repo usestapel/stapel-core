@@ -480,11 +480,12 @@ class NatsJetStreamBus(BusBackend):
         # therefore the one that keeps a retry meaningful (see
         # stapel_core.django.db).
         from ...django.db import close_stale_connections
+        from ..dlq import record_parked
 
         try:
             event = Event.from_bytes(data)
         except Exception:
-            logger.exception("NatsJetStreamBus undecodable message → DLQ")
+            record_parked("__undecodable__", reason="undecodable")
             wrapper = Event(
                 event_type="__undecodable__",
                 service="bus",
@@ -504,10 +505,7 @@ class NatsJetStreamBus(BusBackend):
             except Exception:
                 retries += 1
                 if retries > MAX_HANDLER_RETRIES:
-                    logger.exception(
-                        "NatsJetStreamBus DLQ event_id=%s type=%s",
-                        event.event_id, event.event_type,
-                    )
+                    record_parked(NatsBusConfig.subject_for(event.event_type), event)
                     return (
                         NatsBusConfig.subject_for(event.event_type) + DLQ_SUFFIX,
                         event.to_bytes(),

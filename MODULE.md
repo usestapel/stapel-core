@@ -449,6 +449,14 @@ all reuse the same dead socket). `close_stale_connections()` probes with
 `is_usable()` rather than trusting `close_old_connections()`, which by design
 only closes what already errored or aged out.
 
+Every backend must also call `stapel_core.bus.dlq.record_parked(topic, event)`
+at the moment it gives up on an event (and with `reason="undecodable"` for a
+message it could not deserialize). That increments `bus_dlq_total`, which is
+the number a deployment alerts on — a non-zero rate is work being dropped. A
+backend that parks an event without calling it leaves the deployment with a
+DLQ nobody can see growing, which is how eight login codes were lost over two
+and a half days while every container reported healthy.
+
 **NATS durables are reconciled on every boot.** A JetStream durable outlives
 the process that made it, and `js.pull_subscribe(durable=…)` binds to an
 existing consumer while discarding the `ConsumerConfig` it is handed — so

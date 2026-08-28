@@ -44,6 +44,7 @@ from typing import Callable
 
 from ...django.db import worker_db_lifecycle
 from ..base import BusBackend
+from ..dlq import record_parked
 from ..event import Event
 
 logger = logging.getLogger(__name__)
@@ -205,10 +206,6 @@ class RedisStreamsBus(BusBackend):
             # Poison message: deserialization failure outside the retry
             # loop would crash consume() and, with the entry still pending,
             # wedge the group on restart.
-            logger.exception(
-                "RedisStreamsBus undecodable message on %s id=%s, sending raw to DLQ",
-                topic, msg_id,
-            )
             if self._send_raw_to_dlq(topic, fields.get(b"data", b"")):
                 client.xack(topic, group, msg_id)
             return
@@ -228,9 +225,6 @@ class RedisStreamsBus(BusBackend):
             except Exception:
                 retries += 1
                 if retries > MAX_HANDLER_RETRIES:
-                    logger.exception(
-                        "RedisStreamsBus DLQ event_id=%s topic=%s", event.event_id, topic,
-                    )
                     dlq_ok = self._send_to_dlq(topic, event)
                 else:
                     time.sleep(2 ** retries)
@@ -241,6 +235,7 @@ class RedisStreamsBus(BusBackend):
             client.xack(topic, group, msg_id)
 
     def _send_to_dlq(self, original_topic: str, event: Event) -> bool:
+        record_parked(original_topic, event)
         try:
             self.publish(_dlq_topic(original_topic), event)
             return True
@@ -249,6 +244,7 @@ class RedisStreamsBus(BusBackend):
             return False
 
     def _send_raw_to_dlq(self, original_topic: str, raw: bytes) -> bool:
+        record_parked(original_topic, reason="undecodable")
         """DLQ a message that could not even be deserialized."""
         try:
             event = Event(
