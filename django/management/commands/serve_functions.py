@@ -64,6 +64,12 @@ class Command(BaseCommand):
         if not names:
             self.stdout.write("no functions registered — nothing to serve")
             return
+        # This process serves NATS, not HTTP, so nothing can scrape the
+        # metrics it records unless it opens a port of its own. Off unless
+        # STAPEL_OBSERVABILITY["EXPORTER_PORT"] is set.
+        from stapel_core.observability.exporter import serve_metrics
+
+        serve_metrics()
         url = comm_setting("NATS_URL", "nats://nats:4222")
         self.stdout.write(f"serving {len(names)} function(s) on {url}: {', '.join(names)}")
         asyncio.run(self._serve(url, names))

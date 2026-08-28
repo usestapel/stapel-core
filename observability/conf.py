@@ -39,6 +39,12 @@ observability_settings = AppSettings(
         "HISTOGRAM_BUCKETS": [
             0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
         ],
+        # A metrics listener for processes that serve no HTTP — consumers,
+        # outbox workers, the function server. None = off; a worker that
+        # opens a port nobody asked for is a surprise. Web processes need
+        # nothing here: they already expose /api/metrics/.
+        "EXPORTER_PORT": None,
+        "EXPORTER_ADDR": "0.0.0.0",
         # StatsdMetricsBackend target.
         "STATSD_HOST": "127.0.0.1",
         "STATSD_PORT": 8125,

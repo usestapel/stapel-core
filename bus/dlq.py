@@ -33,14 +33,44 @@ logger = logging.getLogger(__name__)
 #: dropping work on the floor.
 DLQ_METRIC = "bus_dlq_total"
 
+_DESCRIPTION = "Events parked in a dead-letter queue (work given up on)"
+
+
+#: The two ways an event ends up in a DLQ. They need different answers, so
+#: they are separable: ``handler`` is code that failed on a message the bus
+#: understood; ``undecodable`` is a message it could not read at all — a
+#: producer/consumer format split, not a bug in the handler.
+REASONS = ("handler", "undecodable")
+
+
+def declare_topics(topics) -> None:
+    """Create the DLQ series at zero for *topics*, before anything fails.
+
+    Without this the counter does not exist until the first event is parked,
+    and an alert like ``rate(bus_dlq_total[15m]) > 0`` on a series that has
+    never existed does not fire — it has no subject. That is the same shape
+    as the outage this metric was added for: something that looks like
+    monitoring and reports nothing, indistinguishable from healthy.
+
+    Called by the consumer command at startup, when the topic list is known.
+    """
+    try:
+        from ..observability import metrics
+
+        for topic in topics:
+            for reason in REASONS:
+                metrics.counter(
+                    DLQ_METRIC,
+                    0,
+                    labels={"topic": topic, "reason": reason},
+                    description=_DESCRIPTION,
+                )
+    except Exception:  # pragma: no cover - the facade already guards itself
+        logger.debug("bus: DLQ series not declared", exc_info=True)
+
 
 def record_parked(topic: str, event: "Event | None" = None, *, reason: str = "handler") -> None:
     """Count one event parked in the dead-letter queue for *topic*.
-
-    ``reason`` separates the two ways an event ends up here, because they need
-    different answers: ``"handler"`` is code that failed on a message the bus
-    understood, ``"undecodable"`` is a message the bus could not even read
-    (a producer/consumer format split, not a bug in the handler).
 
     Never raises: the caller is already on a failure path, and a metrics
     backend that is unavailable must not turn a parked event into a crash.
@@ -49,10 +79,15 @@ def record_parked(topic: str, event: "Event | None" = None, *, reason: str = "ha
     try:
         from ..observability import metrics
 
+        # `event_type` is deliberately NOT a label. It is unbounded — every
+        # event type a deployment ever publishes would become its own series —
+        # and it is far more useful in the log line beside the traceback, where
+        # a human is already looking. The labels are the two things an alert
+        # needs to route on.
         metrics.counter(
             DLQ_METRIC,
-            labels={"topic": topic, "event_type": event_type, "reason": reason},
-            description="Events parked in a dead-letter queue (work given up on)",
+            labels={"topic": topic, "reason": reason},
+            description=_DESCRIPTION,
         )
     except Exception:  # pragma: no cover - the facade already guards itself
         logger.debug("bus: DLQ metric not recorded", exc_info=True)

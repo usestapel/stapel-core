@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.50.0] — 2026-08-28
+
+### 0.49.0 counted the DLQ into a process nothing could scrape
+
+The counter was right and unreachable. A consumer, an outbox worker and the
+function server are exactly the processes that park events — and none of them
+serves HTTP, so `/api/metrics/` does not exist for them and no scrape config
+can point at them. `bus_dlq_total` incremented where nothing could read it,
+which is monitoring that cannot report: indistinguishable from healthy, and
+the same shape as the outage it was added for.
+
+Found by a deployment agent that refused to write the alert rule, correctly,
+on the grounds that its subject could not exist.
+
+### `serve_metrics()` — a listener for processes that serve no HTTP
+
+`STAPEL_OBSERVABILITY["EXPORTER_PORT"]` (and `EXPORTER_ADDR`, default
+`0.0.0.0`). **Off unless set** — a worker that opens a port nobody asked for
+is a surprise, and in some deployments a security finding. Started by
+`BaseBusConsumerCommand` and by `serve_functions` before either enters its
+loop.
+
+It serves `facade_exposition()` — the same text `/api/metrics/` serves — so a
+worker's metrics are not a second dialect a scrape config has to learn.
+
+It never raises. A worker must not fail to start because its metrics port is
+taken; it logs the bind failure and carries on doing the job it exists for.
+Port `0` is honoured as "any free port" rather than read as "off", which is a
+distinction a falsiness check gets wrong and a test caught.
+
+### The series now exists before anything fails
+
+`declare_topics()` creates `bus_dlq_total` at zero for each subscribed topic
+at consumer startup. Without it the counter does not exist until the first
+event is parked, and `rate(bus_dlq_total[15m]) > 0` over a series with no
+samples never fires — an alert with no subject, which is the very failure
+this metric was introduced to end.
+
+### `event_type` is no longer a label — BREAKING for anyone already querying it
+
+It is unbounded: every event type a deployment ever publishes would become its
+own series. It stays in the log line beside the traceback, where a human is
+already looking. The labels are now `{topic, reason}` — the two things an
+alert routes on. 0.49.0 shipped hours ago and nothing consumes the metric yet,
+so this is corrected now rather than carried.
+
 ## [0.49.0] — 2026-08-28
 
 ### A dead-letter queue nobody counts is a place work goes to be forgotten

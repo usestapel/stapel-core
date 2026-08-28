@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
 
+from .dlq import declare_topics
 from .event import Event
 from .router import get_bus
 
@@ -55,6 +56,23 @@ class BaseBusConsumerCommand(BaseCommand):
                 f"with KAFKA_BOOTSTRAP_SERVERS), or pass --allow-in-process "
                 f"if this really is a single-process test."
             )
+        # Two things a consumer must do before it starts consuming, because
+        # after the first failure is too late for both.
+        #
+        # Serve metrics: this process records the numbers worth alarming on
+        # (bus_dlq_total above all) and has no HTTP surface of its own, so
+        # without a listener the counter increments where nothing can scrape
+        # it. Off unless the deployment set EXPORTER_PORT.
+        #
+        # Declare the DLQ series at zero: a counter that does not exist until
+        # something fails cannot be alerted on, because `rate(...) > 0` over a
+        # series with no samples has no subject — the same shape as the outage
+        # this metric exists for.
+        from ..observability.exporter import serve_metrics
+
+        serve_metrics()
+        declare_topics(self.topics)
+
         self.stdout.write(
             f"Starting consumer group={self.consumer_group} "
             f"topics={self.topics} backend={bus.__class__.__name__}"

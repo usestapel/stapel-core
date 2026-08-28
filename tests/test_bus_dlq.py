@@ -73,8 +73,19 @@ class TestDlqIsCounted:
         )
         labels = recorded_metrics.counters[0][2]
         assert labels["topic"] == "a.topic"
-        assert labels["event_type"] == "otp.requested"
         assert labels["reason"] == "handler"
+
+    def test_the_event_type_is_not_a_label(self, recorded_metrics, monkeypatch):
+        """Every event type a deployment ever publishes would become its own
+        series. It belongs in the log line beside the traceback, where a human
+        is already looking — not in the label set an alert routes on."""
+        from stapel_core.bus.backends.kafka import KafkaBus
+
+        monkeypatch.setattr(KafkaBus, "publish", lambda self, topic, event: None)
+        KafkaBus()._send_to_dlq(
+            "a.topic", Event(event_type="otp.requested", service="auth", payload={})
+        )
+        assert "event_type" not in recorded_metrics.counters[0][2]
 
     def test_an_undecodable_message_is_counted_separately(self, recorded_metrics, monkeypatch):
         """A producer/consumer format split is a different failure from a
@@ -102,3 +113,77 @@ class TestDlqIsCounted:
             "a.topic", Event(event_type="otp.requested", service="auth", payload={})
         )
         assert len(published) == 1
+
+
+class TestTheSeriesExistsBeforeAnythingFails:
+    """`rate(bus_dlq_total[15m]) > 0` over a series with no samples never
+    fires — it has no subject. That is the same shape as the outage the
+    metric was added for: something that looks like monitoring, reports
+    nothing, and is indistinguishable from healthy."""
+
+    def test_topics_are_declared_at_zero(self, recorded_metrics):
+        from stapel_core.bus.dlq import declare_topics
+
+        declare_topics(["a.topic", "b.topic"])
+        assert all(value == 0 for _, value, _ in recorded_metrics.counters)
+        pairs = {(labels["topic"], labels["reason"]) for _, _, labels in recorded_metrics.counters}
+        assert pairs == {
+            ("a.topic", "handler"), ("a.topic", "undecodable"),
+            ("b.topic", "handler"), ("b.topic", "undecodable"),
+        }
+
+    def test_declaring_never_raises(self, monkeypatch):
+        """It runs at consumer startup. A metrics backend that is down must
+        not stop the consumer from consuming."""
+        from stapel_core.bus.dlq import declare_topics
+        from stapel_core.observability import metrics as metrics_module
+
+        def boom():
+            raise RuntimeError("metrics backend is down")
+
+        monkeypatch.setattr(metrics_module, "get_backend", boom)
+        declare_topics(["a.topic"])  # must not raise
+
+
+class TestAWorkerCanBeScraped:
+    """A consumer records the numbers worth alarming on and serves no HTTP,
+    so without a listener the counter increments where nothing can reach it."""
+
+    def test_off_unless_a_port_is_configured(self):
+        """A worker that opens a port nobody asked for is a surprise, and in
+        some deployments a security finding."""
+        from stapel_core.observability.exporter import serve_metrics
+
+        assert serve_metrics() is False
+
+    def test_a_port_that_cannot_be_bound_does_not_stop_the_worker(self, monkeypatch, caplog):
+        """It must log and carry on doing the job it exists for."""
+        import logging
+
+        from stapel_core.observability import exporter
+
+        monkeypatch.setattr(exporter, "_server", None)
+        handler = logging.getLogger("stapel_core.observability.exporter")
+        with caplog.at_level(logging.ERROR, logger=handler.name):
+            # Port 1 is privileged: binding it as a normal user fails.
+            assert exporter.serve_metrics(port=1, addr="127.0.0.1") is False
+        assert any("could not bind" in r.message for r in caplog.records)
+
+    def test_it_serves_the_facade_exposition(self, monkeypatch):
+        """What it serves must be the same text /api/metrics/ serves, or a
+        worker's metrics would be a second dialect nobody's scrape config
+        knows."""
+        import urllib.request
+
+        from stapel_core.observability import exporter
+
+        monkeypatch.setattr(exporter, "_server", None)
+        monkeypatch.setattr(exporter, "facade_exposition", lambda: "stapel_bus_dlq_total 0\n")
+        assert exporter.serve_metrics(port=0, addr="127.0.0.1") is True
+        try:
+            port = exporter._server.server_address[1]
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as resp:
+                assert resp.read().decode() == "stapel_bus_dlq_total 0\n"
+        finally:
+            exporter._server.shutdown()
+            exporter._server = None

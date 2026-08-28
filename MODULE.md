@@ -457,6 +457,15 @@ backend that parks an event without calling it leaves the deployment with a
 DLQ nobody can see growing, which is how eight login codes were lost over two
 and a half days while every container reported healthy.
 
+A process that parks events usually serves no HTTP, so it has no
+`/api/metrics/` for a scrape to reach. Set
+`STAPEL_OBSERVABILITY["EXPORTER_PORT"]` and the consumer command and
+`serve_functions` open a listener serving the same exposition text; without it
+the counter increments where nothing can read it. `BaseBusConsumerCommand`
+also declares the series at zero for its topics at startup, so an alert on
+`rate(bus_dlq_total[15m])` has a subject before the first failure rather than
+after it.
+
 **NATS durables are reconciled on every boot.** A JetStream durable outlives
 the process that made it, and `js.pull_subscribe(durable=…)` binds to an
 existing consumer while discarding the `ConsumerConfig` it is handed — so
