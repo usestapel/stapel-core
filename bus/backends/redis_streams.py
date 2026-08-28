@@ -42,6 +42,7 @@ import threading
 import time
 from typing import Callable
 
+from ...django.db import worker_db_lifecycle
 from ..base import BusBackend
 from ..event import Event
 
@@ -216,7 +217,13 @@ class RedisStreamsBus(BusBackend):
         dlq_ok = True
         while retries <= MAX_HANDLER_RETRIES:
             try:
-                handler(event)
+                # Each attempt starts on a connection known to answer —
+                # otherwise a database that dropped this consumer's idle
+                # connection turns one lost event into every later event,
+                # and the retries below cannot change that (they would all
+                # reuse the same dead socket). See stapel_core.django.db.
+                with worker_db_lifecycle():
+                    handler(event)
                 break
             except Exception:
                 retries += 1

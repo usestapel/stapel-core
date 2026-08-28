@@ -474,10 +474,12 @@ class NatsJetStreamBus(BusBackend):
         """
         from .._config import NatsBusConfig
 
-        try:
-            from django.db import close_old_connections
-        except Exception:  # pragma: no cover
-            close_old_connections = lambda: None  # noqa: E731
+        # `close_old_connections` alone cannot see a connection the SERVER
+        # dropped while this loop was idle — it closes only what already
+        # errored or aged out. `close_stale_connections` probes and is
+        # therefore the one that keeps a retry meaningful (see
+        # stapel_core.django.db).
+        from ...django.db import close_stale_connections
 
         try:
             event = Event.from_bytes(data)
@@ -495,7 +497,7 @@ class NatsJetStreamBus(BusBackend):
 
         retries = 0
         while retries <= MAX_HANDLER_RETRIES:
-            close_old_connections()
+            close_stale_connections()
             try:
                 handler(event)
                 return None
@@ -512,7 +514,7 @@ class NatsJetStreamBus(BusBackend):
                     )
                 time.sleep(2 ** retries)
             finally:
-                close_old_connections()
+                close_stale_connections()
         return None  # pragma: no cover
 
 

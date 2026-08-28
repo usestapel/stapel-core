@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.48.0] — 2026-08-28
+
+### A retry that reuses the dead connection is not a retry
+
+ironmemo, 2026-08-26 21:58 UTC: the database dropped the notifications
+consumer's idle connection. Every event after that failed with
+`InterfaceError: connection already closed` — for 46 hours, into the DLQ, while
+the container reported "Up 3 days" and the HTTP layer kept answering
+`{"message": "Verification code sent successfully"}` to every OTP request,
+because publishing to the bus really did succeed. Nobody logging in could get
+a code, and nothing in the system contradicted the claim that codes were sent.
+
+The Kafka consume loop already wrapped each handler call in three retries with
+backoff. They could not help: **all four attempts reused the same dead
+socket**, so retrying was structurally incapable of changing the condition it
+was retrying. Nothing in the loop ever reset the connection, which is why one
+idle drop became a permanent outage rather than one lost event.
+
+### `stapel_core.django.db` — hygiene that measures
+
+`close_stale_connections()` and the `worker_db_lifecycle()` context manager.
+Long-lived non-request workers now start every unit of work on a connection
+known to answer.
+
+`close_old_connections()` alone would not have fixed this, and that is the
+whole reason a new primitive exists. It closes a connection that already
+errored or aged out; a connection the *server* killed while the worker sat idle
+has done neither, so it survives that call and the failure lands on the next
+event instead. `close_stale_connections()` keeps that behaviour and adds a
+probe — `is_usable()`, one round trip — so the answer is measured rather than
+assumed. A probe that raises counts as unusable; a connection inside an atomic
+block is never touched (closing it would discard the transaction, a worse
+outcome than the stale connection this exists to fix).
+
+### Applied to every long-lived loop, not only the one that broke
+
+The NATS backend and the function server already called
+`close_old_connections()` per unit of work. The Kafka path did not — the guard
+existed in some places and not others, and the outage happened where it was
+missing. Fixing only Kafka would have left the same door open elsewhere, so
+the sweep found a third loop with no guard at all:
+
+- `bus/backends/kafka.py` — inside the retry loop, so each attempt can differ
+  from the last one.
+- `bus/backends/redis_streams.py` — **had no connection hygiene whatsoever**;
+  same retry loop, same defect, simply not yet hit in production.
+- `bus/backends/nats.py` — upgraded from the non-probing version.
+- `django/management/commands/serve_functions.py` — same, for a server that is
+  idle between calls for hours.
+
+`MemoryBus` is deliberately excluded: it drains a queue in the publisher's own
+process and returns, so it inherits that process's connection lifecycle and
+never sits idle holding one.
+
+### Notes
+
+The test suite proves the ordering (`hygiene, handler, hygiene, handler`), and
+that assertion goes red against the pre-fix loop at index 0 — the inversion
+control for the whole change. It uses a controllable probe rather than a real
+connection on purpose: this suite runs on sqlite, whose backend defines
+`is_usable()` as an unconditional `return True`, so a "real connection" test
+here would be green on a mechanism that never ran.
+
 ## [0.47.0] — 2026-08-26
 
 ### A truthful answer to the wrong question is worse than silence

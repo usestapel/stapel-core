@@ -155,6 +155,7 @@ class KafkaBus(BusBackend):
     ) -> None:
         from confluent_kafka import Consumer, KafkaError
         from stapel_core.bus._config import KafkaBusConfig
+        from stapel_core.django.db import worker_db_lifecycle
 
         config = KafkaBusConfig.consumer_config(group)
         self._provision_topics(topics)
@@ -213,7 +214,19 @@ class KafkaBus(BusBackend):
                 dlq_ok = True
                 while retries <= 3:
                     try:
-                        handler(event)
+                        # Each ATTEMPT starts from a connection known to
+                        # answer. Without this the retries below are
+                        # structurally incapable of helping the most common
+                        # failure a long-lived consumer has: the database
+                        # dropped the idle connection, so all four attempts
+                        # reuse the same dead socket and the event is DLQ'd
+                        # — and so is every event after it, forever, because
+                        # nothing ever resets it. (ironmemo, 46h of lost
+                        # notifications, 2026-08-26.) The NATS backend and
+                        # the function server already did this; the Kafka
+                        # path was the one loop that did not.
+                        with worker_db_lifecycle():
+                            handler(event)
                         break
                     except Exception:
                         retries += 1

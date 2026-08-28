@@ -439,6 +439,16 @@ durable name), and reclaims entries abandoned by a dead consumer via
 XAUTOCLAIM once idle past the claim threshold. Consumers subclass
 `BaseBusConsumerCommand`.
 
+Every broker backend wraps each handler attempt in
+`stapel_core.django.db.worker_db_lifecycle()` — a custom backend must do the
+same. A consumer loop has no request lifecycle, so without it the connection
+the first event opened is reused for days, and the first idle drop by the
+database server turns into a permanent outage (every later event fails with
+`InterfaceError: connection already closed`, retries included, because they
+all reuse the same dead socket). `close_stale_connections()` probes with
+`is_usable()` rather than trusting `close_old_connections()`, which by design
+only closes what already errored or aged out.
+
 **NATS durables are reconciled on every boot.** A JetStream durable outlives
 the process that made it, and `js.pull_subscribe(durable=…)` binds to an
 existing consumer while discarding the `ConsumerConfig` it is handed — so

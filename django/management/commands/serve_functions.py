@@ -9,7 +9,7 @@ subscription on ``<prefix>.<name>`` with queue group = service name, so
 multiple replicas of the same service load-balance automatically.
 
 Handlers execute in a thread pool (Django ORM is synchronous);
-close_old_connections() guards against stale DB connections per call.
+close_stale_connections() guards against stale DB connections per call.
 """
 from __future__ import annotations
 
@@ -80,9 +80,12 @@ class Command(BaseCommand):
         loop = asyncio.get_running_loop()
 
         def _execute(name: str, payload: dict) -> bytes:
-            from django.db import close_old_connections
+            # Probing, not just ageing out: this server is idle between calls
+            # for hours, which is exactly when a database drops a connection
+            # without telling anyone (see stapel_core.django.db).
+            from stapel_core.django.db import close_stale_connections
 
-            close_old_connections()
+            close_stale_connections()
             try:
                 function_registry.validate(name, payload)
                 result = function_registry.get(name)(payload)
@@ -91,7 +94,7 @@ class Command(BaseCommand):
                 logger.exception("function %s failed", name)
                 return json.dumps({"error": repr(exc)}).encode()
             finally:
-                close_old_connections()
+                close_stale_connections()
 
         # The broker's per-message cap, as this server announced it on connect.
         max_payload = int(getattr(nc, "max_payload", 0) or 0)
