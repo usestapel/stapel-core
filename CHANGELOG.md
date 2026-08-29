@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.52.1] — 2026-08-30
+
+`v0.52.0` never reached PyPI: the version was bumped without re-running `make
+contract`, so `docs/capabilities.json` still said `0.51.0` and the contract
+gate failed the release. Same code, regenerated artifacts.
+
 ## [0.52.0] — 2026-08-30
 
 ### An app that only knows deletion strands the rows a merge re-parents
