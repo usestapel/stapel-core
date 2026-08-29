@@ -453,6 +453,14 @@ class JWTAuthMiddleware:
         listed. Browsers always send ``Origin`` on a WebSocket handshake, so
         "absent" here means a client that could just as well have sent a
         non-ambient credential instead.
+
+        The allowlist is ``STAPEL_WS_ALLOWED_ORIGINS`` (or
+        ``STAPEL_REALTIME["ALLOWED_ORIGINS"]``) **plus** every origin in the
+        site registry (``STAPEL_SITES``): a host this deployment serves is an
+        origin it serves, and a multi-brand deployment must not have to write
+        the same hostnames twice. Fail-closed is unchanged — with neither
+        declared, the allowlist is still empty and every cookie handshake is
+        still refused.
         """
         from .ws_origin import origin_allowed, websocket_origin_allowlist
 

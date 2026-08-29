@@ -92,6 +92,13 @@ class CommonDjangoConfig(AppConfig):
         # for a malformed STAPEL_SERVICES env-JSON or STAPEL_ADMIN["NAV_LINKS"]
         # overlay — otherwise the nav block silently renders empty.
         from stapel_core.django import nav_checks as _nav_checks  # noqa: F401
+        # Site-registry checks (stapel_core.django.sites.checks): E-level for a
+        # malformed STAPEL_SITES (E001) or a registry with no single primary
+        # (E002) — both degrade silently to "single host", i.e. the second
+        # brand is down and nothing says so — and E003 (security-critical) for
+        # a JWT_COOKIE_DOMAIN spanning two registrable domains, which is
+        # cookie-tossing. W001 when FRONTEND_URL names an unregistered host.
+        from stapel_core.django.sites import checks as _sites_checks  # noqa: F401
         # Captcha checks (stapel_core.django.captcha_checks): E-level when a
         # backend is named but cannot be built (no secret, bad dotted path) —
         # the shape that used to silently degrade to "pass every token" and

@@ -2130,6 +2130,119 @@ should be URL names (`LOGIN_REDIRECT_URL = "admin:index"`) or lazy
 derivations, so the module works at the domain root, under a service prefix,
 and in a monolith mounted under any sub-path.
 
+### Sites registry — `STAPEL_SITES` (`sites.py`, `django/sites/`)
+
+**One build, one backend, one user base, N hosts.** A deployment that serves
+two brands from one image resolves host → brand at *runtime*, from one
+registry — and everything host-shaped derives from that same registry instead
+of from its own environment variable: `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`,
+the WebSocket origin allowlist, the `return_to`/`redirect_after` allowlist in
+stapel-auth, and the storefront's brand bootstrap. Four hand-maintained lists
+that can disagree about one hostname is how a second brand ships unable to
+log in, with every list looking correct on its own.
+
+It is **deployment configuration, not a table**: every service in the fleet
+needs it and only one of them could own a table, and nginx/certbot read the
+same file before Django exists. (Moving it into an admin-owned table later
+does not change the `site_for_request()` interface.)
+
+```json
+{"sites": [
+  {"host": "example.com", "aliases": ["www.example.com"], "primary": true,
+   "locale": "ru",
+   "brand": {"key": "acme", "name": "Acme", "title": "Acme — classifieds",
+             "logo": "/brand/acme/logo.svg", "theme": "acme",
+             "legal": {"company": "…", "support_email": "hello@example.com",
+                       "privacy_url": "/privacy", "terms_url": "/terms"}},
+   "seo": {"index": true}},
+  {"host": "example.org", "aliases": ["www.example.org"], "primary": false,
+   "locale": "ru", "brand": {"key": "nord", "…": "…"}, "seo": {"index": true}}
+]}
+```
+
+Sources, in order: the Django setting `STAPEL_SITES` (a project may assign it
+after the star-import), the JSON file named by `STAPEL_SITES_FILE` (how the
+fleet ships it — `/etc/stapel/sites.json`, read by nginx and certbot too), or
+inline `STAPEL_SITES_JSON`. **Empty is the normal single-host case**: nothing
+derives, `STAPEL_HOST` keeps deciding, `site_for_request()` answers `None` and
+the bootstrap endpoint reports `matched: false` with a null brand — no service
+has to grow a registry to keep working.
+
+Rules, each a loud `SitesConfigError` (never a silently dropped site — a site
+that vanishes is a host that stops being allowed): `host`/`aliases` unique
+across the whole registry; exactly one `primary` once there is more than one
+site; `brand.key` / `brand.theme` match `[a-z0-9-]+` (they become a CSS
+selector, a directory name and a token scope); `logo` and every `*_url` in
+`legal` is a relative `/path` or `https://`; a host is a bare hostname (no
+scheme, no port, no path).
+
+```python
+# pure python, no Django — usable from a settings module or a deploy script
+from stapel_core.sites import load_sites, registry_from_settings, reset_sites_cache
+registry = registry_from_settings()          # parsed once per process
+registry.for_host("WWW.Example.COM:8443")       # -> Site (port/case/alias)
+registry.primary()                           # the fallback site
+registry.hosts()                             # every host + alias
+registry.origins()                           # ("https://example.com", …)
+registry.is_site_origin(url)                 # the open-redirect gate
+
+# Django side
+from stapel_core.django.sites import site_for_request, site_frontend_url
+site_for_request(request)                    # matched site, else primary, else None
+site_frontend_url(request, default=FRONTEND_URL)   # only for a MATCHED host
+```
+
+`is_site_origin()` parses (`urlsplit`) and compares the netloc exactly — it
+never `startswith`es. `https://example.com.attacker.test` is a different site,
+`http://example.com` is the right host over the wrong scheme, and
+`https://attacker.test/?x=example.com` merely mentions one; all three are refused.
+`site_frontend_url()` deliberately does **not** take the primary fallback:
+its value ends up in a magic link or a password-reset email, and a link is
+only safe to mint for a host the registry recognises.
+
+**`GET /<auth-prefix>/api/v1/site/`** — `SiteBootstrapView`, mounted through
+`get_site_urls()` (stapel-auth splices it into `urls_v1`, so the address is
+identical in every fleet). `AllowAny`, `authentication_classes = []` (a stale
+cookie must not 401 the brand), `stapel_anonymous_access = ANONYMOUS_ALLOWED`,
+`Cache-Control: public, max-age=300` — the answer depends on the `Host` and on
+nothing about the visitor.
+
+```json
+{"host": "example.org", "matched": true, "primary": false, "locale": "ru",
+ "brand": {"key": "nord", "name": "Nord", "title": "…",
+           "logo": "/brand/nord/logo.svg", "theme": "nord", "legal": {…}},
+ "seo": {"index": true, "canonical_host": "example.org"}}
+```
+
+An unknown host (registry non-empty) answers `matched: false` with the
+**primary** site's brand — a deployment has a default brand and a blank page
+is worse. An alias answers with its canonical host, so `www` and the apex are
+one canonical and one cookie jurisdiction.
+
+System checks (tag `stapel_sites`, `django/sites/checks.py`):
+`stapel_core.sites.E001` — the registry does not parse (the `SitesConfigError`
+message is the finding); `E002` — the primary rule; **`E003`** —
+`JWT_COOKIE_DOMAIN` is set while the registry spans more than one registrable
+domain (security-critical: no blanket `SILENCED_SYSTEM_CHECKS` line can mute
+it); `W001` — `STAPEL_AUTH["FRONTEND_URL"]` names a host that is not in the
+registry, so links minted outside a request land off-fleet.
+
+**Two invariants this registry is built on.**
+
+1. **Cookies stay host-only — `JWT_COOKIE_DOMAIN = None`** (the shipped
+   default). Two brands are two registrable domains; a `Domain=` cookie
+   cannot cover both (the browser will never send it to the other one), and
+   scoping a session cookie to a domain instead of a host opens
+   **cookie-tossing**: any subdomain of that domain can write a cookie the
+   apex accepts as its own session. One user account still spans both hosts —
+   the account is shared, the *session* is per-host. `E003` enforces this.
+2. **No user-controlled subdomains under a registered host.** A registered
+   host's subdomains inherit its cookie jurisdiction and its origin trust, so
+   `<user>.example.com` would hand a visitor's page the ability to write cookies
+   and open sockets as the brand. Regional subdomains (`msk.example.com`) are
+   fine — they are ours, and they go through this same registry as ordinary
+   sites.
+
 ### Cross-service navigation — `STAPEL_SERVICES` + `NAV_LINKS` (`django/nav.py`)
 
 The admin/Swagger "Services" menu is driven by two deploy-config registries

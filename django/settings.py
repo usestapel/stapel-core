@@ -11,6 +11,13 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
+from stapel_core.sites import (
+    SiteRegistry,
+    SitesConfigError,
+    load_sites,
+    sites_data_from_env,
+)
+
 __all__ = [
     # Database
     "get_default_database",
@@ -18,6 +25,7 @@ __all__ = [
     "LOGGING",
     # Host configuration
     "STAPEL_HOST",
+    "STAPEL_SITES",
     # Django core
     "ALLOWED_HOSTS",
     "CSRF_TRUSTED_ORIGINS",
@@ -500,6 +508,46 @@ if _csrf_origins:
     CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins.split(',') if o.strip()]
 else:
     CSRF_TRUSTED_ORIGINS = [f'https://{STAPEL_HOST}'] if STAPEL_HOST != 'localhost' else []
+
+# -----------------------------------------------------------------------------
+# SITE REGISTRY — one build, N hosts (stapel_core.sites)
+# -----------------------------------------------------------------------------
+# A deployment that serves two brands from one image declares its hosts ONCE,
+# here, and everything host-shaped derives from that declaration instead of
+# from its own environment variable: ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, the
+# WebSocket origin allowlist (django/jwt/ws_origin.py), the return_to allowlist
+# in stapel-auth, and the storefront's runtime brand bootstrap
+# (GET /<auth>/api/v1/site/). Lists that can disagree are how one host silently
+# stops being able to log in.
+#
+# Read from STAPEL_SITES_FILE (a path — the fleet ships /etc/stapel/sites.json,
+# which nginx and certbot read too) or inline STAPEL_SITES_JSON. A project may
+# also assign STAPEL_SITES directly after the star-import. Empty is the normal
+# single-host case: nothing below changes, STAPEL_HOST keeps deciding.
+#
+# A broken registry never crashes the import. A settings module that raises
+# takes `manage.py check` down with it, and a traceback from inside a settings
+# module is the one place a check cannot speak — so the failure is carried to
+# stapel_core.sites.E001/E002 (django/sites/checks.py), which name the file and
+# the rule. The deployment boots single-host, which is the honest degradation.
+try:
+    STAPEL_SITES = sites_data_from_env()
+except SitesConfigError:
+    STAPEL_SITES = {}  # the env still names the broken source; E001 re-reads it
+try:
+    _site_registry = load_sites(STAPEL_SITES)
+except SitesConfigError:
+    _site_registry = SiteRegistry()
+
+if _site_registry:
+    # Extend, never replace: whatever the operator already listed stays (the
+    # health-check hostname, the container name, an internal alias), and the
+    # registry adds the names it knows. Order-preserving dedup so the resulting
+    # settings read as a list a human wrote.
+    ALLOWED_HOSTS = list(dict.fromkeys([*ALLOWED_HOSTS, *_site_registry.hosts()]))
+    CSRF_TRUSTED_ORIGINS = list(
+        dict.fromkeys([*CSRF_TRUSTED_ORIGINS, *_site_registry.origins()])
+    )
 
 # JWT Configuration
 # Supports both symmetric (HS256) and asymmetric (RS256) algorithms

@@ -26,15 +26,20 @@ and native client, which legitimately send none.
 
 Where the allowlist comes from
 ------------------------------
-Resolution order, first non-empty wins:
-
 1. ``STAPEL_WS_ALLOWED_ORIGINS`` — the core setting, canonical for any host
    that mounts :mod:`stapel_core.django.jwt.channels`.
 2. ``STAPEL_REALTIME["ALLOWED_ORIGINS"]`` — read as a plain settings dict, with
    no import of ``stapel_realtime`` (core does not depend on it). A deployment
    already running the realtime substrate has declared its origins there; it
    must not have to declare them twice, and two lists that can disagree is how
-   a guard ends up meaning something different at each layer.
+   a guard ends up meaning something different at each layer. Read only when
+   the core setting is empty.
+3. ``STAPEL_SITES`` (:mod:`stapel_core.sites`) — **added to** whichever of the
+   two above applies, never replacing it. Every host and alias in the site
+   registry is an origin this deployment serves by definition, and a
+   multi-brand deployment must not have to list the same hostnames a third
+   time. The extra entries a socket needs and no page is served from (a Vite
+   dev server, a native shell) stay in the setting.
 
 Coordination with ``stapel_chat.E014``
 --------------------------------------
@@ -107,19 +112,46 @@ def normalize_origin(origin: str) -> str:
     return f"{scheme}://{host}:{port}"
 
 
+def _site_origins() -> list:
+    """``https://<host>`` for every host and alias in ``STAPEL_SITES``.
+
+    A registered site IS an origin this deployment serves, so its sockets must
+    open without the operator writing the same hostnames a third time (after
+    ``ALLOWED_HOSTS`` and ``CSRF_TRUSTED_ORIGINS``, both already derived from
+    the registry). Never a wildcard and never a widening: a malformed registry
+    contributes nothing and is reported by ``stapel_core.sites.E001``.
+    """
+    from stapel_core.sites import SitesConfigError, registry_from_settings
+
+    try:
+        return list(registry_from_settings().origins())
+    except SitesConfigError:
+        return []
+
+
 def configured_origins() -> list:
     """The raw allowlist entries, in resolution order. See the module doc."""
     from django.conf import settings
 
     raw = getattr(settings, "STAPEL_WS_ALLOWED_ORIGINS", None)
-    if raw:
-        return list(raw)
-    realtime = getattr(settings, "STAPEL_REALTIME", None) or {}
-    try:
-        raw = realtime.get("ALLOWED_ORIGINS") or []
-    except AttributeError:  # not a mapping; reported by the realtime checks
-        return []
-    return list(raw)
+    if not raw:
+        realtime = getattr(settings, "STAPEL_REALTIME", None) or {}
+        try:
+            raw = realtime.get("ALLOWED_ORIGINS") or []
+        except AttributeError:  # not a mapping; reported by the realtime checks
+            raw = []
+
+    # Union, not "first non-empty wins": the site registry and the explicit
+    # setting answer different questions ("which hosts do we serve" vs "which
+    # extra origins may open a socket" — a dev server on :5173, a native shell)
+    # and a deployment that declares both means both. Fail-closed is untouched:
+    # with an empty registry AND an empty setting the allowlist stays empty and
+    # cookie handshakes are still refused.
+    entries: list = []
+    for entry in list(raw) + _site_origins():
+        if entry not in entries:  # `in`, not a set: an entry may be unhashable
+            entries.append(entry)
+    return entries
 
 
 def websocket_origin_allowlist(entries=None) -> set:

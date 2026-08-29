@@ -24,11 +24,11 @@ pip install stapel-core
 
 | Fact | Value |
 |---|---|
-| Version | `0.50.0` |
+| Version | `0.51.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | Django | `Django>=5.1,<6.1` |
 | Usage surface | 53 |
-| Extension points | 16 |
+| Extension points | 17 |
 | Error codes | 42 |
 
 ## Documentation

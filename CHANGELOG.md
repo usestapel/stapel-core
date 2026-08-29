@@ -1,5 +1,92 @@
 # Changelog
 
+## [0.51.0] — 2026-08-30
+
+### One build, one backend, one user base — N hosts
+
+A product wanted a second brand on a second domain: same catalogue, same
+accounts, same containers, a different name and palette. Nothing in the core
+could answer "which site is this request for", so the honest options were a
+second image with the brand baked in at build time, or a fleet fork. Both are
+the same mistake with different blast radii.
+
+`stapel_core.sites` is the third option: **one registry, read once, and every
+host-shaped answer derived from it.** `ALLOWED_HOSTS` and
+`CSRF_TRUSTED_ORIGINS` (`django/settings.py`), the WebSocket origin allowlist
+(`django/jwt/ws_origin.py`), the `return_to`/`redirect_after` allowlist in
+stapel-auth, the certificate and `server_name` lists a deploy script writes,
+and the storefront's brand — all one list. That is the point of the release,
+not the endpoint: four hand-maintained lists that can disagree about one
+hostname is exactly how a second brand ships unable to log in, with every list
+looking correct on its own.
+
+```json
+{"sites": [{"host": "example.com", "aliases": ["www.example.com"], "primary": true,
+            "locale": "ru", "brand": {"key": "acme", "name": "…",
+            "theme": "acme", "logo": "/brand/acme/logo.svg", "legal": {…}},
+            "seo": {"index": true}}]}
+```
+
+`STAPEL_SITES` (a setting), `STAPEL_SITES_FILE` (a path — the fleet ships
+`/etc/stapel/sites.json`, which nginx and certbot read before Django exists) or
+`STAPEL_SITES_JSON`. The parse half is pure Python and imports no Django, so a
+settings module — which runs before `django.setup()` — and a deploy script can
+both use it.
+
+**Empty is the normal case.** A single-host deployment declares nothing,
+`STAPEL_HOST` keeps deciding, and no service has to grow a registry to keep
+working.
+
+### `return_to` is now a parse, not a `startswith`
+
+`registry.is_site_origin(url)` is the allowlist a redirect parameter is judged
+against: `urlsplit`, scheme must be `https`, netloc must equal a host or alias
+exactly. `https://example.com.attacker.test` starts with a registered host and is
+somebody else's site; `http://example.com` is the right host over the wrong
+scheme; `https://attacker.test/?x=example.com` merely mentions one. All three are
+refused. This is the mechanism stapel-auth 0.30.0 hangs its
+`_sanitize_redirect_after` on, so open-redirect stops being a rule each
+service re-implements from memory.
+
+### `GET /<auth-prefix>/api/v1/site/` — the storefront's first request
+
+The image is one image; the brand cannot be a build-time constant. The SPA
+asks who it is at runtime and gets the name, logo, theme, locale, legal lines
+and SEO stance for the `Host` it arrived on. `AllowAny`,
+`authentication_classes = []` (a stale cookie must not turn a brand lookup into
+a 401), `stapel_anonymous_access = ANONYMOUS_ALLOWED`, and
+`Cache-Control: public, max-age=300` — the answer depends on the `Host` and on
+nothing about the visitor, which is what makes an anonymous storefront
+cacheable. Mounted through `get_site_urls()`, so the address is identical in
+every fleet.
+
+An unknown host answers `matched: false` with the **primary** site's brand: a
+deployment has a default brand and a blank first paint is worse than a
+fallback one.
+
+### The invariant the whole thing rests on: cookies stay host-only
+
+`stapel_core.sites.E003` is security-critical (no blanket
+`SILENCED_SYSTEM_CHECKS` line can mute it) and fires when `JWT_COOKIE_DOMAIN`
+is set while the registry spans more than one registrable domain. Setting it
+there is not merely useless — a `Domain=example.com` cookie is never sent to
+`example.org`, and no setting changes that — it is **cookie-tossing**: scoping a
+session cookie to a domain instead of a host lets any subdomain of that domain
+write a cookie the apex accepts as its own session. One account spans both
+brands; the *session* is per-host, first-party, and that is a feature.
+
+Alongside it: `E001` (the registry does not parse — the exact rule that failed
+is the finding), `E002` (more than one site and not exactly one `primary`),
+`W001` (`STAPEL_AUTH["FRONTEND_URL"]` names a host outside the registry, so
+links minted by a worker land off-fleet).
+
+### A broken registry never crashes a settings module
+
+`django/settings.py` catches the parse failure and boots single-host. A
+settings module is the one place a system check cannot speak: a raise there
+takes `manage.py check` down with it and the operator gets a traceback where a
+finding should have been.
+
 ## [0.50.0] — 2026-08-28
 
 ### 0.49.0 counted the DLQ into a process nothing could scrape

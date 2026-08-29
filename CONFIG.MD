@@ -58,6 +58,8 @@ it only fills in keys this file does not know about yet. See
 | LOG_LEVEL | env | Root logger level. | no | INFO |
 | SERVICE_NAME | env | Service name stamped into logs/events/alerts. | no | |
 | STAPEL_HOST | env | Primary public host (ALLOWED_HOSTS / issuer / origins derive from it). | no | localhost |
+| STAPEL_SITES_FILE | env | Path to the sites registry JSON (`{"sites":[{"host":…,"brand":…}]}`) — one build, N hosts. ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, the WebSocket origin allowlist and the brand bootstrap all derive from it; empty = ordinary single-host deployment. | no | |
+| STAPEL_SITES_JSON | env | The same registry inline, read only when STAPEL_SITES_FILE is unset. | no | |
 | STAPEL_AUTH_SERVICE_PREFIX | env | Mount prefix of the auth service; empty = no dedicated auth service. | no | auth |
 | ALLOWED_HOSTS | env | Comma-separated host allowlist; empty = derive from STAPEL_HOST. | no | |
 | CSRF_TRUSTED_ORIGINS | env | Comma-separated CSRF trusted origins; empty = derive from STAPEL_HOST. | no | |

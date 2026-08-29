@@ -19,6 +19,11 @@
       "summary": "Two-channel admin/Swagger navigation registry: a module registers its dashboard in AppConfig.ready() via register_nav_link(), the project adds/patches/removes via the setting (partial dict patches, None removes). Sections are fixed by the mechanism, contents are policy."
     },
     {
+      "name": "STAPEL_SITES",
+      "kind": "deploy_registry",
+      "summary": "The hosts this deployment serves and the brand each wears (setting, STAPEL_SITES_FILE or STAPEL_SITES_JSON). One build, N hosts: ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, the WebSocket origin allowlist, the return_to allowlist and the storefront's GET /<auth>/api/v1/site/ bootstrap all derive from it. Empty = the ordinary single-host deployment."
+    },
+    {
       "name": "STAPEL_SERVICES",
       "kind": "deploy_registry",
       "summary": "The sibling services of this deployment (env-JSON or setting), seeded by stapel-create-project and appended by stapel-new-service; a monolith leaves it unset and one implicit service is derived."

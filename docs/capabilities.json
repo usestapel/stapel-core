@@ -1,6 +1,6 @@
 {
   "module": "stapel-core",
-  "version": "0.50.0",
+  "version": "0.51.0",
   "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters, the serializer seam and thin-view base) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
   "axes": [],
   "extension_points": [
@@ -18,6 +18,11 @@
       "name": "STAPEL_ADMIN[\"NAV_LINKS\"]",
       "kind": "merge_registry",
       "summary": "Two-channel admin/Swagger navigation registry: a module registers its dashboard in AppConfig.ready() via register_nav_link(), the project adds/patches/removes via the setting (partial dict patches, None removes). Sections are fixed by the mechanism, contents are policy."
+    },
+    {
+      "name": "STAPEL_SITES",
+      "kind": "deploy_registry",
+      "summary": "The hosts this deployment serves and the brand each wears (setting, STAPEL_SITES_FILE or STAPEL_SITES_JSON). One build, N hosts: ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, the WebSocket origin allowlist, the return_to allowlist and the storefront's GET /<auth>/api/v1/site/ bootstrap all derive from it. Empty = the ordinary single-host deployment."
     },
     {
       "name": "STAPEL_SERVICES",
