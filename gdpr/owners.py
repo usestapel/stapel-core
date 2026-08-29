@@ -36,6 +36,7 @@ SAME receipt id.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
@@ -177,6 +178,7 @@ def register_gdpr_owner(
     """
     from stapel_core.comm import subscribe_action
 
+    caller_module = _calling_module(erase)
     name = str(owner or "").strip()
     if not name:
         raise ValueError("register_gdpr_owner() needs a non-empty owner name")
@@ -203,7 +205,7 @@ def register_gdpr_owner(
                     f"erase {existing.erase!r}); one name is one owner"
                 )
             return existing
-        registration = _build(name, types, erase, legacy_user_deleted)
+        registration = _build(name, types, erase, legacy_user_deleted, caller_module)
         _owners[name] = registration
 
     subscribe_action(
@@ -259,11 +261,30 @@ def _emit_receipt(
     emit(SECTION_ERASED, payload, key=subject_key)
 
 
+def _calling_module(erase: EraseCallable) -> str:
+    """The library module that asked for this registration.
+
+    Handlers built here are closures of ``stapel_core.gdpr.owners``, so their
+    ``__module__`` names core rather than the library whose rows they touch.
+    Every check that groups subscribers by app would charge core for all of
+    them. The caller's frame (the library's ``AppConfig.ready()``) is the
+    honest answer; ``erase`` is the fallback when there is no Python frame to
+    read.
+    """
+    try:
+        frame = sys._getframe(2)
+    except ValueError:  # pragma: no cover — no caller frame
+        frame = None
+    module = frame.f_globals.get("__name__", "") if frame is not None else ""
+    return str(module or getattr(erase, "__module__", "") or "")
+
+
 def _build(
     owner: str,
     subject_types: tuple[str, ...],
     erase: EraseCallable,
     legacy_user_deleted: bool,
+    caller_module: str = "",
 ) -> GdprOwner:
     def handle_erasure_requested(event) -> None:
         """Erase this module's slice of one subject and confirm it.
@@ -375,6 +396,9 @@ def _build(
         logger.info(
             "%s erased account %s: %s", owner, user_id, dict(counts or {}),
         )
+
+    for handler in (handle_erasure_requested, handle_owner_probe, handle_user_deleted):
+        handler.stapel_handler_module = caller_module
 
     return GdprOwner(
         owner=owner,

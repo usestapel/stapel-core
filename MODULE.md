@@ -2383,6 +2383,65 @@ the resolver through the same primitives (`iter_surface()`, `iter_url_patterns`,
 `path_segments`, `callback_owner_app_label`). Written once they are a
 mechanism; the `stapel_mounts` private names re-export from there unchanged.
 
+### Lifecycle-pair checks — a merge is not a delete (`comm/lifecycle_checks.py`)
+
+The second adoption check, and the first whose **premise is a subscription
+rather than a setting**: an app that told the action registry it cares about
+`user.deleted` has, by that fact, opinions about the rest of an account's life
+cycle — whether it wrote them down or not.
+
+Premise: the app subscribes to `user.deleted`. Obligation: `user.merged`
+(stapel-auth 0.30.0 — a guest account folded into a survivor on sign-in) is
+the *opposite* instruction on the same tables, and it re-parents rows instead
+of erasing them. Waiver: any handler at all, including a no-op that says there
+is nothing to re-parent.
+
+An app that answers only the delete half is not neutral about the merge half —
+it has a silent wrong answer for it. The merged user's wallet, profile, prompt
+log or listing keeps pointing at an id that can no longer sign in: invisible to
+the survivor, and never erased, because no erasure was ever requested for it.
+Nothing raises, nothing retries, nothing is logged; each library's own tests
+pass, because the handler that is missing is the one nobody wrote a test for:
+a seam defect, invisible to every isolated suite that straddles it.
+
+| id | level | meaning |
+|---|---|---|
+| `stapel_core.lifecycle.E001` | Error | an app handles a lifecycle action whose companion action has no handler anywhere in that app (today: `user.deleted` without `user.merged`) |
+
+```python
+@on_action("user.merged")
+def handle_user_merged(event):
+    """No per-user rows here — nothing to re-parent."""
+```
+
+That is a green answer, and it is worth the check on its own: afterwards "this
+module holds nothing that survives a merge" is a fact someone wrote down
+instead of an absence a reader has to prove. The check never demands a merge
+*policy* — summing two wallets, keeping the survivor's profile, re-pointing
+rows or doing nothing are all the library's call — because a check that
+demands one answer gets silenced the first time a product legitimately needs
+another.
+
+`LIFECYCLE_PAIRS` is the table (`{cause: companion}`), and the extension point:
+a future `user.anonymized` pairs the same way.
+
+**Attribution.** A handler is charged to the app whose `AppConfig.name` is the
+longest prefix of its defining module; a handler from a module no installed app
+claims is reported under its top-level package. Handlers core subscribes on a
+library's behalf — the `user.deleted` closure built by
+`stapel_core.gdpr.register_gdpr_owner` — carry a `stapel_handler_module` stamp
+naming the library that asked for them (taken from the calling frame, i.e. that
+library's `AppConfig.ready()`), so the finding says `stapel_calendar`, not
+`stapel_core`. Without the stamp every gdpr owner in the fleet would have been
+charged to core and the check would have named the one package that cannot fix
+it.
+
+**Does not catch:** a `user.merged` handler that is registered but wrong (it is
+a declaration, not a proof); re-parenting done by a raw SQL migration or a
+signal rather than an action subscriber; an app that holds per-user rows and
+subscribes to *neither* event — nothing in the registry makes that app
+discoverable, and inventing one would mean guessing which FK is "a user".
+
 ## Anti-patterns
 
 - **Do not sync an account-lifecycle flag from a token claim.** A token asserts the state of the moment it was minted for the rest of its life, so a claim that can write `is_active` can reactivate a row and then satisfy the gate that reads it. Lifecycle travels in the revocation namespace; the local column is a local decision.

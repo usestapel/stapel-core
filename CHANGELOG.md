@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.52.0] — 2026-08-30
+
+### An app that only knows deletion strands the rows a merge re-parents
+
+stapel-auth 0.30.0 added `user.merged`: a guest account folded into a survivor
+on sign-in. It is the opposite instruction to `user.deleted` on exactly the
+same tables — re-parent these rows, do not erase them — and at the time of
+writing four libraries in the fleet subscribed to it while sixteen subscribed
+only to the delete half.
+
+Those sixteen are not neutral about a merge. They have a silent wrong answer
+for it: the merged user's wallet, profile, prompt log or listing keeps pointing
+at an id that can no longer sign in — invisible to the survivor, and never
+erased, because no erasure was ever requested for it. Nothing raises, nothing
+retries, nothing is logged. Every one of those libraries' test suites is green,
+because the handler that is missing is the one nobody wrote a test for.
+
+### `stapel_core.lifecycle.E001` — the check (tag `stapel_lifecycle`)
+
+An adoption check in the sense of `django/adoption_checks.py`, and the first
+whose premise is a **subscription** rather than a setting: an app that
+registered a `user.deleted` handler and no `user.merged` handler fails
+`manage.py check` at Error level, named, with the missing action named.
+
+`LIFECYCLE_PAIRS = {"user.deleted": "user.merged"}` is the table and the
+extension point.
+
+The check never demands a merge *policy* — summing two wallets, keeping the
+survivor's profile, re-pointing rows, or holding nothing that survives a merge
+are all the library's call. Silence is the finding, so an explicit no-op is a
+green answer:
+
+```python
+@on_action("user.merged")
+def handle_user_merged(event):
+    """No per-user rows here — nothing to re-parent."""
+```
+
+It is worth the line: afterwards "this module holds nothing that survives a
+merge" is a fact someone wrote down instead of an absence a reader has to
+prove.
+
+### `register_gdpr_owner` stamps the library that asked
+
+The `user.deleted` subscriber a gdpr owner gets is a closure built inside
+`stapel_core.gdpr.owners`, so its `__module__` names core. Un-stamped, every
+gdpr owner in the fleet would have been charged to `stapel_core` and the check
+would have named the one package that cannot fix it. The three closures now
+carry `stapel_handler_module`, taken from the calling frame — the library's own
+`AppConfig.ready()` — and the finding says `stapel_calendar`.
+
 ## [0.51.0] — 2026-08-30
 
 ### One build, one backend, one user base — N hosts

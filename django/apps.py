@@ -128,6 +128,13 @@ class CommonDjangoConfig(AppConfig):
         # schema fails at request time; W-level when validation is off, so an
         # opt-out stays a stated choice.
         from stapel_core.comm import checks as _comm_checks  # noqa: F401
+        # Lifecycle-pair checks (stapel_core.comm.lifecycle_checks): E-level
+        # when an app subscribes to one half of an account life cycle and not
+        # the other — user.deleted without user.merged strands the merged
+        # user's rows silently. An explicit no-op handler is a green answer.
+        from stapel_core.comm import (  # noqa: F401
+            lifecycle_checks as _lifecycle_checks,
+        )
         # Config-manifest checks (stapel_core.config.checks): E-level when a
         # CONFIG.MD-declared (or call-site-declared) required key has no
         # value and no default — "required" was previously only enforced the
