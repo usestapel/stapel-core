@@ -36,11 +36,14 @@ DLQ_METRIC = "bus_dlq_total"
 _DESCRIPTION = "Events parked in a dead-letter queue (work given up on)"
 
 
-#: The two ways an event ends up in a DLQ. They need different answers, so
+#: The three ways an event ends up in a DLQ. They need different answers, so
 #: they are separable: ``handler`` is code that failed on a message the bus
 #: understood; ``undecodable`` is a message it could not read at all — a
-#: producer/consumer format split, not a bug in the handler.
-REASONS = ("handler", "undecodable")
+#: producer/consumer format split, not a bug in the handler; ``unprocessable``
+#: is a message that decoded and reached working code which then refused its
+#: *values* (see ``stapel_core.comm.actions``). The first is worth retrying,
+#: the other two never are.
+REASONS = ("handler", "undecodable", "unprocessable")
 
 
 def declare_topics(topics) -> None:

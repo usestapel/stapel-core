@@ -10,11 +10,15 @@ and every service that subscribes to remote actions runs::
 The command consumes the topics for all actions the local apps subscribed
 to via ``@on_action`` (or an explicit ``--topics`` subset) and hands each
 event to the local registry. A handler exception propagates to the bus
-backend so its retry/DLQ semantics apply.
+backend so its retry/DLQ semantics apply — except an unprocessable payload,
+which is parked instead of retried (see
+:func:`stapel_core.comm.actions.deliver_to_subscribers`): redelivering a
+value no field can coerce blocks the partition behind it forever.
 """
 from __future__ import annotations
 
 from stapel_core.bus import BaseBusConsumerCommand, Event
+from stapel_core.comm.actions import deliver_to_subscribers
 from stapel_core.comm.config import service_name
 from stapel_core.comm.exceptions import ActionDeliveryError
 from stapel_core.comm.registry import action_registry
@@ -46,12 +50,8 @@ class Command(BaseBusConsumerCommand):
         super().handle(*args, **options)
 
     def handle_event(self, event: Event) -> None:
-        handlers = action_registry.handlers(event.event_type)
-        errors: list[Exception] = []
-        for handler in handlers:
-            try:
-                handler(event)
-            except Exception as exc:  # noqa: BLE001 — collected and re-raised below
-                errors.append(exc)
+        errors = deliver_to_subscribers(
+            event, action_registry.handlers(event.event_type)
+        )
         if errors:
             raise ActionDeliveryError(event.event_type, errors)

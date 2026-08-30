@@ -207,6 +207,91 @@ def _dispatch_row(pk) -> None:
         logger.exception("outbox first-chance dispatch failed for row %s", pk)
 
 
+def deliver_to_subscribers(event, handlers) -> list[Exception]:
+    """Run *handlers* for *event*; return only the failures worth retrying.
+
+    Two kinds of handler failure look identical to a bus and are not:
+
+    - a **transient** one (the database was down, a peer timed out). Raising
+      it is right: redelivery is exactly the repair.
+    - an **unprocessable payload** — the message decoded, reached working
+      code, and that code refused its *values*. Django raises
+      :class:`~django.core.exceptions.ValidationError` for this, and the
+      commonest instance in this fleet is a malformed id reaching a queryset:
+      ``AUTH_USER_MODEL.id`` is a UUID, so ``filter(user_id="not-a-uuid")``
+      raises inside ``UUIDField.to_python``. ``ValidationError`` is not a
+      subclass of ``ValueError``, so the ``except (ValueError, TypeError)``
+      guard almost every consumer wrote does not catch it.
+
+    Redelivering the second kind produces the same refusal forever. It is a
+    poison pill: at-least-once delivery turns one malformed payload into an
+    unbounded retry loop that blocks every event behind it on that partition,
+    and the handler is not at fault — nothing it could have done would make
+    that id parse.
+
+    So an escaping ``ValidationError`` is parked, not raised: counted in
+    ``bus_dlq_total{reason="unprocessable"}`` (a number an operator can alarm
+    on) and logged with its traceback, and delivery moves on. Set
+    ``STAPEL_COMM["UNPROCESSABLE_PAYLOAD"] = "raise"`` to stop the line
+    instead.
+
+    This is a floor under every consumer, not permission to skip the guard:
+    a handler that validates its own payload gets a clean skip and a log line
+    of its own choosing, which is better than a DLQ entry.
+
+    The convention that follows, and it is the whole contract:
+    **``ValidationError`` is never a retry signal.** A handler that hits a
+    genuinely transient condition — a survivor row that has not landed yet, a
+    peer that timed out — must raise something else (a ``RuntimeError``
+    subclass naming the condition, e.g. the fleet's ``MergeTargetNotReady``).
+    Raising ``ValidationError`` for a transient case now means "give up on
+    this event", which is not what the raiser meant.
+    """
+    from django.core.exceptions import ValidationError
+
+    retriable: list[Exception] = []
+    for handler in handlers:
+        try:
+            handler(event)
+        except ValidationError as exc:
+            if comm_setting("UNPROCESSABLE_PAYLOAD", "park") == "raise":
+                logger.exception(
+                    "action handler %r rejected the payload of %s",
+                    handler, event.event_type,
+                )
+                retriable.append(exc)
+                continue
+            _park_unprocessable(event, handler, exc)
+        except Exception as exc:  # noqa: BLE001 — collected for the caller
+            logger.exception(
+                "action handler %r failed for %s", handler, event.event_type
+            )
+            retriable.append(exc)
+    return retriable
+
+
+def _park_unprocessable(event, handler, exc) -> None:
+    """Count and log one unprocessable payload. Never raises.
+
+    Loud on purpose. Parking means the work in that handler did NOT happen,
+    and the worst instance is a GDPR erasure handler quietly not erasing. The
+    line names the action, the event id, the handler and the values the field
+    refused, so the fix does not require reproducing the payload.
+    """
+    from ..bus.dlq import record_parked
+
+    logger.error(
+        "action %s event_id=%s: handler %r refused the payload as "
+        "unprocessable (%s). Redelivery cannot repair a value no field can "
+        "coerce, so it is parked, not retried — THE HANDLER'S WORK DID NOT "
+        "HAPPEN. Alert on bus_dlq_total{reason=\"unprocessable\"}.",
+        event.event_type, getattr(event, "event_id", None), handler,
+        "; ".join(getattr(exc, "messages", None) or [str(exc)]),
+        exc_info=True,
+    )
+    record_parked(event.event_type, event, reason="unprocessable")
+
+
 def deliver(event: Event) -> None:
     """Deliver *event* over the configured transport. Raises on failure so
     the outbox can retry.
@@ -230,7 +315,6 @@ def deliver(event: Event) -> None:
     transport = comm_setting("ACTION_TRANSPORT", "inprocess")
 
     if transport == "inprocess":
-        errors: list[Exception] = []
         # The subscriber inherits the trace the event carries: its log lines,
         # its metrics and anything it emits in turn join the operation that
         # caused it, with causation_id pointing back at this event. Without
@@ -240,14 +324,9 @@ def deliver(event: Event) -> None:
         from ..observability.context import continue_trace
 
         with continue_trace(event):
-            for handler in action_registry.handlers(event.event_type):
-                try:
-                    handler(event)
-                except Exception as exc:
-                    logger.exception(
-                        "action handler %r failed for %s", handler, event.event_type
-                    )
-                    errors.append(exc)
+            errors = deliver_to_subscribers(
+                event, action_registry.handlers(event.event_type)
+            )
         if errors:
             raise ActionDeliveryError(event.event_type, errors)
         return

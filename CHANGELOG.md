@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.53.0] — 2026-08-30
+
+### One malformed id could stop a partition forever
+
+A fleet audit found 27 action handlers across 12 libraries passing a payload id
+straight into a queryset. `AUTH_USER_MODEL.id` is a UUID, so
+`filter(user_id="not-a-uuid")` raises `ValidationError` inside
+`UUIDField.to_python` — and `ValidationError` is not a `ValueError`, so the
+`except (ValueError, TypeError)` guard the consumers that *did* guard had
+written never caught it.
+
+At-least-once delivery does the rest: the handler raises, the broker
+redelivers, the handler raises again. One malformed payload becomes an
+unbounded retry loop that blocks every event behind it, and no amount of
+retrying can repair a value no field can coerce. The handler is not at fault.
+
+Patching 27 call sites would have left the class alive. This is the floor under
+all of them, and under every consumer written after today.
+
+### `deliver_to_subscribers()` — the one place both dispatch paths run handlers
+
+`deliver()`'s in-process branch and `manage.py consume_actions` now share it,
+so a monolith and a bus deployment cannot have different poison-pill semantics.
+
+It separates two failures that look identical to a broker:
+
+- **transient** (the DB was down, a peer timed out) — returned, raised as
+  `ActionDeliveryError`, redelivered. Redelivery *is* the repair.
+- **unprocessable** (`ValidationError`) — parked: counted in
+  `bus_dlq_total{reason="unprocessable"}`, logged at ERROR with the action, the
+  `event_id`, the handler and the values the field refused, then acked.
+
+`bus.dlq.REASONS` gains `"unprocessable"`, so `declare_topics()` creates the
+series at zero and an alert on it has a subject before anything fails.
+
+**The convention this establishes: `ValidationError` is never a retry signal.**
+A handler with a genuinely transient condition must raise something else — a
+`RuntimeError` subclass naming it (the fleet's `MergeTargetNotReady`).
+`IntegrityError` stays retriable: it usually means the event is *early*.
+
+### Parking is loud, because a parked handler did not do its work
+
+The worst instance of ack-and-drop is a GDPR erasure handler quietly not
+erasing. So a park is a countable, alertable series rather than a swallowed
+exception — and it receipts nothing: stapel-gdpr's orchestrator counts
+receipts, so a refused erasure leaves its part open to time out loudly instead
+of the fleet believing a person's rows are gone. That consequence is pinned by
+a test, not left to be discovered.
+
+`STAPEL_COMM["UNPROCESSABLE_PAYLOAD"]` = `park` (default) | `raise` restores
+the old stop-the-line behaviour for a deployment that wants it.
+
 ## [0.52.1] — 2026-08-30
 
 `v0.52.0` never reached PyPI: the version was bumped without re-running `make

@@ -129,7 +129,9 @@ class TestTheSeriesExistsBeforeAnythingFails:
         pairs = {(labels["topic"], labels["reason"]) for _, _, labels in recorded_metrics.counters}
         assert pairs == {
             ("a.topic", "handler"), ("a.topic", "undecodable"),
+            ("a.topic", "unprocessable"),
             ("b.topic", "handler"), ("b.topic", "undecodable"),
+            ("b.topic", "unprocessable"),
         }
 
     def test_declaring_never_raises(self, monkeypatch):

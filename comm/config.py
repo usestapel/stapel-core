@@ -53,6 +53,14 @@ _DEFAULTS: dict[str, Any] = {
     # libraries that never serve a WebSocket. The future "bus" value carries
     # signals over NATS stapel.ws.* in microservice mode — same seam.
     "SIGNAL_TRANSPORT": "none",
+    # What to do when an action handler lets a django ValidationError escape:
+    # the payload decoded, reached working code, and that code refused its
+    # values (a malformed id an ORM field cannot coerce). Redelivering it
+    # produces the same refusal forever — a poison pill that blocks the
+    # partition behind it. park (default) counts it in the DLQ metric and
+    # acks; raise restores pre-0.53 behaviour for a deployment that would
+    # rather stop the line. See comm/actions.py:deliver_to_subscribers.
+    "UNPROCESSABLE_PAYLOAD": "park",
     # Service name stamped into emitted events; falls back to SERVICE_NAME.
     "SERVICE": None,
 }
