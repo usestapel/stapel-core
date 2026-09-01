@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.54.0] — 2026-09-02
+## [0.54.1] — 2026-09-02
 
 ### The event store had no way to say "these two keys are one person"
 
@@ -73,6 +73,18 @@ signature): a third-party store that never heard of the question gets the
 right answer, and the answer changes the moment it overrides the method.
 
 No migration: the primitive rewrites existing columns and adds none.
+
+### Also fixed: `stapel_core.django.sites` was missing from the wheel
+
+Caught by this release's own CI, on a rebase that dropped one line of
+`[tool.setuptools] packages`. The package list is explicit (flat layout), so
+a subpackage that is not named in it is tracked in git, importable from a
+checkout, present in an editable install — and simply absent from the built
+wheel. Every gate that runs against the source tree stays green; only an
+install from the artifact fails, and it fails at import.
+
+0.54.0 was tagged and never published because of it. The wheel is now
+asserted to contain the module before the tag moves.
 
 ## [0.53.0] — 2026-08-30
 

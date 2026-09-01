@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.54.0"
+version = "0.54.1"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -176,6 +176,7 @@ packages = [
     "stapel_core.core",
     "stapel_core.django",
     "stapel_core.django.jwt",
+    "stapel_core.django.sites",
     "stapel_core.django.api",
     "stapel_core.django.cdn",
     "stapel_core.django.monitoring",
