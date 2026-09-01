@@ -186,10 +186,70 @@ class EventStore(ABC):
         the day a clock skews. The facade refuses a call with neither bound,
         so unbounded here always means "bounded by the filters"."""
 
+    def rekey(
+        self,
+        stream: str,
+        *,
+        field: str,
+        from_value: object,
+        to_value: object,
+        filters: Mapping[str, object] | None = None,
+        batch_size: int = 1000,
+    ) -> int:
+        """Move every row of *stream* whose *field* reads *from_value* onto
+        *to_value*, atomically; return the number moved.
+
+        The one mutation an append-only store is allowed, and it exists for
+        exactly one shape: two subject keys turn out to name one subject
+        (``user.merged`` — a guest is absorbed into the account it just
+        proved it owns). Without it the only way to re-parent history is
+        read-all, append-under-the-new-key, purge-the-old — three calls with
+        no transaction spanning them, driven by at-least-once delivery. A
+        crash between the append and the purge counts one person's history
+        twice, in a store whose whole job is arithmetic.
+
+        *field* resolves like a filter key: an identity column when it names
+        one, otherwise a payload key. *filters* narrows the population
+        further (same contract as :meth:`query`) — a re-key of the analytics
+        stream should not touch the audit journal that happens to share a
+        subject column name.
+
+        Required of an implementation:
+
+        - **All or nothing.** Every matching row moves in one transaction, or
+          none does. A partial re-key is the double-count this exists to
+          avoid, with extra steps.
+        - **Idempotent.** A second call moves nothing, because no row reads
+          *from_value* any more. This is what makes it safe under redelivery.
+        - **Silent.** It emits no event and appends no row. It rewrites a
+          key; it is not a fact about the world, and a store that announced
+          its own bookkeeping would hand consumers a loop.
+
+        The default raises :class:`RekeyUnsupported` — a backend written
+        against the pre-0.51 contract is still a valid ``EventStore``, it
+        just cannot answer this, and saying so is better than a silent no-op
+        that reports success for work nobody did.
+        """
+        raise RekeyUnsupported(
+            f"event-store backend {type(self).__name__} cannot re-key "
+            f"{stream!r}: it does not implement rekey(). Re-parenting the "
+            "history by hand (read, re-append, purge) is not an equivalent — "
+            "it double-counts when interrupted."
+        )
+
     def purge_rollup(self, stream: str, *, older_than: datetime) -> int:
         """Delete rollup buckets older than *older_than* (raw retention ≠
         rollup retention). Default: nothing to purge."""
         return 0
+
+
+class RekeyUnsupported(NotImplementedError):
+    """The backend a stream routes to cannot re-key a subject.
+
+    Raised instead of falling back to read-append-purge. The fallback is the
+    exact failure the primitive was added to remove, so performing it under
+    the primitive's name would be worse than not having the primitive.
+    """
 
 
 class PurgeFiltersUnsupported(NotImplementedError):
@@ -221,6 +281,17 @@ def purge_accepts_filters(backend: EventStore) -> bool:
     return "filters" in params
 
 
+def rekey_supported(backend: EventStore) -> bool:
+    """Whether *backend* implements :meth:`EventStore.rekey` itself.
+
+    Asked by identity against the base method rather than by a flag, for the
+    same reason :func:`purge_accepts_filters` asks by signature: a
+    third-party store that never heard of the question still gets the right
+    answer, and the answer changes the moment it overrides the method.
+    """
+    return type(backend).rekey is not EventStore.rekey
+
+
 def resolve_field(event: Event, name: str):
     """Read *name* from an event: identity column first, then payload key."""
     if name in IDENTITY_FIELDS:
@@ -235,7 +306,9 @@ __all__ = [
     "EventPage",
     "EventStore",
     "PurgeFiltersUnsupported",
+    "RekeyUnsupported",
     "RollupRow",
     "purge_accepts_filters",
+    "rekey_supported",
     "resolve_field",
 ]

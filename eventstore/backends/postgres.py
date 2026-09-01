@@ -218,6 +218,59 @@ class PostgresEventStore(EventStore):
         deleted, _ = queryset.delete()
         return deleted
 
+    def rekey(
+        self,
+        stream: str,
+        *,
+        field: str,
+        from_value: object,
+        to_value: object,
+        filters: Mapping[str, object] | None = None,
+        batch_size: int = 1000,
+    ) -> int:
+        from django.db import transaction
+
+        if from_value == to_value:  # pragma: no cover - the facade rejects it
+            return 0
+
+        # The population is defined by the SAME `_apply_filters` that query
+        # and purge use, with the subject predicate folded in as one more
+        # filter — so "the rows this moves" and "the rows a caller can see"
+        # are the same sentence, not two implementations of it.
+        base = _apply_filters(
+            _model().objects.filter(stream=stream), {field: from_value}
+        )
+        base = _apply_filters(base, filters)
+
+        moved = 0
+        with transaction.atomic():
+            if field in IDENTITY_FIELDS:
+                # An indexed column: one UPDATE, no read-back.
+                return base.update(**{field: to_value})
+
+            # A payload key. There is no engine-neutral "set one JSON key"
+            # expression in the ORM (jsonb_set is Postgres, json_set is
+            # SQLite), and this backend serves both — so the rewrite happens
+            # in Python. The whole loop is inside ONE transaction, which is
+            # the property that matters; the batching only bounds memory.
+            #
+            # Re-taking the FIRST page each round rather than paging forward
+            # is deliberate: a row that has been moved no longer matches
+            # `field == from_value`, so the matched set shrinks by a page per
+            # round and the walk cannot skip a row that a concurrent writer
+            # landed behind the cursor.
+            while True:
+                rows = list(base.order_by("id")[:batch_size])
+                if not rows:
+                    break
+                for row in rows:
+                    payload = dict(row.payload or {})
+                    payload[field] = to_value
+                    row.payload = payload
+                _model().objects.bulk_update(rows, ["payload"], batch_size=batch_size)
+                moved += len(rows)
+        return moved
+
     def purge_rollup(self, stream: str, *, older_than: datetime) -> int:
         deleted, _ = (
             _rollup_model()

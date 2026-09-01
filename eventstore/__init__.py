@@ -47,8 +47,10 @@ from .base import (
     EventPage,
     EventStore,
     PurgeFiltersUnsupported,
+    RekeyUnsupported,
     RollupRow,
     purge_accepts_filters,
+    rekey_supported,
 )
 from .buffer import WriteBuffer
 
@@ -285,6 +287,91 @@ def purge(
     return backend.purge(stream, older_than=older_than, filters=filters)
 
 
+def rekey(
+    stream: str,
+    *,
+    field: str,
+    from_value: object,
+    to_value: object,
+    filters: Mapping[str, object] | None = None,
+    batch_size: int = 1000,
+) -> int:
+    """Move every row of *stream* whose *field* is *from_value* onto
+    *to_value*. Returns how many moved.
+
+    The store's one mutation, and the only one it will get. It exists
+    because "these two subject keys turn out to be one person" is a fact an
+    append-only store cannot express by appending::
+
+        eventstore.rekey("analytics",
+                         field="user_hash",
+                         from_value=hash_user_id(guest_id),
+                         to_value=hash_user_id(survivor_id))
+
+    What it replaces is read-all → append-under-the-new-key → purge-the-old:
+    three calls, no transaction across them, run by an at-least-once
+    consumer. Interrupted between the append and the purge, that sequence
+    leaves one person's history counted twice — permanently, invisibly, in a
+    store whose whole job is arithmetic. This is one transaction, so the
+    interruption leaves nothing behind.
+
+    Three properties the backend contract requires and this facade relies on:
+
+    - **Atomic** — all matching rows, or none.
+    - **Idempotent** — a redelivered ``user.merged`` moves 0 rows the second
+      time, because nothing reads *from_value* any more.
+    - **Silent** — no event is emitted and no row is appended. A re-key is
+      bookkeeping about a fact somebody else already announced; announcing
+      it again is how a consumer loop starts.
+
+    *field* resolves the way a filter key does — an identity column when it
+    names one (``project``/``task``/``container``), otherwise a payload key.
+    *filters* narrows the population exactly as in :func:`query`.
+
+    Refused rather than guessed at:
+
+    - ``from_value``/``to_value`` of ``None`` — "the rows with no subject" is
+      not a subject, and "move this subject to nobody" is
+      :func:`purge`, which returns an erasure count instead of a move count.
+    - equal values — returns 0 without touching the store, so a caller that
+      cannot cheaply tell a self-merge from a merge does not have to.
+
+    A backend that does not implement it raises
+    :class:`~stapel_core.eventstore.base.RekeyUnsupported` rather than
+    falling back to the read-append-purge this replaces."""
+    if not isinstance(field, str) or not field:
+        raise ValueError(
+            f"rekey({stream!r}) needs a field name to move — got {field!r}."
+        )
+    if from_value is None or to_value is None:
+        raise ValueError(
+            f"rekey({stream!r}, field={field!r}) needs two real subject keys; "
+            f"got from_value={from_value!r}, to_value={to_value!r}. Removing a "
+            "subject is purge(filters=…), which counts erasures, not moves."
+        )
+    if from_value == to_value:
+        # A self-merge. Not an error — a consumer often cannot tell one from
+        # a real merge without a round trip, and 0 is the honest answer.
+        return 0
+    flush()
+    backend = resolve_backend(stream)
+    if not rekey_supported(backend):
+        raise RekeyUnsupported(
+            f"event-store backend {type(backend).__name__} cannot re-key "
+            f"{stream!r} by {field!r} — it does not implement rekey(). Doing "
+            "it by hand (read, re-append, purge) is not the same operation: "
+            "interrupted, it counts the moved history twice."
+        )
+    return backend.rekey(
+        stream,
+        field=field,
+        from_value=from_value,
+        to_value=to_value,
+        filters=filters,
+        batch_size=batch_size,
+    )
+
+
 atexit.register(flush)
 
 
@@ -295,6 +382,7 @@ __all__ = [
     "EventPage",
     "EventStore",
     "PurgeFiltersUnsupported",
+    "RekeyUnsupported",
     "RollupRow",
     "WriteBuffer",
     "append",
@@ -303,6 +391,8 @@ __all__ = [
     "purge",
     "purge_accepts_filters",
     "query",
+    "rekey",
+    "rekey_supported",
     "resolve_backend",
     "rollup",
 ]

@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.54.0] — 2026-09-02
+
+### The event store had no way to say "these two keys are one person"
+
+`user.merged` is a fact about identity: an anonymous guest proved it owns an
+existing account, and the guest row is deleted. Every consumer that owns rows
+keyed by the guest re-parents them onto the survivor. Consumers whose rows
+live in this store could not.
+
+The store's contract was append / query / rollup / purge — no update. So
+re-parenting history meant read-all, append-under-the-new-key, purge-the-old:
+three calls with no transaction spanning them, driven by an at-least-once
+consumer. Interrupted between the append and the purge, that sequence leaves
+one person's history counted TWICE, under both keys, forever, in a store whose
+entire job is arithmetic. stapel-analytics looked at that trade, declined it,
+and shipped 0.2.0 with the gap documented and pinned by a test — the right
+call, and the reason this release exists.
+
+### `eventstore.rekey()` — the one mutation an append-only store gets
+
+```python
+eventstore.rekey("analytics",
+                 field="user_hash",
+                 from_value=hash_user_id(guest_id),
+                 to_value=hash_user_id(survivor_id))
+```
+
+Three properties, each of them the reason a hand-rolled version is not an
+equivalent:
+
+- **Atomic.** Every matching row moves in one transaction or none does. A
+  partial re-key is the double count with extra steps.
+- **Idempotent.** The second delivery moves 0 rows, because nothing reads
+  `from_value` any more. No dedup table, no consumed-event ledger.
+- **Silent.** It emits no event and appends no row. A re-key is bookkeeping
+  about a fact another service already announced; announcing it again is how
+  a consumer loop starts. Asserted directly by
+  `test_rekey_emits_nothing_and_appends_nothing`.
+
+`field` resolves the way a filter key does — an identity column
+(`project`/`task`/`container`) when it names one, otherwise a payload key —
+and `filters` narrows the population with the same `_apply_filters` that
+`query` and `purge` use, so "the rows this moves" and "the rows a caller can
+see" are one sentence rather than two implementations of it.
+
+On an identity column it is a single `UPDATE`. On a payload key it is a
+read-modify-write inside one transaction, because there is no engine-neutral
+"set one JSON key" expression in the ORM (`jsonb_set` is Postgres,
+`json_set` is SQLite) and this backend serves both. The batching bounds
+memory only; the transaction is what bounds correctness. Each round re-takes
+the FIRST page rather than paging forward — a moved row no longer matches, so
+the set shrinks by a page per round and the walk cannot skip a row a
+concurrent writer landed behind a cursor.
+
+Refused rather than guessed at: a `None` on either side (`"the rows with no
+subject"` is not a subject, and "move this subject to nobody" is `purge`,
+which returns an erasure count, not a move count), and an empty `field`.
+A self-merge returns 0 without touching the store — a consumer often cannot
+tell one from a real merge without a round trip, and 0 is the honest answer.
+
+### `RekeyUnsupported`, not a silent fallback
+
+`EventStore.rekey` has a default, and the default raises. A backend written
+against the pre-0.51 contract is still a valid `EventStore`; it simply cannot
+answer this. Saying so beats a no-op that reports success for work nobody
+did — and beats the facade quietly performing read-append-purge on the
+backend's behalf, which is precisely the failure the primitive was added to
+remove. `rekey_supported(backend)` is the check, asked by identity against
+the base method (same reasoning as `purge_accepts_filters` asking by
+signature): a third-party store that never heard of the question gets the
+right answer, and the answer changes the moment it overrides the method.
+
+No migration: the primitive rewrites existing columns and adds none.
+
 ## [0.53.0] — 2026-08-30
 
 ### One malformed id could stop a partition forever

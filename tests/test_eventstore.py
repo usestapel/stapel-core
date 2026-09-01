@@ -502,6 +502,203 @@ def test_purge_accepts_filters_reads_the_signature():
 
 
 # --------------------------------------------------------------------------
+# subject re-key — two keys turn out to name one person
+# --------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_rekey_moves_one_subjects_whole_history_and_nobody_elses():
+    eventstore.append("analytics", {"user_hash": "guest", "n": 1})
+    eventstore.append("analytics", {"user_hash": "guest", "n": 2})
+    eventstore.append("analytics", {"user_hash": "survivor", "n": 3})
+
+    moved = eventstore.rekey(
+        "analytics", field="user_hash", from_value="guest", to_value="survivor"
+    )
+
+    assert moved == 2
+    assert eventstore.query("analytics", filters={"user_hash": "guest"}).events == []
+    rows = eventstore.query("analytics", filters={"user_hash": "survivor"})
+    assert sorted(e.payload["n"] for e in rows) == [1, 2, 3]
+
+
+@pytest.mark.django_db
+def test_rekey_counts_no_row_twice():
+    """The failure the primitive exists to remove, asserted on the primitive."""
+    eventstore.append("analytics", {"user_hash": "guest", "n": 1})
+    eventstore.append("analytics", {"user_hash": "guest", "n": 2})
+    before = len(eventstore.query("analytics", limit=1000))
+
+    eventstore.rekey("analytics", field="user_hash", from_value="guest",
+                     to_value="survivor")
+
+    assert len(eventstore.query("analytics", limit=1000)) == before
+
+
+@pytest.mark.django_db
+def test_rekey_is_idempotent_under_redelivery():
+    """At-least-once delivery: the second and third calls are no-ops."""
+    eventstore.append("analytics", {"user_hash": "guest", "n": 1})
+
+    first = eventstore.rekey("analytics", field="user_hash",
+                             from_value="guest", to_value="survivor")
+    again = eventstore.rekey("analytics", field="user_hash",
+                             from_value="guest", to_value="survivor")
+    third = eventstore.rekey("analytics", field="user_hash",
+                             from_value="guest", to_value="survivor")
+
+    assert (first, again, third) == (1, 0, 0)
+    rows = eventstore.query("analytics", filters={"user_hash": "survivor"})
+    assert [e.payload["n"] for e in rows] == [1]
+
+
+@pytest.mark.django_db
+def test_rekey_leaves_the_rest_of_the_row_alone():
+    ts = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
+    eventstore.append("analytics", {"user_hash": "guest", "event": "view", "n": 7},
+                      ts=ts, project="p1", task="t1")
+
+    eventstore.rekey("analytics", field="user_hash", from_value="guest",
+                     to_value="survivor")
+
+    (row,) = eventstore.query("analytics").events
+    assert row.payload == {"user_hash": "survivor", "event": "view", "n": 7}
+    assert (row.ts, row.project, row.task) == (ts, "p1", "t1")
+
+
+@pytest.mark.django_db
+def test_rekey_emits_nothing_and_appends_nothing():
+    """A re-key is bookkeeping, not a fact — announcing it starts a loop."""
+    from stapel_core.comm import subscribe_action
+
+    eventstore.append("analytics", {"user_hash": "guest", "n": 1})
+    seen = []
+    subscribe_action("#", lambda event: seen.append(event))
+
+    eventstore.rekey("analytics", field="user_hash", from_value="guest",
+                     to_value="survivor")
+
+    assert seen == []
+    # Nor a compensating row of its own: the count is the count from before.
+    assert len(eventstore.query("analytics", limit=1000)) == 1
+
+
+@pytest.mark.django_db
+def test_rekey_stays_inside_the_stream_it_was_given():
+    eventstore.append("analytics", {"user_hash": "guest", "n": 1})
+    eventstore.append("ws.audit", {"user_hash": "guest", "n": 2})
+
+    moved = eventstore.rekey("analytics", field="user_hash",
+                             from_value="guest", to_value="survivor")
+
+    assert moved == 1
+    (audit,) = eventstore.query("ws.audit").events
+    assert audit.payload["user_hash"] == "guest"
+
+
+@pytest.mark.django_db
+def test_rekey_narrows_by_filters_like_query_does():
+    eventstore.append("analytics", {"user_hash": "guest", "n": 1}, project="p1")
+    eventstore.append("analytics", {"user_hash": "guest", "n": 2}, project="p2")
+
+    moved = eventstore.rekey("analytics", field="user_hash", from_value="guest",
+                             to_value="survivor", filters={"project": "p1"})
+
+    assert moved == 1
+    kept = eventstore.query("analytics", filters={"user_hash": "guest"})
+    assert [e.payload["n"] for e in kept] == [2]
+
+
+@pytest.mark.django_db
+def test_rekey_moves_identity_columns_too():
+    eventstore.append("s", {"n": 1}, project="old")
+    eventstore.append("s", {"n": 2}, project="other")
+
+    moved = eventstore.rekey("s", field="project", from_value="old",
+                             to_value="new")
+
+    assert moved == 1
+    assert {e.project for e in eventstore.query("s")} == {"new", "other"}
+
+
+@pytest.mark.django_db
+def test_rekey_pages_a_population_larger_than_one_batch():
+    for i in range(25):
+        eventstore.append("analytics", {"user_hash": "guest", "n": i})
+
+    moved = eventstore.rekey("analytics", field="user_hash", from_value="guest",
+                             to_value="survivor", batch_size=4)
+
+    assert moved == 25
+    rows = eventstore.query("analytics", filters={"user_hash": "survivor"},
+                            limit=1000)
+    assert sorted(e.payload["n"] for e in rows) == list(range(25))
+
+
+@pytest.mark.django_db
+def test_rekey_of_a_subject_with_no_rows_is_zero_not_an_error():
+    assert eventstore.rekey("analytics", field="user_hash",
+                            from_value="nobody", to_value="survivor") == 0
+
+
+@pytest.mark.django_db
+def test_rekey_of_a_subject_onto_itself_is_a_no_op():
+    """A self-merge. The consumer often cannot tell; 0 is the honest answer."""
+    eventstore.append("analytics", {"user_hash": "same", "n": 1})
+
+    assert eventstore.rekey("analytics", field="user_hash",
+                            from_value="same", to_value="same") == 0
+    assert len(eventstore.query("analytics")) == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"field": "", "from_value": "a", "to_value": "b"},
+        {"field": None, "from_value": "a", "to_value": "b"},
+        {"field": "user_hash", "from_value": None, "to_value": "b"},
+        {"field": "user_hash", "from_value": "a", "to_value": None},
+    ],
+)
+def test_rekey_refuses_a_call_it_would_have_to_guess_at(kwargs):
+    eventstore.append("analytics", {"user_hash": "a", "n": 1})
+    with pytest.raises(ValueError):
+        eventstore.rekey("analytics", **kwargs)
+    (row,) = eventstore.query("analytics").events
+    assert row.payload["user_hash"] == "a"
+
+
+@pytest.mark.django_db
+def test_rekey_refuses_a_backend_that_cannot_do_it():
+    """No silent fallback to read-append-purge — that IS the double count."""
+    from stapel_core.eventstore.base import RekeyUnsupported
+
+    mem = _MemStore()
+    with override_settings(
+        STAPEL_EVENTSTORE={"BUFFER_SYNC": True, "ROUTES": {"analytics": mem}}
+    ):
+        eventstore.append("analytics", {"user_hash": "guest"})
+        with pytest.raises(RekeyUnsupported, match="_MemStore"):
+            eventstore.rekey("analytics", field="user_hash",
+                             from_value="guest", to_value="survivor")
+        assert mem.rows[0].payload["user_hash"] == "guest"
+
+
+def test_rekey_supported_reads_the_class_not_a_flag():
+    from stapel_core.eventstore.base import rekey_supported
+    from stapel_core.eventstore.backends.postgres import PostgresEventStore
+
+    class _Rekeying(_MemStore):
+        def rekey(self, stream, *, field, from_value, to_value, filters=None,
+                  batch_size=1000):
+            return 0
+
+    assert rekey_supported(PostgresEventStore())
+    assert rekey_supported(_Rekeying())
+    assert not rekey_supported(_MemStore())
+
+
+# --------------------------------------------------------------------------
 # anchor pages — the AnchorPagination wire contract over a stream
 # --------------------------------------------------------------------------
 

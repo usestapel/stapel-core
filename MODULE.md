@@ -1388,10 +1388,28 @@ core primitive, not N bespoke tables). Facade API (root export
   rather than silently widening the erasure into a retention sweep
   (`purge_accepts_filters(backend)` is the signature check behind it);
   unfiltered retention still reaches such a backend.
+- `rekey(stream, *, field, from_value, to_value, filters=None,
+  batch_size=1000) -> int` — the store's **only** mutation, for the one
+  shape an append-only log cannot express by appending: two subject keys
+  turn out to name one subject (`user.merged` — a guest absorbed into the
+  account it just proved it owns). Atomic (all matching rows in one
+  transaction, or none), idempotent (a redelivered merge moves 0 the second
+  time — nothing reads `from_value` any more), and **silent** (emits no
+  event, appends no row; a re-key is bookkeeping about a fact somebody else
+  announced, and announcing it again starts a consumer loop). `field`
+  resolves like a filter key — identity column when it names one, otherwise
+  a payload key; `filters` narrows the population as in `query`. It replaces
+  read-all → append-under-the-new-key → purge-the-old: three calls with no
+  transaction across them, which under at-least-once delivery counts one
+  person's history twice, permanently, in a store whose whole job is
+  arithmetic. Refuses a `None` on either side (removing a subject is
+  `purge`) and returns 0 for a self-merge. A backend that does not implement
+  it raises `RekeyUnsupported` rather than falling back to the sequence it
+  exists to remove (`rekey_supported(backend)` is the check behind it).
 
 | Key | Default | Semantics | What it customizes |
 |---|---|---|---|
-| `BACKEND` | `…backends.postgres.PostgresEventStore` | replace (dotted path/class/instance) | The `EventStore` ABC impl (`append_batch`/`query`/`rollup`/`purge`) |
+| `BACKEND` | `…backends.postgres.PostgresEventStore` | replace (dotted path/class/instance) | The `EventStore` ABC impl (`append_batch`/`query`/`rollup`/`purge`/`rekey`) |
 | `ROUTES` | `{}` | **merge**-routing by stream name | Per-stream backend override (`{"analytics": "…ClickHouseEventStore"}`); unlisted streams use `BACKEND` |
 | `BUFFER_SIZE` | `500` | replace | Flush when the write buffer reaches N rows |
 | `BUFFER_INTERVAL` | `5.0` | replace | Flush when the oldest buffered event is ≥ N seconds old |
