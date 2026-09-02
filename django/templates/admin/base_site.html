@@ -29,36 +29,60 @@
     position: relative;
     display: inline-block;
 }
+/* The disclosure button. The border is currentColor so it contrasts with
+   whatever the header is painted in — the light and the dark admin theme
+   both give the header a link color chosen to read against it. */
 .stapel-dropdown-btn {
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(127,127,127,0.25);
+    background: color-mix(in srgb, currentColor 18%, transparent);
+    border: 1px solid currentColor;
     color: var(--header-link-color, #fff);
     padding: 6px 12px;
     border-radius: 4px;
     cursor: pointer;
     font-size: 14px;
+    font-weight: 600;
     display: flex;
     align-items: center;
     gap: 6px;
+    list-style: none;  /* the details marker is off — ▾ is the affordance */
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+.stapel-dropdown-btn::-webkit-details-marker {
+    display: none;
 }
 .stapel-dropdown-btn:hover {
-    background: rgba(255,255,255,0.2);
+    background: rgba(127,127,127,0.4);
+    background: color-mix(in srgb, currentColor 32%, transparent);
+}
+.stapel-dropdown-btn:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+.stapel-dropdown-btn .chevron {
+    transition: transform 0.12s ease;
+}
+details.stapel-dropdown[open] > .stapel-dropdown-btn .chevron {
+    transform: rotate(180deg);
 }
 .stapel-dropdown-content {
     display: none;
     position: absolute;
-    top: calc(100% - 4px);
+    top: calc(100% + 4px);
     left: 0;
     background: var(--body-bg, #fff);
     min-width: 280px;
+    max-width: calc(100vw - 24px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     border-radius: 6px;
     z-index: 1000;
     padding-top: 8px;
     border: 1px solid var(--hairline-color, #e8e8e8);
 }
-.stapel-dropdown:hover .stapel-dropdown-content,
-.stapel-dropdown-content:hover {
+/* Click/tap/Enter/Space — not hover: a hover-only menu cannot be opened
+   on a touch device at all (admin-suite AS-4 follow-up). */
+details.stapel-dropdown[open] .stapel-dropdown-content {
     display: block;
 }
 .stapel-dropdown-section {
@@ -107,6 +131,14 @@
     background: var(--link-fg, #417690);
     color: #fff;
     text-decoration: none;
+}
+.stapel-dropdown-item .links a:focus-visible {
+    outline: 2px solid var(--link-fg, #417690);
+    outline-offset: 2px;
+}
+.stapel-nav a:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
 }
 .stapel-swagger-btn {
     background: #85ea2d;
@@ -164,6 +196,46 @@
     }
 }
 </style>
+{# Progressive enhancement only — <details> already opens on tap, Enter and #}
+{# Space with no JS. This syncs aria-expanded for AT, closes the other menu, #}
+{# and adds Escape / outside-click dismissal. #}
+<script>
+(function () {
+    var SEL = "details.stapel-dropdown";
+    function each(nodes, fn) { Array.prototype.forEach.call(nodes, fn); }
+    function close(d) {
+        d.open = false;
+        var s = d.querySelector("summary");
+        if (s) s.setAttribute("aria-expanded", "false");
+    }
+    // "toggle" does not bubble — listen in the capture phase.
+    document.addEventListener("toggle", function (e) {
+        var d = e.target;
+        if (!d || !d.matches || !d.matches(SEL)) return;
+        var s = d.querySelector("summary");
+        if (s) s.setAttribute("aria-expanded", d.open ? "true" : "false");
+        if (!d.open) return;
+        each(document.querySelectorAll(SEL), function (o) {
+            if (o !== d && o.open) close(o);
+        });
+    }, true);
+    document.addEventListener("click", function (e) {
+        each(document.querySelectorAll(SEL), function (d) {
+            if (d.open && !d.contains(e.target)) close(d);
+        });
+    });
+    document.addEventListener("keydown", function (e) {
+        if (e.key !== "Escape" && e.key !== "Esc") return;
+        each(document.querySelectorAll(SEL), function (d) {
+            if (!d.open) return;
+            var focused = d.contains(document.activeElement);
+            close(d);
+            var s = d.querySelector("summary");
+            if (focused && s) s.focus();
+        });
+    });
+})();
+</script>
 {% endblock %}
 
 {% block branding %}
@@ -181,10 +253,10 @@
     {% endif %}
 
     {% if stapel_modules %}
-    <div class="stapel-dropdown">
-        <button class="stapel-dropdown-btn">
-            Apps ▾
-        </button>
+    <details class="stapel-dropdown">
+        <summary class="stapel-dropdown-btn" role="button" aria-expanded="false">
+            Apps <span class="chevron" aria-hidden="true">▾</span>
+        </summary>
         <div class="stapel-dropdown-content">
             <div class="stapel-dropdown-section">
                 <div class="stapel-dropdown-title">Installed Apps</div>
@@ -200,13 +272,13 @@
                 {% endfor %}
             </div>
         </div>
-    </div>
+    </details>
     {% endif %}
 
-    <div class="stapel-dropdown">
-        <button class="stapel-dropdown-btn">
-            Services ▾
-        </button>
+    <details class="stapel-dropdown">
+        <summary class="stapel-dropdown-btn" role="button" aria-expanded="false">
+            Services <span class="chevron" aria-hidden="true">▾</span>
+        </summary>
         <div class="stapel-dropdown-content">
             {% if stapel_services_multi %}
             <div class="stapel-dropdown-section">
@@ -236,7 +308,7 @@
             </div>
             {% endfor %}
         </div>
-    </div>
+    </details>
 </div>
 {% endif %}
 {% endblock %}

@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.56.0] — 2026-09-03
+
+### The service switcher opened on hover, so on a phone it did not open
+
+0.55.0 made sure the cross-service switcher is *there*. It did not make it
+reachable. The menu was a `<div>` with a `<button>` that had no handler and a
+panel shown by `.stapel-dropdown:hover` — hover being the only way in. A
+touch device has no hover state to enter: on a phone or a tablet the button
+is inert, and the eight services behind it are unreachable from the admin
+header. On a desktop it opened, but the button drew itself at
+`rgba(255,255,255,0.1)` on the header — a control most people never saw.
+
+### A disclosure, not a hover trap
+
+Both header menus — `Apps` and `Services`, the two instances of the same
+pattern — are now `<details>` / `<summary>`:
+
+- **tap, click, Enter and Space all open it**, and all of that is the
+  browser's own behavior, so it works with JavaScript off;
+- `aria-expanded` on the `<summary>` is rendered `false` and synced by a
+  small inline script on `toggle`, which also closes the sibling menu,
+  dismisses on `Escape` (returning focus to the summary) and on an outside
+  click — enhancement only, never the mechanism;
+- `:focus-visible` rings on the summary and on every link inside the panel:
+  the whole list is operable by keyboard alone;
+- the button now draws a `1px solid currentColor` border over a
+  `color-mix(currentColor 18%)` fill. Both derive from `--header-link-color`,
+  the color the admin already guarantees to be readable on the header, so the
+  affordance is visible in the light and the dark theme without a second
+  palette or a new design language.
+
+The panel also gained `max-width: calc(100vw - 24px)` so a 280px menu cannot
+push a phone viewport sideways.
+
+Covered by `TestDropdownDisclosure` in `tests/test_nav_modules.py` — the
+disclosure elements, the aria wiring, the absence of the hover-only rule, and
+the dismissal script, asserted against the rendered template.
+
 ## [0.55.0] — 2026-09-02
 
 ### The admin lost its way between services, and every gate said green

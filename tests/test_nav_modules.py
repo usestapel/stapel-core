@@ -282,7 +282,7 @@ def test_template_renders_apps_dropdown_with_modules():
 
 def test_template_omits_apps_dropdown_when_no_modules():
     html = _render_base_site(stapel_modules=[])
-    assert "Apps ▾" not in html
+    assert "Apps <span" not in html
 
 
 def test_template_hides_whole_nav_when_no_services():
@@ -292,5 +292,57 @@ def test_template_hides_whole_nav_when_no_services():
         {"key": "billing", "name": "Billing", "admin_url": "/admin/billing/",
          "swagger_url": None, "schema_url": None},
     ])
-    assert "Apps ▾" not in html
+    assert "Apps <span" not in html
     assert "Billing" not in html
+
+
+# ---------------------------------------------------------------------------
+# Template: the service/app switcher is a real disclosure, not a hover trap
+# ---------------------------------------------------------------------------
+
+
+MODULES = [
+    {"key": "billing", "name": "Billing", "admin_url": "/admin/billing/",
+     "swagger_url": "/billing/swagger/", "schema_url": "/billing/schema/"},
+]
+
+
+class TestDropdownDisclosure:
+    """A hover-only menu is unreachable on touch. Both header dropdowns must
+    be <details>/<summary> disclosures: tap-, keyboard- and AT-operable with
+    no JS, with the inline script only syncing aria-expanded and adding
+    Escape / outside-click dismissal."""
+
+    def test_both_dropdowns_are_details_disclosures(self):
+        html = _render_base_site(stapel_modules=MODULES)
+        assert html.count('<details class="stapel-dropdown"') == 2
+        assert html.count("<summary") == 2
+
+    def test_summary_carries_button_role_and_aria_expanded(self):
+        html = _render_base_site(stapel_modules=MODULES)
+        # Closed on render; the script flips it on toggle.
+        assert html.count('aria-expanded="false"') == 2
+        assert 'class="stapel-dropdown-btn"' in html
+
+    def test_no_hover_only_open_rule(self):
+        html = _render_base_site(stapel_modules=MODULES)
+        assert ".stapel-dropdown:hover .stapel-dropdown-content" not in html
+        assert "details.stapel-dropdown[open] .stapel-dropdown-content" in html
+
+    def test_button_has_visible_affordance_and_focus_ring(self):
+        html = _render_base_site(stapel_modules=MODULES)
+        # currentColor border ⇒ contrast against the header in both the light
+        # and the dark admin theme without a second palette.
+        assert "border: 1px solid currentColor" in html
+        assert ".stapel-dropdown-btn:focus-visible" in html
+
+    def test_script_wires_escape_and_outside_click(self):
+        html = _render_base_site(stapel_modules=MODULES)
+        assert "aria-expanded" in html
+        assert "Escape" in html
+        assert "d.contains(e.target)" in html
+
+    def test_services_dropdown_present_without_modules(self):
+        html = _render_base_site(stapel_modules=[])
+        assert html.count('<details class="stapel-dropdown"') == 1
+        assert "Services" in html
