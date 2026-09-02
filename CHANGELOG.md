@@ -1,8 +1,14 @@
 # Changelog
 
-## [0.57.0] — 2026-09-03
+## [0.57.1] — 2026-09-03
 
 ### An embedded library's admin bundle that `collectstatic` never saw
+
+(Tagged first as `v0.57.0`, which never reached PyPI: one of the new tests
+located core's own `static/` through the repo root, which is true of a working
+copy and false of the wheel CI installs. The tag is left where it is rather
+than moved; 0.57.1 is the first published build of this change, and the test
+now resolves the directory through the imported package.)
 
 Django finds a library's static files by walking `INSTALLED_APPS`. Half the
 fleet's libraries are not apps: they are *embedded* — imported directly, no

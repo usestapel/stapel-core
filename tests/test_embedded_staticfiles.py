@@ -181,10 +181,22 @@ def test_packages_pairs_carry_the_package_name(tmp_path, on_path):
 
 
 def test_core_own_static_is_discovered_without_being_named():
-    """stapel_core ships static/admin/js — the mechanism must find its own."""
-    core_static = str(Path(__file__).resolve().parent.parent / "static")
+    """stapel_core ships static/admin/js — the mechanism must find its own.
 
-    assert core_static in embedded_static_dirs()
+    Located through the IMPORTED package, not through this file's parent: CI
+    installs the wheel and runs the tests against site-packages, so a repo-root
+    path would assert something true only of a working copy.
+    """
+    import os
+
+    import stapel_core
+
+    core_static = os.path.realpath(
+        Path(stapel_core.__file__).resolve().parent / "static"
+    )
+    discovered = {os.path.realpath(d) for d in embedded_static_dirs()}
+
+    assert core_static in discovered
 
 
 # ---------------------------------------------------------------------------
