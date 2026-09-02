@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.56.1] — 2026-09-03
+
+### The menu opened on a phone and hung off the side of it
+
+0.56.0's disclosure works on touch; at 390px the panel it opens did not fit.
+The header row does not wrap, so the `Services` button is pushed to the edge
+of the screen, and a 280px panel left-anchored to it clips the service names
+and puts every `Admin` / `API` link outside the viewport — the switcher opens
+and is still unusable. Seen on the live stand's `/recordings/admin/`, in a
+browser, at an iPhone viewport.
+
+- `.stapel-nav` wraps (`flex-wrap: wrap`) instead of overflowing;
+- below 767px the panel anchors to the button's **right** edge and sizes to
+  `width: max-content` capped at `calc(100vw - 32px)`, so it opens inwards.
+
+All eight services and both links per row now fit inside 390px.
+
 ## [0.56.0] — 2026-09-03
 
 ### The service switcher opened on hover, so on a phone it did not open

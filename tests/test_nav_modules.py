@@ -346,3 +346,12 @@ class TestDropdownDisclosure:
         html = _render_base_site(stapel_modules=[])
         assert html.count('<details class="stapel-dropdown"') == 1
         assert "Services" in html
+
+    def test_menu_fits_a_phone_viewport(self):
+        """A 280px panel anchored to a button near the right edge hung off
+        the screen at 390px — the service names were clipped and the
+        Admin/API links were unreachable (seen on the live stand)."""
+        html = _render_base_site(stapel_modules=MODULES)
+        assert "flex-wrap: wrap" in html          # the buttons wrap, not overflow
+        assert "@media (max-width: 767px)" in html
+        assert "max-width: calc(100vw - 32px)" in html

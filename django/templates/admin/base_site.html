@@ -13,6 +13,9 @@
 .stapel-nav {
     display: flex;
     align-items: center;
+    /* Wrap, never overflow: on a phone the header row is narrower than the
+       buttons, and an unwrapped row pushes the switcher off the screen. */
+    flex-wrap: wrap;
     gap: 16px;
     padding: 8px 0;
     font-size: 14px;
@@ -84,6 +87,19 @@ details.stapel-dropdown[open] > .stapel-dropdown-btn .chevron {
    on a touch device at all (admin-suite AS-4 follow-up). */
 details.stapel-dropdown[open] .stapel-dropdown-content {
     display: block;
+}
+/* A 280px panel left-anchored to a button that sits near the right edge
+   hangs off a phone screen — the service names clip and the Admin/API links
+   land outside the viewport. Anchor it to the button's right edge there, so
+   it opens inwards. */
+@media (max-width: 767px) {
+    .stapel-dropdown-content {
+        left: auto;
+        right: 0;
+        min-width: 0;
+        width: max-content;
+        max-width: calc(100vw - 32px);
+    }
 }
 .stapel-dropdown-section {
     padding: 8px 0;
