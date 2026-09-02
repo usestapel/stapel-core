@@ -508,3 +508,90 @@ def test_schema_validation_is_on_in_production_by_default():
     with override_settings(STAPEL_COMM={}, DEBUG=False):
         with pytest.raises(SchemaValidationError):
             call("svc.strict_default", {"n": "not-int"})
+
+
+# --- per-function timeouts (0.58.0) ----------------------------------------
+#
+# One global FUNCTION_TIMEOUT is the wrong shape for a fleet whose Functions
+# range from a dictionary lookup to a vision model. A screening call takes
+# ~3s against a live provider; at the 5s default it is one slow model away
+# from a TimeoutError, and the caller's response to a timeout is the
+# fail-open branch. That is a screening call that quietly does not screen —
+# the exact class of defect a timeout is supposed to prevent, produced by
+# the timeout itself.
+#
+# The map is caller-side and keyed by NAME on purpose. A default carried by
+# the provider cannot help: over nats and http the caller's process has
+# neither the provider's registry entry nor its schema, so a slow Function
+# has no way to tell a stranger it is slow. What the caller always has is
+# the name it is about to call.
+
+
+def test_a_named_timeout_beats_the_global_default(settings):
+    from stapel_core.comm.functions import resolve_timeout
+
+    settings.STAPEL_COMM = {
+        "FUNCTION_TIMEOUT": 5.0,
+        "FUNCTION_TIMEOUTS": {"moderation.screen_draft": 60.0},
+    }
+    assert resolve_timeout("moderation.screen_draft", None) == 60.0
+    assert resolve_timeout("cdn.describe", None) == 5.0
+
+
+def test_an_explicit_timeout_still_wins(settings):
+    """The argument is the caller's last word — a map must not override a
+    number a call site chose deliberately."""
+    from stapel_core.comm.functions import resolve_timeout
+
+    settings.STAPEL_COMM = {"FUNCTION_TIMEOUTS": {"moderation.screen_draft": 60.0}}
+    assert resolve_timeout("moderation.screen_draft", 12.0) == 12.0
+
+
+def test_a_prefix_entry_covers_a_whole_module(settings):
+    """Longest prefix wins, the FUNCTION_ROUTES rule — so a deployment can
+    say "everything moderation does is slow" in one line, and still single
+    out one Function inside it."""
+    from stapel_core.comm.functions import resolve_timeout
+
+    settings.STAPEL_COMM = {
+        "FUNCTION_TIMEOUT": 5.0,
+        "FUNCTION_TIMEOUTS": {
+            "moderation.": 30.0,
+            "moderation.screen_draft": 60.0,
+        },
+    }
+    assert resolve_timeout("moderation.screen_draft", None) == 60.0
+    assert resolve_timeout("moderation.content", None) == 30.0
+    assert resolve_timeout("cdn.describe", None) == 5.0
+
+
+def test_an_unset_map_changes_nothing(settings):
+    from stapel_core.comm.functions import resolve_timeout
+
+    settings.STAPEL_COMM = {"FUNCTION_TIMEOUT": 5.0}
+    assert resolve_timeout("moderation.screen_draft", None) == 5.0
+
+
+def test_the_nats_transport_uses_the_named_timeout(settings, monkeypatch):
+    """The mechanism has to reach the transport, not just resolve nicely.
+
+    Asserted at the transport boundary rather than on the helper alone: a
+    resolver nothing calls is the defect this whole change is about.
+    """
+    from stapel_core.comm import functions as fn
+
+    settings.STAPEL_COMM = {
+        "FUNCTION_TRANSPORT": "nats",
+        "FUNCTION_TIMEOUTS": {"moderation.screen_draft": 60.0},
+    }
+    seen = {}
+
+    def fake_transport(name, payload, *, timeout=None):
+        seen["timeout"] = timeout
+        return {"allowed": True}
+
+    monkeypatch.setattr(
+        "stapel_core.comm.nats.nats_function_transport", fake_transport
+    )
+    fn.call("moderation.screen_draft", {"target_type": "listing"})
+    assert seen["timeout"] == 60.0

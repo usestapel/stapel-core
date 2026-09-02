@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.58.0] — 2026-09-03
+
+### Added
+
+- `STAPEL_COMM["FUNCTION_TIMEOUTS"]` — per-function overrides of
+  `FUNCTION_TIMEOUT`, by exact name or by longest matching prefix (the
+  `FUNCTION_ROUTES` rule, applied to seconds). Resolution is explicit
+  argument, then the named entry, then the global default; the number is
+  resolved once in `call()` so nats, http and a custom transport cannot end
+  up bound by different values.
+
+  One global timeout is the wrong shape for a fleet whose Functions range
+  from a dictionary lookup to a vision model. A live screening call measured
+  ~3s; under the 5s default it is one slow model away from a `TimeoutError`,
+  and a caller's response to a timeout is its fail-open branch — a screening
+  call that quietly does not screen, produced by the timeout meant to bound
+  it. Caller-side and keyed by name because over nats and http the caller's
+  process holds neither the provider's registry entry nor its schema, so a
+  slow Function has no way to tell a stranger that it is slow; the one thing
+  a caller always has is the name it is about to call.
+
+  An unset map changes nothing, so every existing deployment is unaffected.
+
 ## [0.57.1] — 2026-09-03
 
 ### An embedded library's admin bundle that `collectstatic` never saw

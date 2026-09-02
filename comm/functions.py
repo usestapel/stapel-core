@@ -39,6 +39,28 @@ def function(name: str, *, schema: dict | None = None) -> Callable[[FunctionHand
     return decorator
 
 
+def resolve_timeout(name: str, timeout: float | None) -> float:
+    """Seconds :func:`call` should give *name*: explicit, then named, then global.
+
+    An explicit argument is the caller's last word — a settings map must not
+    override a number a call site chose deliberately. Otherwise the
+    ``FUNCTION_TIMEOUTS`` entry with the longest matching prefix wins, so a
+    deployment can say "everything this module does is slow" in one line and
+    still single out one Function inside it.
+    """
+    if timeout is not None:
+        return float(timeout)
+    overrides = comm_setting("FUNCTION_TIMEOUTS", {}) or {}
+    best_key = ""
+    for key in overrides:
+        if name == key or name.startswith(key):
+            if len(key) > len(best_key):
+                best_key = key
+    if best_key:
+        return float(overrides[best_key])
+    return float(comm_setting("FUNCTION_TIMEOUT", 5.0))
+
+
 def call(name: str, payload: dict | None = None, *, timeout: float | None = None) -> Any:
     """Invoke function *name* and return its result.
 
@@ -58,19 +80,24 @@ def call(name: str, payload: dict | None = None, *, timeout: float | None = None
         except Exception as exc:
             raise FunctionCallError(f"function '{name}' failed: {exc!r}") from exc
 
+    # Resolved once, here, so every remote transport is bound by the same
+    # number and a deployment cannot end up with one answer over nats and
+    # another over http. In-process is untouched: there is no wire to bound.
+    effective = resolve_timeout(name, timeout)
+
     if transport == "nats":
         from .nats import nats_function_transport
 
-        return nats_function_transport(name, payload, timeout=timeout)
+        return nats_function_transport(name, payload, timeout=effective)
 
     if transport == "http":
-        return _call_http(name, payload, timeout=timeout)
+        return _call_http(name, payload, timeout=effective)
 
     # Custom transport (gRPC, ...): a dotted path to a callable
     # ``transport(name, payload, timeout=None) -> Any``. Lets a deployment
     # swap the RPC mechanism without touching module code.
     if "." in transport:
-        return _custom_call(transport, name, payload, timeout=timeout)
+        return _custom_call(transport, name, payload, timeout=effective)
 
     raise FunctionRouteNotConfigured(
         f"unknown FUNCTION_TRANSPORT {transport!r} "

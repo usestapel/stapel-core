@@ -23,6 +23,23 @@ _DEFAULTS: dict[str, Any] = {
     # URL of the owning service, e.g. {"cdn.": "http://svc-cdn:8000/cdn"}.
     "FUNCTION_ROUTES": {},
     "FUNCTION_TIMEOUT": 5.0,
+    # Per-function overrides of FUNCTION_TIMEOUT, by name or by longest
+    # matching prefix — the FUNCTION_ROUTES rule, applied to seconds instead
+    # of base URLs, e.g. {"moderation.": 30, "moderation.screen_draft": 60}.
+    #
+    # One global number is the wrong shape for a fleet whose Functions range
+    # from a dictionary lookup to a vision model. A screening call takes
+    # seconds against a real provider; under the 5s default it is one slow
+    # model away from a TimeoutError, and a caller's response to a timeout is
+    # its fail-open branch — a screening call that quietly does not screen,
+    # produced by the very timeout meant to bound it.
+    #
+    # CALLER-SIDE and keyed by NAME, both deliberately. A default carried by
+    # the provider cannot help: over nats and http the caller's process holds
+    # neither the provider's registry entry nor its schema, so a slow Function
+    # has no way to tell a stranger that it is slow. The one thing a caller
+    # always has is the name it is about to call.
+    "FUNCTION_TIMEOUTS": {},
     # For the nats transport
     "NATS_URL": "nats://nats:4222",
     "NATS_SUBJECT_PREFIX": "stapel.fn",
