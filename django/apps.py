@@ -200,6 +200,12 @@ class CommonDjangoConfig(AppConfig):
         # metrics backend that silently discards every measurement looks
         # exactly like one that works, from inside the process.
         from stapel_core.observability import checks as _obs_checks  # noqa: F401
+        # Embedded-library static checks (stapel_core.django.static_checks):
+        # W-level when a stapel_* library that is NOT an installed app ships
+        # static files the finders cannot reach. That library's admin widgets
+        # then render, save and publish with the widget silently missing —
+        # nothing raises, nothing logs, and the page looks complete.
+        from stapel_core.django import static_checks as _static_checks  # noqa: F401
         # Facade metrics onto the /api/metrics/ endpoint this service already
         # serves. Registering here is what makes a module's counter appear on
         # the scrape URL without every product wiring an exporter; nothing is

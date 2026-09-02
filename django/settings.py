@@ -326,18 +326,45 @@ _CORE_TEMPLATES_DIR = str(Path(__file__).resolve().parent / "templates")
 COMMON_STATIC_DIR = str(Path(__file__).resolve().parent.parent / "static")
 
 
-def get_staticfiles_dirs(base_dir: Path) -> List[str]:
-    """Return STATICFILES_DIRS including common static files."""
-    dirs = []
-    # Add service-specific static dir if exists
-    service_static = base_dir / "static"
+def get_staticfiles_dirs(base_dir: Path, *, include_embedded: bool = True) -> List[str]:
+    """STATICFILES_DIRS: the service's own, then every embedded library's.
+
+    An EMBEDDED library — one that is imported rather than listed in
+    ``INSTALLED_APPS`` — is invisible to ``AppDirectoriesFinder``, so the
+    admin assets it ships are never collected and the widgets that mount them
+    silently do not appear (see :mod:`stapel_core.staticfiles`). Hosts used to
+    close that by naming each library's directory by hand; this discovers
+    them, so a library added tomorrow needs no settings edit anywhere.
+
+    Order is the precedence order: the service's own ``static/`` comes first
+    and wins any name collision with a library's.
+
+    ``include_embedded=False`` opts a host out of the walk entirely — for a
+    deployment that pins ``STATICFILES_DIRS`` itself and wants no surprises.
+    """
+    dirs: List[str] = []
+    # Service-specific static dir, first — the host overrides the fleet.
+    service_static = Path(base_dir) / "static"
     if service_static.exists():
         dirs.append(str(service_static))
-    # Add common static dir (skip when absent, e.g. minimal installs —
-    # avoids staticfiles.W004 noise)
+    # Common static dir (skip when absent, e.g. minimal installs —
+    # avoids staticfiles.W004 noise). Discovery finds this too; the dedupe
+    # below keeps it listed once.
     if Path(COMMON_STATIC_DIR).exists():
         dirs.append(COMMON_STATIC_DIR)
-    return dirs
+    if include_embedded:
+        from stapel_core.staticfiles import embedded_static_dirs
+
+        dirs.extend(embedded_static_dirs())
+    deduped: List[str] = []
+    seen = set()
+    for entry in dirs:
+        key = os.path.realpath(entry)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+    return deduped
 
 def get_default_cache(redis_url: Optional[str] = None) -> dict:
     """Shared redis cache config."""

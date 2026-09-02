@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.57.0] — 2026-09-03
+
+### An embedded library's admin bundle that `collectstatic` never saw
+
+Django finds a library's static files by walking `INSTALLED_APPS`. Half the
+fleet's libraries are not apps: they are *embedded* — imported directly, no
+models, no `AppConfig`, never listed. `stapel_attributes` is the archetype, and
+it ships the per-kind config editor that `stapel_categories`' feature admin and
+`stapel_forms`' form builder both mount on a `config` field.
+
+Nothing walked it. The bundle was never collected, the widget's `<script>`
+pointed at a URL that 404s, and the admin page rendered, saved and published
+with the editor **absent** — a select with no way to type its options, an int
+with no min/max, no traceback and no log line. The standing answer was for every
+host to name every embedded library's directory in its own `STATICFILES_DIRS`:
+a rule enforced by memory, once per service per library, forgotten everywhere
+except the one host where somebody noticed the missing widget.
+
+- `get_staticfiles_dirs(BASE_DIR)` now returns the service's own `static/`
+  first, then **every installed `stapel_*` package that ships one** — sorted by
+  package name, de-duplicated by real path. Hosts name nothing;
+  `include_embedded=False` opts out.
+- New `stapel_core.staticfiles`: `embedded_static_dirs()`,
+  `embedded_static_packages()`, `reset_cache()`.
+
+Discovery rather than a registry, because an entry point or an opt-in list has
+to be remembered at exactly the moment the `STATICFILES_DIRS` line had to be
+remembered — it moves the forgetting instead of removing it. A walk cannot miss
+a library that is installed.
+
+It imports nothing, which is what lets it live in a settings module: one
+`os.scandir()` per `sys.path` entry catches both packages on the path (wheels,
+vendored checkouts) and `*.dist-info` directories (editable installs, whose code
+is elsewhere), then `importlib.util.find_spec` locates each without executing
+it. ~0.7 ms cold on a 73-package environment, memoised per `sys.path`.
+
+### `stapel_core.static.W001` — the bundle that is there and unreachable
+
+New system check (tag `staticfiles`): a `stapel_*` package that is not an
+installed app ships static files the finders cannot resolve. It exists because
+`get_staticfiles_dirs()` is not the only way a host writes `STATICFILES_DIRS`,
+and because this failure is invisible in a browser and silent in the logs.
+Warning, not Error (§3.7: the service runs; one admin editor does not).
+
+It walks shipped files rather than mounted widgets' `Media` on purpose —
+`ConfigEditorWidget` declares no `Media` at all, so a `Media` crawl would have
+reported the broken deployment clean.
+
+`stapel_forms.W004` is the host-specific ancestor of this check (it tests one
+hard-coded path, `stapel_attributes/attributes-admin.js`). It is left in place
+and untouched: both are silent once the mechanism is in, so the overlap costs
+nothing in a healthy deployment, and stapel-forms keeps working against older
+cores. It can be retired in that module's own release.
+
 ## [0.56.1] — 2026-09-03
 
 ### The menu opened on a phone and hung off the side of it

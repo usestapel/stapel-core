@@ -12,9 +12,13 @@ _sys.path = [p for p in _sys.path if _os.path.abspath(p or _os.getcwd()) != _rep
 from stapel_core.testing import configure_django  # noqa: E402
 
 configure_django(
-    installed_apps=["stapel_core.django.users", "stapel_core.django.outbox", "stapel_core.django.taskstore", "stapel_core.django.eventstore", "stapel_core.django.projections", "stapel_core.django.gateway"],
+    installed_apps=["django.contrib.staticfiles", "stapel_core.django.users", "stapel_core.django.outbox", "stapel_core.django.taskstore", "stapel_core.django.eventstore", "stapel_core.django.projections", "stapel_core.django.gateway"],
     extra_settings={
         "AUTH_USER_MODEL": "users.User",
+        # django.contrib.staticfiles refuses to start without it, and the
+        # embedded-static check needs the real finders, not a stub.
+        "STATIC_URL": "/static/",
+        "STATICFILES_DIRS": [],
         "CACHES": {
             "default": {
                 "BACKEND": "django.core.cache.backends.locmem.LocMemCache",

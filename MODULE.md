@@ -2038,6 +2038,72 @@ JWT/CORS/session env-driven config, `get_default_database()`,
 Everything is a plain module-level name — a service overrides by assignment
 after the star-import; env vars drive deployment differences.
 
+#### Embedded-library static — `get_staticfiles_dirs()` / `stapel_core.staticfiles`
+
+Django collects a library's assets by walking `INSTALLED_APPS`
+(`AppDirectoriesFinder`). Half the fleet's libraries are **embedded**: imported
+directly, no models, no `AppConfig`, therefore never listed. `stapel_attributes`
+is the archetype — it ships the per-kind config editor
+(`static/stapel_attributes/attributes-admin.js`) that both `stapel_categories`'
+feature admin and `stapel_forms`' form builder mount on a `config` field.
+
+Nothing walked it. `collectstatic` never copied the bundle, the widget emitted a
+`<script>` pointing at a URL that 404s, and the admin page **rendered, saved and
+published with the editor simply absent** — no traceback, no log line, no visual
+gap. A select's options and an int's min/max could not be edited, and nothing
+said so. The old answer was for each host to name each library's directory in
+its own `STATICFILES_DIRS`; that is a rule enforced by memory, once per service
+per library, and it had been forgotten everywhere but the one host where a user
+noticed.
+
+`get_staticfiles_dirs(BASE_DIR)` now **discovers** them:
+
+```python
+STATICFILES_DIRS = get_staticfiles_dirs(BASE_DIR)   # nothing else to name
+```
+
+Returned in precedence order — the service's own `static/` first (it still wins
+any collision), then every installed `stapel_*` package that has a `static/`
+directory, sorted by package name and de-duplicated by real path.
+`include_embedded=False` opts a deployment out.
+
+Discovery, not a registry, and the reason is the bug itself: an entry point or
+an opt-in list has to be remembered at exactly the moment the `STATICFILES_DIRS`
+line had to be remembered, so it moves the forgetting instead of removing it. A
+walk cannot miss a library that is installed.
+
+It is also cheap enough to sit in a settings module: `stapel_core.staticfiles`
+**imports nothing** (a real library imports Django at module level, which at
+settings time is a circular import, quite apart from the time). One
+`os.scandir()` per `sys.path` directory picks up both shapes — packages on the
+path (wheels, vendored checkouts) and `*.dist-info` directories (how an editable
+install advertises code that lives elsewhere) — and the few matches resolve
+through `importlib.util.find_spec`, which locates a top-level package without
+executing it. Measured at ~0.7 ms cold on a 73-package environment, memoised per
+`sys.path` thereafter.
+
+| Symbol | Returns |
+|---|---|
+| `embedded_static_dirs()` | `static/` directories, ready for `STATICFILES_DIRS` |
+| `embedded_static_packages()` | `(package_name, static_dir)` pairs |
+| `reset_cache()` | drops the memoised walk (tests, `sys.path` mutation) |
+
+**System check `stapel_core.static.W001`** (tag `staticfiles`,
+`django/static_checks.py`) — a `stapel_*` package that is **not** an installed
+app ships static files the finders cannot resolve. Registered because
+`get_staticfiles_dirs()` is not the only way a host writes `STATICFILES_DIRS`
+(a hand-rolled list, an overwrite instead of an append, a service older than
+the mechanism), and the symptom is invisible in every one of those cases. One
+finding per package, naming the package and up to three assets.
+
+Warning and not Error by §3.7 — the service runs, one editor on one admin page
+does not — so `manage.py check` prints it and `--fail-level WARNING` fails a
+pipeline on it, without a stray uncollected CSS file refusing every deploy in
+the fleet. It walks **shipped files**, deliberately, and not mounted widgets'
+`Media`: `ConfigEditorWidget` declares no `Media` at all (it calls `static()`
+inline and dynamic-imports the result from an ES module), so a `Media` crawl
+would have returned a clean report on the very deployment that was broken.
+
 **Boot gates (`django/boot.py`).** Django runs system checks for management
 commands and `runserver` and **none at all** for `gunicorn
 config.wsgi:application` — which is how every generated project boots, so the
