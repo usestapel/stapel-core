@@ -141,6 +141,46 @@ def get_services() -> List[Service]:
     return _parse_services(raw)
 
 
+def services_declared() -> bool:
+    """True when ``STAPEL_SERVICES`` actually declares services.
+
+    False for every shape that leaves the deployment without a registry:
+    unset, ``""``, ``[]`` (the fallback path in :func:`get_services`) and the
+    env-JSON string ``"[]"`` — which parses to an empty list and renders no
+    navigation block at all. Raises :class:`NavConfigError` on malformed
+    config so callers can defer to the E001 that already reports it.
+    """
+    raw = _resolve_setting("STAPEL_SERVICES")
+    if raw is None or raw == "" or raw == []:
+        return False
+    return bool(_parse_services(raw))
+
+
+def sibling_prefixes() -> List[str]:
+    """Path prefixes this deployment claims are served by *another* service.
+
+    Read off the mount registry (:mod:`stapel_core.django.mounts`): an
+    **external** mount is by definition a sibling behind the same proxy. The
+    current service's own prefix is excluded — the auth service's builtin
+    external ``auth`` mount points at itself and proves nothing about a split.
+
+    This is the only honest signal the framework has that a deployment is
+    split: it is the deployment's own declaration, not a guess from
+    ``URL_PREFIX`` (a monolith may legitimately be mounted under one).
+    """
+    from stapel_core.django.mounts import get_mounts
+
+    current = _current_prefix()
+    out = []
+    for mount in get_mounts().values():
+        if not mount.external:
+            continue
+        prefix = mount.prefix.strip("/")
+        if prefix and prefix != current:
+            out.append(mount.prefix)
+    return sorted(set(out))
+
+
 def swagger_mounted() -> bool:
     """True when this deployment mounts the Swagger UI (introspection on).
 
@@ -631,6 +671,8 @@ __all__ = [
     "NavLink",
     "ModuleNav",
     "get_services",
+    "services_declared",
+    "sibling_prefixes",
     "swagger_mounted",
     "build_services",
     "current_swagger_url",

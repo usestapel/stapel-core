@@ -410,3 +410,87 @@ class TestViewerAllowedFailsClosed:
 
         monkeypatch.setattr(builtins, "__import__", no_access)
         assert nav._viewer_allowed(self._staff(), "high") is True
+
+
+class TestSplitDeploymentServicesCheck:
+    """E004 — a deployment that declares a sibling service must declare
+    ``STAPEL_SERVICES``, or the admin switcher silently lists only itself.
+
+    The regression this pins: AS-4 moved the service list out of the
+    framework into deploy-config, and a deployment that was never re-seeded
+    kept booting, kept passing every check, and simply lost its
+    cross-service navigation — ``get_services()`` fell back to the
+    single-implicit-service monolith path and ``stapel_services_multi``
+    collapsed the "All Services" section.
+    """
+
+    def test_sibling_mount_without_registry_is_an_error(self, settings):
+        from stapel_core.django.nav_checks import (
+            E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT,
+            check_services_declared,
+        )
+
+        settings.STAPEL_SERVICES = None
+        settings.URL_PREFIX = "recordings/"
+        settings.STAPEL_AUTH_SERVICE_PREFIX = "auth"
+        errors = check_services_declared()
+        assert any(
+            e.id == E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT for e in errors
+        ), errors
+        assert "auth/" in errors[0].msg
+
+    def test_registry_declared_is_clean(self, settings):
+        from stapel_core.django.nav_checks import check_services_declared
+
+        settings.URL_PREFIX = "recordings/"
+        settings.STAPEL_AUTH_SERVICE_PREFIX = "auth"
+        settings.STAPEL_SERVICES = (
+            '[{"name": "Auth", "prefix": "auth"}, '
+            '{"name": "Recordings", "prefix": "recordings"}]'
+        )
+        assert check_services_declared() == []
+
+    def test_empty_registry_is_not_a_declaration(self, settings):
+        """``STAPEL_SERVICES=[]`` is what the generator seeds before the
+        first ``stapel-new-service``; ``get_services()`` falls back on it,
+        so the check must treat it as undeclared."""
+        from stapel_core.django.nav_checks import (
+            E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT,
+            check_services_declared,
+        )
+
+        settings.URL_PREFIX = "recordings/"
+        settings.STAPEL_AUTH_SERVICE_PREFIX = "auth"
+        settings.STAPEL_SERVICES = "[]"
+        errors = check_services_declared()
+        assert any(e.id == E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT for e in errors)
+
+    def test_true_monolith_is_clean(self, settings):
+        """No external mount = nothing claims a sibling exists; the
+        single-service fallback is the honest answer, not a lost registry."""
+        from stapel_core.django.nav_checks import check_services_declared
+
+        settings.STAPEL_SERVICES = None
+        settings.URL_PREFIX = ""
+        settings.STAPEL_AUTH_SERVICE_PREFIX = ""
+        assert check_services_declared() == []
+
+    def test_self_reference_is_not_a_sibling(self, settings):
+        """The auth service's own external auth mount points at itself —
+        that is not evidence of another service."""
+        from stapel_core.django.nav_checks import check_services_declared
+
+        settings.STAPEL_SERVICES = None
+        settings.URL_PREFIX = "auth/"
+        settings.STAPEL_AUTH_SERVICE_PREFIX = "auth"
+        assert check_services_declared() == []
+
+    def test_malformed_registry_defers_to_e001(self, settings):
+        """A registry that does not parse is E001's story, not E004's —
+        one misconfiguration, one error."""
+        from stapel_core.django.nav_checks import check_services_declared
+
+        settings.URL_PREFIX = "recordings/"
+        settings.STAPEL_AUTH_SERVICE_PREFIX = "auth"
+        settings.STAPEL_SERVICES = "{not json"
+        assert check_services_declared() == []

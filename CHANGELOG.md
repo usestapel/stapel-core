@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.55.0] — 2026-09-02
+
+### The admin lost its way between services, and every gate said green
+
+An owner opened a service's admin on a live split deployment and found no way
+to reach any other service's admin. Nothing had crashed. Nothing was silenced.
+`manage.py check` was clean, the deploy was green, and the service switcher
+was simply not there.
+
+The cause is a fallback doing its job too well. AS-4 took the service list out
+of the framework — a hardcoded `STAPEL_SERVICES` in `core/config.py` was
+policy living in a mechanism — and made it deploy-config, seeded by
+`stapel-create-project` and appended to by `stapel-new-service`. Correct. But
+the fallback for "no registry configured" is the **monolith** answer: one
+implicit service derived from `URL_PREFIX`. A deployment that predates the
+generators, or whose env was rebuilt without the key, therefore reads as a
+monolith — and a one-entry list also collapses the "All Services" section, so
+the switcher does not render empty, it does not render at all. The framework
+had no way to tell "this really is one service" from "this deployment's
+registry went missing", and it guessed the reassuring one.
+
+### `stapel_core.nav.E004` — ask the deployment to agree with itself
+
+The deployment already declares its own topology in a second place: the
+**mount** registry. An `external` mount is, by definition, a sibling service
+behind the same proxy. So the check is not a guess about `URL_PREFIX` shapes:
+
+```
+ERRORS:
+?: (stapel_core.nav.E004) STAPEL_SERVICES is not set, but this deployment
+   declares sibling services behind the same proxy (auth/). The admin service
+   switcher is therefore rendering the single-service monolith fallback —
+   from this service's admin there is no link to any other service's admin.
+```
+
+- fires only when the nav registry is undeclared **and** the mount registry
+  names a sibling that is not this service (the auth service's own external
+  `auth` mount points at itself and proves nothing);
+- a true monolith sets `STAPEL_AUTH_SERVICE_PREFIX = ""`, declares no
+  external mount, and stays clean;
+- `STAPEL_SERVICES=[]` — what the generator seeds before the first
+  `stapel-new-service` — counts as undeclared, and so does the env-JSON
+  string `"[]"`, which parses to an empty list and renders no navigation
+  block at all;
+- a malformed registry defers to E001 and an unparseable mount registry to
+  `stapel_mounts`: one misconfiguration, one error.
+
+New public helpers behind it: `nav.services_declared()` and
+`nav.sibling_prefixes()`.
+
 ## [0.54.1] — 2026-09-02
 
 ### The event store had no way to say "these two keys are one person"

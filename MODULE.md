@@ -1887,7 +1887,8 @@ the mandate → empty the group → optionally `STRICT=True` to make the mandate
 a ceiling. The `stapel_access`/`stapel_admin`/`stapel_nav` system checks are
 the misconfiguration diagnostics (W001 backend missing, W002 unaudited DAC,
 E003 STRICT unenforceable, W003/admin.W001 wrong app_label in a `MODELS`
-key, E004/W005 step-up, nav.E001/E002 malformed registries).
+key, E004/W005 step-up, nav.E001/E002 malformed registries, nav.E004 a split
+deployment with no service registry).
 
 ### GDPR providers (`gdpr/`)
 
@@ -2313,6 +2314,22 @@ processor. System checks (tag `stapel_nav`, `django/nav_checks.py`):
 `stapel_core.nav.E001` malformed `STAPEL_SERVICES`, `E002` malformed
 `STAPEL_ADMIN["NAV_LINKS"]` — the render layer fails soft (never 500s), the
 check surfaces the misconfiguration at deploy time.
+
+**`stapel_core.nav.E004` — a split deployment with no service registry.**
+The fallback for "no `STAPEL_SERVICES`" is the *monolith* answer: one
+implicit service derived from `URL_PREFIX`. That makes a split deployment
+that was never seeded (one that predates the generators, or whose env was
+rebuilt without the key) indistinguishable from a monolith — it boots, it
+passes every other check, and the admin quietly loses every link to a
+sibling service, because a one-entry list also collapses the "All Services"
+section. E004 asks the deployment to be consistent with itself: when the
+**mount** registry claims a sibling exists (an `external` mount that is not
+this service — `sibling_prefixes()`), the **nav** registry has to know about
+it too. A true monolith declares `STAPEL_AUTH_SERVICE_PREFIX = ""`, has no
+external mount, and stays clean; a malformed registry defers to E001, and an
+unparseable mount registry defers to `stapel_mounts`. `STAPEL_SERVICES=[]`
+(what `stapel-create-project` seeds before the first `stapel-new-service`)
+counts as undeclared — `services_declared()` is false for every empty shape.
 
 **`current_dashboard_url` selection (§2 arbitration).** A `dashboards`/`tools`
 link declares itself *the* current service's dashboard by setting
