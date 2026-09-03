@@ -62,6 +62,20 @@ _DEFAULTS: dict[str, Any] = {
     #   inline — start() executes the task synchronously (tests/scripts).
     # Orthogonal to TASK_EXECUTOR, which is HOW the worker runs the handler.
     "TASK_DISPATCH": "action",
+    # Retry ladder for a Task whose handler raised. The delay is drawn with
+    # FULL JITTER from [0, base * 2**(attempt-1)], capped — see comm/backoff.
+    #
+    # The default used to be zero, in the sense that there was no ladder at
+    # all: `_requeue` re-announced instantly, so max_attempts=3 meant three
+    # provider calls as fast as the loop could make them. Measured on a
+    # client fleet's stand: 215 parked screening tasks, all at attempts=3,
+    # mean lifetime 0.87 SECONDS. The retries never outlived the blip they
+    # were retrying, and on a priced surface they tripled the bill for it.
+    #
+    # Set BASE to 0 to restore the old instant-retry behaviour — which is
+    # what a single-process test wants, and nothing else.
+    "TASK_RETRY_BACKOFF_BASE": 2.0,
+    "TASK_RETRY_BACKOFF_CAP": 300.0,
     # Signal delivery backend: "none" (default — signal() is a silent no-op,
     # the correct configuration for every HTTP-only host), a name registered
     # via comm.register_signal_transport() ("channels", registered by

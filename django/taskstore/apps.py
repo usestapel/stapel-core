@@ -27,3 +27,8 @@ class TaskstoreConfig(AppConfig):
         from stapel_core.comm.schemas import autoload_schemas
 
         autoload_schemas()
+
+        # stapel_taskstore.W001 — beat is running and the retry sweep is not
+        # in it. Since 0.60 the sweep is what wakes a held retry, so its
+        # absence turns "retrying with backoff" into "waiting forever".
+        from . import checks  # noqa: F401

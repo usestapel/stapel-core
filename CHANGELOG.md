@@ -1,5 +1,106 @@
 # Changelog
 
+## [0.60.0] — 2026-09-03
+
+### comm Tasks: a retry ladder that waits, an idempotency key, and a reason
+
+The Task primitive had retries in the sense that it called the handler
+again. It did not wait between calls, it could not tell two callers apart
+from one caller trying twice, and when it gave up it wrote a `repr()` into
+a text column and told nobody.
+
+Measured on a client fleet's stand, and this is the whole argument: **215
+of 276 `moderation.screen` tasks parked FAILED**, every single one at
+`attempts=3`, mean time from created to failed **0.87 seconds**. Three
+calls against an unreachable provider inside one second, then a permanent
+give-up. The retries never outlived the blip they were retrying; they
+just tripled the request rate at the exact moment the far side was
+struggling, and on a priced surface they tripled the bill for it. The
+whole episode ran for twelve days behind an all-green dashboard, because
+the module's fallback worked and nothing counted the fallback being used.
+
+- **`comm/backoff.py`** — `retry_delay()` / `retry_ceiling()`, exponential
+  with FULL JITTER. `2 ** retries` appears verbatim in three bus backends
+  and in a fourth shape in the outbox relay, and not one of them jitters.
+  Backoff spreads one caller's retries over time; jitter is the only part
+  that spreads many callers' retries over each other, and it is the part
+  everybody leaves out. Configured by `STAPEL_COMM["TASK_RETRY_BACKOFF_BASE"]`
+  (2.0s) and `["TASK_RETRY_BACKOFF_CAP"]` (300s); base `0` restores the old
+  instant retry, which is what a single-process test wants and nothing else.
+
+- **`TaskRecord.not_before`** — a failed attempt now HOLDS the row instead
+  of re-announcing it into the void. `execute()` declines to claim a task
+  before its hold expires, so a redelivered announcement cannot spend an
+  attempt the ladder has not reached yet. The delay lives in the record,
+  not in a sleeping worker, so it survives a crash and a redeploy.
+
+- **`TaskRecord.dedupe_key` + `start(dedupe_key=...)`** — while a task with
+  that key is PENDING or RUNNING, a second `start()` returns the FIRST
+  task's id and creates nothing (partial unique index; a lost race reads
+  the winner rather than raising). The key is released on DONE/FAILED: this
+  deduplicates work IN FLIGHT and does not pretend to remember forever that
+  some payload once ran. A caller needing "exactly once, ever" owns a
+  constraint on its own table — that is a business fact, and this is a
+  journal.
+
+- **`TaskRecord.failure_reason`** — `handler`, `unprocessable`,
+  `no_handler`, `deadline_exceeded`. A metric label and a `GROUP BY`, which
+  a `repr()` in a TextField is neither.
+
+- **A handler raising `ValidationError` is parked on the FIRST refusal**,
+  not retried to the cap. It decoded the payload, reached working code, and
+  that code refused its VALUES; retrying reproduces the refusal exactly and
+  bills for every reproduction. Actions have parked these since 0.53 — the
+  primitive that actually calls the paid provider did not.
+
+- **Metrics.** `comm_task_started_total`, `comm_task_completed_total`,
+  `comm_task_retried_total`, `comm_task_failed_total{kind,reason}`,
+  `comm_task_duration_seconds{kind}`. A give-up ALSO lands in
+  `bus_dlq_total{topic="task.<kind>",reason=...}` rather than a fourth
+  counter: a deployment already alerts on that series, and "work this
+  system gave up on" is one question whether the work was an Action or a
+  Task.
+
+### `sweep_tasks` is now schedulable, and says so when it is not scheduled
+
+The command has existed since the primitive shipped and on the fleet this
+was written for it had **never been scheduled anywhere** — no service, no
+beat file, no crontab. Nothing looked broken, because a failed task used to
+re-announce itself instantly; the only casualty was `deadline_seconds`,
+which quietly meant nothing in every deployment.
+
+From this release that absence would be a REGRESSION: the sweep is what
+wakes a held retry. Ship the backoff without the driver and every transient
+failure becomes a task that reports "retrying" forever.
+
+- **`django/taskstore/beat.py`** — `get_taskstore_beat_schedule()`, a splat
+  a host merges into `CELERY_BEAT_SCHEDULE` (60s default, and the interval
+  is a floor on the retry granularity, not a preference).
+- **`stapel_taskstore.W001`** — fires in a process that runs beat without
+  it, matched on the task NAME so a host that renamed the entry is not
+  nagged. Warning, not Error: a fleet upgrades one service at a time.
+- **`sweep_tasks` re-announces due retries** in addition to failing expired
+  tasks, batched (`--batch`, default 500) so the sweep cannot itself become
+  the burst the backoff exists to prevent. Never re-announces a task at
+  `attempts=0` — that announcement is `start()`'s, and doubling it would
+  run every freshly created task twice.
+
+### Also
+
+`TASK_EXECUTOR = "celery"` in a process without celery installed raised
+`'NoneType' object has no attribute 'delay'` from inside an action
+handler — a message naming neither the setting nor the missing package,
+on a path whose failure mode is "no task ever runs again". It now raises
+a `CommError` that names the knob.
+
+### Migration
+
+`stapel_taskstore.0002_task_retry_and_dedupe` — additive (expand): three
+defaulted/nullable columns, one index, one partial unique constraint.
+Nothing is dropped and no row is rewritten, so an old process and a new one
+run against the same table during a rollout.
+
+
 ## [0.59.0] — 2026-09-03
 
 ### `GET <prefix>api/version/` — which build is this, asked from outside

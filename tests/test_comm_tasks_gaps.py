@@ -183,3 +183,24 @@ def test_callback_invoked_with_result_on_success():
     assert seen[0]["task_id"] == task_id
     assert seen[0]["state"] == TaskRecord.DONE
     assert seen[0]["result"] == {"value": 6}
+
+
+@pytest.mark.django_db
+def test_celery_executor_without_celery_names_the_setting(settings, monkeypatch):
+    """A misconfiguration must say which knob is wrong.
+
+    Left alone this was `'NoneType' object has no attribute 'delay'` raised
+    from inside an action handler — a message naming neither the setting nor
+    the missing package, on a path whose failure mode is "no task ever runs
+    again".
+    """
+    from stapel_core.comm.exceptions import CommError
+
+    settings.STAPEL_COMM = {
+        **getattr(settings, "STAPEL_COMM", {}), "TASK_EXECUTOR": "celery",
+    }
+    monkeypatch.setattr(tasks_mod, "_celery_execute", None)
+    with pytest.raises(CommError) as caught:
+        tasks_mod._dispatch(str(uuid.uuid4()))
+    assert "TASK_EXECUTOR" in str(caught.value)
+    assert "celery is not installed" in str(caught.value)
