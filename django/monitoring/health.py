@@ -344,10 +344,21 @@ def get_health_urls(prefix: str = ''):
         - /{prefix}api/health/ready/
         - /{prefix}api/health/live/
         - /{prefix}api/metrics/
+        - /{prefix}api/version/
+
+    ``api/version/`` rides along deliberately rather than being a second
+    thing to wire. The whole point of it is that an outside observer can ask
+    a deployed service what it is running, and an endpoint each service has
+    to remember to mount is one that some service will not have mounted on
+    the day someone needs it. Every service that already reports its health
+    now also reports its build — see monitoring/version.py.
     """
+    from .version import get_version_urls
+
     return [
         path(f'{prefix}api/health/', health_check, name='health-check'),
         path(f'{prefix}api/health/ready/', readiness_probe, name='readiness-probe'),
         path(f'{prefix}api/health/live/', liveness_probe, name='liveness-probe'),
         path(f'{prefix}api/metrics/', prometheus_metrics, name='prometheus-metrics'),
+        *get_version_urls(prefix),
     ]

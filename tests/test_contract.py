@@ -53,10 +53,10 @@ REPO = Path(__file__).resolve().parent.parent
 COMMITTED = REPO / "docs" / "capabilities.json"
 COMMITTED_LLMS_TXT = REPO / "docs" / "llms.txt"
 
-#: Matches the Makefile's ``--budget 6400`` — see its comment. Raised, never
+#: Matches the Makefile's ``--budget 6800`` — see its comment. Raised, never
 #: fitted into by trimming intents: a cut context file reads exactly like a
 #: complete one.
-LLMS_TXT_BUDGET = 6400
+LLMS_TXT_BUDGET = 6800
 
 
 @pytest.fixture(scope="module")

@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.59.0] — 2026-09-03
+
+### `GET <prefix>api/version/` — which build is this, asked from outside
+
+A deployed service could not be asked what it was running. `/api/health/`
+reports a `version`, and that version is `settings.APP_VERSION_NUMBER` — a
+string read from a per-service `version.txt` that has said `0.1.0` in every
+service of a client fleet since each was scaffolded. It answers "which
+release of this service's own thin config wrapper", which nobody has ever
+wanted to know, and says nothing about the libraries the wrapper is made of,
+which is the only thing anyone asks. Two questions shared a field and the
+useless one had it.
+
+The question people actually ask is a claim about a LIBRARY: "is the fix in?",
+"is this stand on stapel-search 0.7.0 or 0.3.1?". A fleet already answers that
+from the inside — a client fleet's deploy gate reads `pip list`
+inside every container to catch a service running two builds of itself, which
+it does because that exact skew once made `/suggest` answer `degraded` with
+every healthcheck green. What nobody could do was ask from OUTSIDE: a UX walker
+measuring a stand, or an owner with curl, could not tell a fix that does not
+work from a fix that was never deployed, so a coordinator's "I deployed X" was
+unverifiable by anyone but the coordinator. Two walkers in a row lost a run to
+it on the same stand.
+
+`stapel_core.django.monitoring.version` answers the `stapel.version/1`
+document: the commit and image tag the deployment stamped, the build time, the
+Python/Django runtime, and the INSTALLED version of every `stapel-*`
+distribution. It is mounted by `get_health_urls()` rather than being a second
+thing to wire — an endpoint each service has to remember to mount is one that
+some service will not have mounted on the day it is needed.
+
+Nothing in it is declared:
+
+- the library map comes from `importlib.metadata` in the running interpreter —
+  what the process IMPORTED, not `requirements.txt` (which says what an image
+  was built FROM, and the failure mode is a container not running the image
+  that file describes) and not a settings constant (correct the day it is
+  typed, plausible forever after);
+- the build identity is the one thing a Python process cannot derive, so it is
+  read from `STAPEL_GIT_SHA` / `STAPEL_IMAGE_NAME` / `STAPEL_IMAGE_TAG` /
+  `STAPEL_BUILD_TIME` and reported as `null` when unset. An empty env var — a
+  Dockerfile's `ARG GIT_SHA=` that nobody passed — is `null` too. An unstamped
+  image says so; it never inherits a plausible value.
+
+The document exposes the version numbers of open-source libraries on a surface
+that already publishes its full OpenAPI schema. That is a deliberate trade:
+`STAPEL_VERSION_ENDPOINT["PUBLIC"] = False` closes it to staff (404, not 403 —
+a closed surface does not confirm it exists), and
+`STAPEL_VERSION_ENDPOINT["LIBRARY_PREFIXES"]` widens it for a deployment that
+vendors its own.
+
+### Changed
+
+- `get_health_urls()` returns a fifth pattern, `<prefix>api/version/`.
+  Additive; nothing that mounted it before changes behaviour.
+- The llms.txt budget rises 6400 -> 6800 for the four new surface entries,
+  raised rather than fitted into by trimming intent lines.
+
 ## [0.58.0] — 2026-09-03
 
 ### Added

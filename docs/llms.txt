@@ -1,8 +1,8 @@
-# stapel-core 0.58.0
+# stapel-core 0.59.0
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters, the serializer seam and thin-view base) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
-Contract: surface 53 · extension points 17 · error codes 42.
+Contract: surface 57 · extension points 17 · error codes 42.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Usage surface — call these before writing your own
@@ -63,6 +63,8 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
   Pin an error reporter for this process, ignoring settings — tests, and hosts that construct their own client.
 - timer — stapel_core.observability.metrics.timer
   Time a block and record it as a histogram observation. Measures in a finally, so a block that raises is still measured — the latency of failures is usually the interesting half.
+- version_view — stapel_core.django.monitoring.version.version_view
+  The endpoint an outside observer asks 'which build is this, and does it contain library X at version Y'. Reports commit, image tag, build time and the INSTALLED version of every stapel-* distribution. Public unless STAPEL_VERSION_ENDPOINT['PUBLIC'] is False, which closes it to staff.
 ### template
 - admin/base_site.html — django/templates/admin/base_site.html
   The admin shell that renders the cross-service navigation: STAPEL_SERVICES, the NAV_LINKS sections and the introspection-gated Swagger link. A project that ships its own admin/base_site.html instead of extending this one silently loses all three and gets no error — override blocks, do not replace the file.
@@ -84,6 +86,8 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 - unapplied_migrations — stapel_core.django.monitoring.schema_health.unapplied_migrations
   Migrations on disk the database has not applied — the same definition as `manage.py migrate --check`, deliberately, so the boot gate, the deploy gate and the health probe cannot disagree about what 'behind' means. Use it in a management command or a boot gate; do not re-derive the migration plan yourself.
 ### factory
+- build_info — stapel_core.django.monitoring.version.build_info
+  The image identity a Python process cannot derive for itself — commit, image name/tag, build time — from the STAPEL_GIT_SHA / STAPEL_IMAGE_* / STAPEL_BUILD_TIME env the deployment stamps. Unset reports null, never a stale plausible value.
 - continue_trace — stapel_core.observability.context.continue_trace
   The subscriber side: bind the trace an incoming event carries, with causation_id set to that event's id. This is what makes a fan-out reconstructible as a tree — comm delivery and the bus consumer base already call it, so a handler inherits its cause for free.
 - format_traceparent — stapel_core.observability.context.format_traceparent
@@ -94,6 +98,10 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
   The error reporter this process resolved. For introspection and for code that needs the reporter's own return value (a backend event id).
 - get_health_urls — stapel_core.django.monitoring.health.get_health_urls
   The urlpatterns for the whole health/metrics family — include() this in a service's root urls.py instead of wiring the four views by hand, so every service in the fleet answers the same paths and a deployment's probes are portable between them.
+- get_version_urls — stapel_core.django.monitoring.version.get_version_urls
+  The urlpattern for GET <prefix>api/version/. Already included by get_health_urls(), so a service that mounts health has it — call this directly only to mount it under a different prefix.
+- installed_libraries — stapel_core.django.monitoring.version.installed_libraries
+  {distribution: version} for every installed stapel-* distribution, read from the running interpreter — what the process IMPORTED, not what requirements.txt says the image was built from.
 - load_configured_factors — stapel_core.verification.factors.load_configured_factors
   Boot-time loader that turns STAPEL_VERIFICATION['EXTRA_FACTORS'] from a declaration into registrations (pinned, so host ids beat library ones whatever the INSTALLED_APPS order). CommonDjangoConfig.ready() calls it since 0.16.1 — a host app must NOT call it from its own AppConfig any more; before 0.16.1 it had no caller anywhere in the framework and the setting was decorative, which is exactly the failure this whole section exists to make impossible.
 - logging_config — stapel_core.observability.logs.logging_config

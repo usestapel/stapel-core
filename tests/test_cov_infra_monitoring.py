@@ -270,9 +270,13 @@ def test_get_health_urls():
         "readiness-probe",
         "liveness-probe",
         "prometheus-metrics",
+        # Rides along on purpose — see get_health_urls' docstring and
+        # tests/test_monitoring_version.py.
+        "version",
     ]
     assert str(patterns[0].pattern) == "svc/api/health/"
     assert str(patterns[3].pattern) == "svc/api/metrics/"
+    assert str(patterns[4].pattern) == "svc/api/version/"
 
 
 # ---------------------------------------------------------------------------

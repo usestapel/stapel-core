@@ -1,6 +1,6 @@
 {
   "module": "stapel-core",
-  "version": "0.58.0",
+  "version": "0.59.0",
   "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters, the serializer seam and thin-view base) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
   "axes": [],
   "extension_points": [
@@ -233,6 +233,30 @@
       "kind": "predicate",
       "path": "stapel_core.django.monitoring.schema_health.unapplied_migrations",
       "intent": "Migrations on disk the database has not applied — the same definition as `manage.py migrate --check`, deliberately, so the boot gate, the deploy gate and the health probe cannot disagree about what 'behind' means. Use it in a management command or a boot gate; do not re-derive the migration plan yourself."
+    },
+    {
+      "name": "build_info",
+      "kind": "factory",
+      "path": "stapel_core.django.monitoring.version.build_info",
+      "intent": "The image identity a Python process cannot derive for itself — commit, image name/tag, build time — from the STAPEL_GIT_SHA / STAPEL_IMAGE_* / STAPEL_BUILD_TIME env the deployment stamps. Unset reports null, never a stale plausible value."
+    },
+    {
+      "name": "get_version_urls",
+      "kind": "factory",
+      "path": "stapel_core.django.monitoring.version.get_version_urls",
+      "intent": "The urlpattern for GET <prefix>api/version/. Already included by get_health_urls(), so a service that mounts health has it — call this directly only to mount it under a different prefix."
+    },
+    {
+      "name": "installed_libraries",
+      "kind": "factory",
+      "path": "stapel_core.django.monitoring.version.installed_libraries",
+      "intent": "{distribution: version} for every installed stapel-* distribution, read from the running interpreter — what the process IMPORTED, not what requirements.txt says the image was built from."
+    },
+    {
+      "name": "version_view",
+      "kind": "gate_function",
+      "path": "stapel_core.django.monitoring.version.version_view",
+      "intent": "The endpoint an outside observer asks 'which build is this, and does it contain library X at version Y'. Reports commit, image tag, build time and the INSTALLED version of every stapel-* distribution. Public unless STAPEL_VERSION_ENDPOINT['PUBLIC'] is False, which closes it to staff."
     },
     {
       "name": "pseudonymize",

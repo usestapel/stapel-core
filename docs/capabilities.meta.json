@@ -129,6 +129,10 @@
     {
       "select": "functions",
       "path": "observability/errors.py"
+    },
+    {
+      "select": "functions",
+      "path": "django/monitoring/version.py"
     }
   ],
   "surface": {
@@ -356,6 +360,22 @@
     },
     "format_traceparent": {
       "intent": "Render the in-flight context as a traceparent value for an outbound call — the join that carries one trace across a service boundary. Empty when the ids are not W3C-shaped.",
+      "kind": "factory"
+    },
+    "get_version_urls": {
+      "intent": "The urlpattern for GET <prefix>api/version/. Already included by get_health_urls(), so a service that mounts health has it — call this directly only to mount it under a different prefix.",
+      "kind": "factory"
+    },
+    "version_view": {
+      "intent": "The endpoint an outside observer asks 'which build is this, and does it contain library X at version Y'. Reports commit, image tag, build time and the INSTALLED version of every stapel-* distribution. Public unless STAPEL_VERSION_ENDPOINT['PUBLIC'] is False, which closes it to staff.",
+      "kind": "gate_function"
+    },
+    "installed_libraries": {
+      "intent": "{distribution: version} for every installed stapel-* distribution, read from the running interpreter — what the process IMPORTED, not what requirements.txt says the image was built from.",
+      "kind": "factory"
+    },
+    "build_info": {
+      "intent": "The image identity a Python process cannot derive for itself — commit, image name/tag, build time — from the STAPEL_GIT_SHA / STAPEL_IMAGE_* / STAPEL_BUILD_TIME env the deployment stamps. Unset reports null, never a stale plausible value.",
       "kind": "factory"
     }
   },

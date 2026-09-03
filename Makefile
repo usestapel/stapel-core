@@ -34,7 +34,10 @@ migration-lint:
 # `pip install -e ../iron-common-python`, the name this package had before it
 # was published. Edit docs/readme.md; never README.md.
 #
-# --budget 6400 (0.36.0; was 4600 in 0.35.0): the observability facade adds 25
+# --budget 6800 (0.59.0; was 6400 in 0.36.0, 4600 in 0.35.0). 0.59.0 adds the
+# four monitoring/version.py entries — the "which build is this?" surface —
+# which cost ~230 tokens with their intent lines already written no longer than
+# their peers'. 0.36.0: the observability facade adds 25
 # called symbols across four surfaces (metrics, structured logging, the error
 # seam, trace correlation) plus two extension points. Raise the ceiling; do NOT
 # shorten intent lines to fit — a trimmed-to-fit context file reads exactly
@@ -42,11 +45,11 @@ migration-lint:
 # prevent. tests/test_contract.py carries the same number.
 contract:
 	$(PYTHON) -m stapel_tools.surface .
-	$(PYTHON) -m stapel_tools.llms_txt . --budget 6400
+	$(PYTHON) -m stapel_tools.llms_txt . --budget 6800
 	$(PYTHON) -m stapel_tools.readme .
 
 # Drift gate — the authoritative CI form is tests/test_contract.py.
 contract-check:
 	$(PYTHON) -m stapel_tools.surface . --check
-	$(PYTHON) -m stapel_tools.llms_txt . --check --budget 6400
+	$(PYTHON) -m stapel_tools.llms_txt . --check --budget 6800
 	$(PYTHON) -m stapel_tools.readme . --check
