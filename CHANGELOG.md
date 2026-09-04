@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.60.2] — 2026-09-05
+
+### `/api/version/` stopped hiding a dirty build behind a clean-looking sha
+
+A fleet's Makefile stamps `STAPEL_GIT_SHA` as `<sha>-dirty` when the image
+was built from an uncommitted tree. The view read that env raw: the suffix
+rode along inside `commit` and `commit_short` while `dirty` stayed `null` —
+a build that was NOT clean read, to a walker or a deploy gate, as one with
+no dirty information at all, which is indistinguishable from clean.
+
+`build_info()` now parses a trailing `-dirty` off `STAPEL_GIT_SHA`:
+`commit`/`commit_short` report only the sha, and `dirty` becomes `true`. A
+sha stamped without the suffix reports `dirty: false` (a positive "this was
+clean", not an absence). No `STAPEL_GIT_SHA` at all still reports
+`dirty: null` — unstamped stays unstamped. `STAPEL_BUILD_DIRTY`
+(1/true/yes/on), if a deployment sets it explicitly, overrides whatever was
+parsed from the sha in either direction.
+
 ## [0.60.0] — 2026-09-03
 
 ### comm Tasks: a retry ladder that waits, an idempotency key, and a reason

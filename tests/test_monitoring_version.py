@@ -90,6 +90,7 @@ def test_an_unstamped_image_reports_nulls_and_not_a_guess(monkeypatch):
     assert info == {
         "commit": None,
         "commit_short": None,
+        "dirty": None,
         "image": {"name": None, "tag": None},
         "built_at": None,
     }
@@ -107,6 +108,48 @@ def test_the_short_commit_is_derived_and_not_supplied(monkeypatch):
     info = version_mod.build_info()
     assert info["commit_short"] == "2bdb7898"
     assert info["commit"].startswith(info["commit_short"])
+
+
+# ---------------------------------------------------------------------------
+# build_info — a fleet Makefile's "-dirty" stamp, and the explicit override
+# ---------------------------------------------------------------------------
+
+
+def test_a_clean_sha_reports_dirty_false(monkeypatch):
+    """A stamped, non-suffixed sha is a positive "this was clean", not an
+    absence — it must not read as null."""
+    monkeypatch.setenv("STAPEL_GIT_SHA", "2bdb78983919da1ae4a5168e196d19a8c1c338e4")
+    info = version_mod.build_info()
+    assert info["dirty"] is False
+    assert info["commit"] == "2bdb78983919da1ae4a5168e196d19a8c1c338e4"
+    assert info["commit_short"] == "2bdb7898"
+
+
+def test_a_dirty_suffixed_sha_is_parsed_off(monkeypatch):
+    """The fleet Makefile stamps `<sha>-dirty` when the tree that was built
+    was dirty. That must become `dirty: true`, not ride along inside
+    `commit`/`commit_short` where a reader takes it for clean."""
+    monkeypatch.setenv(
+        "STAPEL_GIT_SHA", "2bdb78983919da1ae4a5168e196d19a8c1c338e4-dirty"
+    )
+    info = version_mod.build_info()
+    assert info["dirty"] is True
+    assert info["commit"] == "2bdb78983919da1ae4a5168e196d19a8c1c338e4"
+    assert info["commit_short"] == "2bdb7898"
+    assert not info["commit"].endswith("-dirty")
+
+
+def test_stapel_build_dirty_env_overrides_the_parsed_suffix(monkeypatch):
+    """An explicit override wins, in both directions."""
+    monkeypatch.setenv(
+        "STAPEL_GIT_SHA", "2bdb78983919da1ae4a5168e196d19a8c1c338e4-dirty"
+    )
+    monkeypatch.setenv("STAPEL_BUILD_DIRTY", "false")
+    assert version_mod.build_info()["dirty"] is False
+
+    monkeypatch.setenv("STAPEL_GIT_SHA", "2bdb78983919da1ae4a5168e196d19a8c1c338e4")
+    monkeypatch.setenv("STAPEL_BUILD_DIRTY", "true")
+    assert version_mod.build_info()["dirty"] is True
 
 
 # ---------------------------------------------------------------------------
