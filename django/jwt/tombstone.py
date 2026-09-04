@@ -63,10 +63,15 @@ knobs are how the halves of revocation drift apart.
 from __future__ import annotations
 
 import logging
+import threading
+from contextlib import contextmanager
 
 from stapel_core.core.drop import DropReport, drop_cache_key
 
 logger = logging.getLogger(__name__)
+
+#: uids whose in-flight delete is a shadow-row re-key (see `shadow_rekey`).
+_suppressed = threading.local()
 
 #: Distinct key space from `jwt_blacklist:` (per token) and `user_blacklisted:`
 #: (per user). Different questions, different keys.
@@ -194,10 +199,64 @@ def lift_tombstone(uid) -> DropReport:
     )
 
 
+@contextmanager
+def shadow_rekey(uid):
+    """A shadow row is being re-keyed — its delete is NOT a deletion.
+
+    Consumer mode repairs a shadow row whose local primary key no longer
+    matches the issuer id (a service database restored from before an id
+    change) by deleting the row and creating it again under the id the token
+    names. That delete is a local bookkeeping step: the account at the issuer
+    is alive, and it is the account that is about to be re-created in the very
+    next statement.
+
+    Without this, ``_on_user_deleted`` cannot tell that repair from a real
+    deletion, and writes a fleet-wide tombstone for a live person. The
+    tombstone then outranks everything — ``get_or_create_user_from_jwt``
+    consults it before any claim, in every service — so the repair locked the
+    user out of the whole fleet until the tombstone's TTL (a week, by
+    derivation from the refresh lifetime) ran out. Measured on a client
+    fleet's stand, 2026-09-04.
+
+    Deliberately keyed by uid and not a global flag: a cascade that reaches
+    OTHER users' rows during the same block must still tombstone them. And
+    deliberately thread-local — a second request deleting the same uid for
+    real, concurrently, is not covered by this one's suppression.
+
+    Reads as an operation, not a mode::
+
+        with shadow_rekey(old_pk):
+            User.objects.filter(pk=old_pk).delete()
+    """
+    key = str(uid)
+    active = getattr(_suppressed, "uids", None)
+    if active is None:
+        active = set()
+        _suppressed.uids = active
+    already = key in active
+    active.add(key)
+    try:
+        yield
+    finally:
+        if not already:
+            active.discard(key)
+
+
+def _is_shadow_rekey(uid) -> bool:
+    return str(uid) in getattr(_suppressed, "uids", ())
+
+
 def _on_user_deleted(sender, instance, **kwargs):
     """post_delete receiver — the deletion writes its own tombstone."""
     pk = getattr(instance, "pk", None)
     if pk is None:
+        return
+    if _is_shadow_rekey(pk):
+        logger.info(
+            "Deletion tombstone skipped for user %s: shadow-row re-key, not a "
+            "deletion at the issuer",
+            pk,
+        )
         return
     tombstone_user(pk)
 

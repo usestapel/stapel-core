@@ -5,6 +5,7 @@ Provides helper functions for loading user data from Django User model.
 """
 
 import logging
+from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 from django.db import IntegrityError, transaction
@@ -317,6 +318,19 @@ def _deactivated(uid) -> bool:
     return is_user_deactivated(uid)
 
 
+@contextmanager
+def shadow_rekey(uid):
+    """:func:`stapel_core.django.jwt.tombstone.shadow_rekey`, imported late.
+
+    Same reason as the two above: one name for a test to patch, and no
+    import-time dependency between these two modules.
+    """
+    from .tombstone import shadow_rekey as _shadow_rekey
+
+    with _shadow_rekey(uid):
+        yield
+
+
 def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     """
     Get or create the Django user a validated token speaks for.
@@ -537,46 +551,31 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
 
                 username = f"user_{uuid.uuid4().hex[:8]}"
 
-            # Try to find existing user by phone/email/username (in case PK changed after DB reset)
-            # Phone is most reliable for phone-based auth
-            existing_user = None
-            if phone:
-                existing_user = User.objects.filter(phone=phone).first()
-            if not existing_user and email:
-                existing_user = User.objects.filter(email=email).first()
-            if not existing_user and username:
-                existing_user = User.objects.filter(username=username).first()
-
-            if existing_user:
-                # Update existing user's PK to match JWT
-                # This handles DB reset scenarios where same user has different PK
-                logger.info(
-                    f"Found existing user by email/phone/username, updating PK from {existing_user.pk} to {pk}"
-                )
-                old_pk = existing_user.pk
-                if old_pk != pk:
-                    # Atomic delete+create to prevent race conditions
-                    with transaction.atomic():
-                        User.objects.filter(pk=old_pk).delete()
-                        user = User.objects.create_user(
-                            pk=pk,
-                            email=email,
-                            username=username,
-                            is_staff=user_data.get("is_staff", False),
-                            is_superuser=user_data.get("is_superuser", False),
-                            is_active=user_data.get("is_active", True),
-                        )
-                    _apply_jwt_fields(user, user_data, phone)
-                    if "staff_roles" in user_data and hasattr(user, "staff_roles"):
-                        user.staff_roles = [
-                            str(r) for r in (user_data.get("staff_roles") or [])
-                        ]
-                    user.set_unusable_password()
-                    user.save()
-                    logger.info(f"Re-created user with new PK: {pk}")
-                    return user
-                return existing_user
-
+            # ── Create FIRST, repair only on a collision (0.60.1) ───────
+            #
+            # The order used to be the other way round: look for a row under
+            # an alternate unique key (phone / email / username), and only
+            # create if none was found. That lookup exists for one narrow
+            # case — a service database restored from before the person's
+            # issuer id changed, where the same human has a different local
+            # primary key — and its repair is destructive: delete the row,
+            # create it again under the id the token names.
+            #
+            # First contact is the COMMON case, and two of them race
+            # constantly: the composer fires GET and POST analysis in one
+            # tick, the photo step two parallel uploads. Both read
+            # DoesNotExist, one creates the row, and the other then found
+            # that brand-new row by email and ran the repair on it. So the
+            # destructive path — written for a restored database — was being
+            # driven by ordinary concurrency, on a row that was correct.
+            #
+            # Creating first inverts that: the loser of the race collides on
+            # the primary key, re-reads it, and returns the winner's row. The
+            # repair is reached only by a collision that is NOT on the issuer
+            # id, which is exactly the restored-database case it was written
+            # for.
+            collision = None
+            user = None
             try:
                 with transaction.atomic():
                     user = User.objects.create_user(
@@ -587,12 +586,81 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
                         is_superuser=user_data.get("is_superuser", False),
                         is_active=user_data.get("is_active", True),
                     )
-            except IntegrityError:
-                # Race condition: another request created the same user
-                user = User.objects.filter(pk=pk).first()
-                if user:
-                    return user
-                raise
+            except IntegrityError as exc:
+                collision = exc
+
+            if collision is not None:
+                # Lost a race to create the same user: the winner's row is
+                # the answer, and nothing needs repairing.
+                raced = User.objects.filter(pk=pk).first()
+                if raced is not None:
+                    return raced
+
+                # The collision was on an alternate unique key, so a row for
+                # this person exists under a DIFFERENT local id.
+                existing_user = None
+                if phone:
+                    existing_user = User.objects.filter(phone=phone).first()
+                if not existing_user and email:
+                    existing_user = User.objects.filter(email=email).first()
+                if not existing_user and username:
+                    existing_user = User.objects.filter(username=username).first()
+                if existing_user is None:
+                    # Nothing to re-key and nothing to return — the constraint
+                    # that fired is not one this function can reason about.
+                    raise collision
+
+                # ── Compared as TEXT, and this is the other half of it ────
+                # `pk` arrives as a `str` off the JWT claim; `existing_user.pk`
+                # is whatever the model's field returns, which for a UUID
+                # primary key is a `uuid.UUID`. `UUID(x) != str(x)` is True in
+                # Python, so the SAME id compared unequal and the re-key ran on
+                # a row that needed no re-keying: it DELETED the user and
+                # created them again.
+                #
+                # That delete is not recoverable, because deletion is a fact
+                # the fleet publishes: `tombstone.py`'s `post_delete` receiver
+                # writes `user_deleted:<uid>` into the shared revocation
+                # namespace, and `get_or_create_user_from_jwt` consults it
+                # before any claim — in EVERY service, not only this one. So a
+                # brand-new seller was tombstoned fleet-wide by the very code
+                # that mirrors them in, and every service answered 401
+                # ("Authentication credentials were not provided") for the rest
+                # of the account's life while their cookie stayed perfectly
+                # valid. Measured on a client fleet's stand, 2026-09-04:
+                # 8 accounts burned in 24 h, every one logging "updating PK
+                # from X to X" with the two ids identical.
+                old_pk = existing_user.pk
+                if str(old_pk) == str(pk):
+                    return existing_user
+
+                logger.info(
+                    f"Found existing user by email/phone/username, "
+                    f"re-keying PK from {old_pk} to {pk}"
+                )
+                # Atomic delete+create. `shadow_rekey` keeps the delete from
+                # writing a fleet-wide deletion tombstone: this row is being
+                # re-keyed, and the account at the issuer is alive — it is the
+                # account being re-created in the next statement.
+                with transaction.atomic(), shadow_rekey(old_pk):
+                    User.objects.filter(pk=old_pk).delete()
+                    user = User.objects.create_user(
+                        pk=pk,
+                        email=email,
+                        username=username,
+                        is_staff=user_data.get("is_staff", False),
+                        is_superuser=user_data.get("is_superuser", False),
+                        is_active=user_data.get("is_active", True),
+                    )
+                _apply_jwt_fields(user, user_data, phone)
+                if "staff_roles" in user_data and hasattr(user, "staff_roles"):
+                    user.staff_roles = [
+                        str(r) for r in (user_data.get("staff_roles") or [])
+                    ]
+                user.set_unusable_password()
+                user.save()
+                logger.info(f"Re-created user with new PK: {pk}")
+                return user
 
             _apply_jwt_fields(user, user_data, phone)
             if "staff_roles" in user_data and hasattr(user, "staff_roles"):

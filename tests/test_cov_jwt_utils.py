@@ -509,16 +509,25 @@ class TestGetOrCreateUserFromJWT:
         return fake
 
     def test_existing_user_with_same_pk_returned_directly(self):
+        """A row already under this id is RETURNED — never deleted.
+
+        The assertion used to be "``create_user`` was not called", which
+        pinned an ORDER (look for a row to repair first, create second) that
+        0.60.1 deliberately inverted: creating first is what keeps two
+        concurrent first contacts off the destructive re-key path. What
+        matters is the outcome, and it is the same either way — the existing
+        row comes back, and nothing is deleted.
+        """
         fake = self._fake_model()
         fake.objects.get.side_effect = fake.DoesNotExist
         existing = MagicMock(pk="same-pk")
         fake.objects.filter.return_value.first.return_value = existing
+        fake.objects.create_user.side_effect = IntegrityError("duplicate pk")
         data = self._data(user_id="same-pk")
-        # Make old_pk == pk so no delete/recreate happens
         with patch.object(jwt_utils, "_get_user_model", return_value=fake):
             result = jwt_utils.get_or_create_user_from_jwt(data)
         assert result is existing
-        fake.objects.create_user.assert_not_called()
+        existing.delete.assert_not_called()
 
     def test_integrity_error_race_returns_concurrently_created_user(self):
         fake = self._fake_model()
