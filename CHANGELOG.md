@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.60.4] — 2026-09-05
+
+### An unknown API path stopped answering an HTML "Not Found" page
+
+A request to an unknown path under an API prefix (`/search/api/v1/facets`,
+say) reached no view at all, so Django's resolver rendered its own HTML
+`page_not_found` page — and the same happened for a 405 on a plain
+(non-DRF) view, since `View.http_method_not_allowed` returns an empty
+`text/html` `HttpResponseNotAllowed`. An API client or a probe hitting
+either then parses HTML instead of JSON. DRF views never had this problem —
+`stapel_exception_handler` already answers a 404/405 raised *inside* a DRF
+view with the fleet's envelope — the gap was everything that never reaches
+a view at all.
+
+`ApiErrorPagesMiddleware` (`stapel_core.django.api.error_pages`) closes it
+from the outside: it looks at the final response, and rewrites a 404/405
+into the same `StapelErrorResponse` envelope (`error.404.not_found` /
+`error.405.method_not_allowed`) whenever the path falls under a configured
+API prefix and the response is not already JSON — a DRF-rendered error is
+left untouched, and a non-API path keeps Django's normal HTML page. Which
+paths count as "API" is `STAPEL_CORE["API_PREFIXES"]` (default `["/api/"]`,
+matching how every fleet service already mounts its REST surface at
+`.../api/...`) — a substring check against the full request path, override
+it for an unusual mount.
+
+The middleware ships inside `stapel_core.django.settings.COMMON_MIDDLEWARE`,
+so every service on the shared settings preset gets it with no settings
+change. A project that assembled its own `MIDDLEWARE` list by hand and
+dropped it gets a new W-level system check instead of silence:
+`stapel_core.error_pages.W001` fires when the URLconf mounts anything under
+an API prefix but the middleware is not installed.
+
 ## [0.60.3] — 2026-09-05
 
 ### The first version that contains both 0.60.1 and 0.60.2

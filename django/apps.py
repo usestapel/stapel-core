@@ -206,6 +206,14 @@ class CommonDjangoConfig(AppConfig):
         # then render, save and publish with the widget silently missing —
         # nothing raises, nothing logs, and the page looks complete.
         from stapel_core.django import static_checks as _static_checks  # noqa: F401
+        # API error-page check (stapel_core.django.error_pages_checks):
+        # W-level when a project mounts API urls but never installed
+        # ApiErrorPagesMiddleware — the shape that leaves an unknown API path
+        # or wrong verb answering Django's HTML error page instead of the
+        # fleet's JSON envelope.
+        from stapel_core.django import (  # noqa: F401
+            error_pages_checks as _error_pages_checks,
+        )
         # Facade metrics onto the /api/metrics/ endpoint this service already
         # serves. Registering here is what makes a module's counter appear on
         # the scrape URL without every product wiring an exporter; nothing is

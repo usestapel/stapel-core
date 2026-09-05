@@ -284,6 +284,11 @@ COMMON_MIDDLEWARE = [
     # MiddlewareNotUsed, costing nothing per request. See stapel_core.django.
     # boot for why AppConfig.ready() is the wrong seam for this.
     "stapel_core.django.boot.BootGateMiddleware",
+    # Early so its process_response (Django runs these in reverse MIDDLEWARE
+    # order) executes LAST, after every other middleware below has finished
+    # shaping the response — it needs to see the true final status/content
+    # type, not a partway-built one. See stapel_core.django.api.error_pages.
+    "stapel_core.django.api.error_pages.ApiErrorPagesMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

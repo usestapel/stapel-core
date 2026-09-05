@@ -976,6 +976,23 @@ the fork-free override seam (i18n-shipping.md §3); it is pinned by
 check. A localized override lives in a catalog instead (see i18n below); either
 kind MUST preserve the canon `{placeholders}` — the gate enforces it.
 
+### JSON error pages for API prefixes — `STAPEL_CORE` (`django/api/error_pages.py`)
+
+`ApiErrorPagesMiddleware` answers an unknown path or wrong method under a
+configured API prefix with the same `StapelErrorResponse` envelope a DRF view
+returns, instead of Django's HTML `page_not_found`/`HttpResponseNotAllowed`
+pages — the gap `stapel_exception_handler` above cannot close, since it only
+runs for a 404/405 raised *inside* a DRF view, not an unmatched URL or a
+plain (non-DRF) view's method mismatch. It rewrites the final response only
+when the status is 404/405, the path matches `STAPEL_CORE["API_PREFIXES"]`
+(default `["/api/"]`, substring match against the full request path — every
+fleet service already mounts its REST surface at `.../api/...`), and the
+response is not already JSON — a DRF-rendered error and any non-API path are
+left untouched. Ships inside `COMMON_MIDDLEWARE`, so a service on the shared
+settings preset needs no change; a hand-assembled `MIDDLEWARE` list that
+mounts API urls but drops the middleware gets `stapel_core.error_pages.W001`
+(`django/error_pages_checks.py`) instead of silent HTML on its API surface.
+
 ### OpenAPI hooks (`django/openapi/`)
 
 `get_spectacular_settings(title, description, version, **extra)` merges
