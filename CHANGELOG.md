@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.60.3] — 2026-09-05
+
+### The first version that contains both 0.60.1 and 0.60.2
+
+0.60.1 and 0.60.2 were cut from two branches off 0.60.0 and neither was
+merged back. **0.60.2 therefore does not contain the 0.60.1 JWT
+first-contact fix** — it is 0.60.0 plus the version-view change, and
+upgrading to it from 0.60.1 silently re-arms the tombstone trap. Two fleets
+worked around this by pinning `==0.60.1`, which cost them the version fix.
+0.60.3 is the merge of both branches into main and the first release that
+carries both changes at once; the pins can go back to a range.
+
+Nothing new here beyond that merge. `shadow_rekey()`, the text comparison of
+ids, create-first on first contact and `manage.py lift_tombstones` come from
+0.60.1; the `-dirty` suffix parse in `build_info()` comes from 0.60.2. Both
+entries below are unchanged and still describe what they always described.
+
+### A release can no longer be cut from a side branch
+
+The defect above is not a bug in any module, it is a bug in how a tag was
+made, so the fix is a gate rather than a patch. `make release-check`, run
+also by the publish workflow before it builds anything, refuses a tagged
+commit that is not on `main` or that does not contain every existing `v*`
+tag — `git merge-base --is-ancestor <tag> HEAD` for each of them. A release
+branched off an older point now fails loudly at tag time, naming the tags it
+would drop, instead of publishing a version that quietly goes backwards.
+
+## [0.60.2] — 2026-09-05
+
+### `/api/version/` stopped hiding a dirty build behind a clean-looking sha
+
+A fleet's Makefile stamps `STAPEL_GIT_SHA` as `<sha>-dirty` when the image
+was built from an uncommitted tree. The view read that env raw: the suffix
+rode along inside `commit` and `commit_short` while `dirty` stayed `null` —
+a build that was NOT clean read, to a walker or a deploy gate, as one with
+no dirty information at all, which is indistinguishable from clean.
+
+`build_info()` now parses a trailing `-dirty` off `STAPEL_GIT_SHA`:
+`commit`/`commit_short` report only the sha, and `dirty` becomes `true`. A
+sha stamped without the suffix reports `dirty: false` (a positive "this was
+clean", not an absence). No `STAPEL_GIT_SHA` at all still reports
+`dirty: null` — unstamped stays unstamped. `STAPEL_BUILD_DIRTY`
+(1/true/yes/on), if a deployment sets it explicitly, overrides whatever was
+parsed from the sha in either direction.
+
 ## [0.60.1] — 2026-09-04
 
 ### A first contact must not tombstone the person it is mirroring

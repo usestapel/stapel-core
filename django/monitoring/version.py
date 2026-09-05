@@ -54,10 +54,15 @@ Usage — nothing to wire, ``get_health_urls()`` already mounts it::
 
 Env the image should stamp (the deployment's job, see the fleet's Dockerfile)::
 
-    STAPEL_GIT_SHA      the commit the image was built from
+    STAPEL_GIT_SHA      the commit the image was built from, optionally
+                        suffixed ``-dirty`` (a fleet Makefile's own stamp for
+                        "built from an uncommitted tree") — parsed off into
+                        ``dirty`` rather than left in ``commit``
     STAPEL_IMAGE_NAME   e.g. svc-classified-core
     STAPEL_IMAGE_TAG    e.g. sha-2bdb7898
     STAPEL_BUILD_TIME   ISO-8601, UTC
+    STAPEL_BUILD_DIRTY  explicit override for ``dirty`` (1/true/yes/on),
+                        wins over anything parsed from STAPEL_GIT_SHA
 """
 import os
 import platform
@@ -120,15 +125,34 @@ def build_info():
 
     ``None`` for anything unset. An unstamped image says so; it does not
     inherit a plausible value from anywhere.
+
+    A fleet's Makefile stamps ``STAPEL_GIT_SHA`` as ``<sha>-dirty`` when the
+    tree that was built was dirty. Read raw, that suffix rides along inside
+    ``commit`` and ``commit_short`` while ``dirty`` stays ``null`` — a
+    build that was NOT clean reads as one with no dirty information at all,
+    which a walker takes for clean. The suffix is parsed off here and turned
+    into the boolean it actually is; ``commit``/``commit_short`` report only
+    the sha. ``STAPEL_BUILD_DIRTY``, if the deployment sets it explicitly,
+    wins over anything parsed from the sha.
     """
     def env(name):
         value = os.environ.get(name, "").strip()
         return value or None
 
     sha = env("STAPEL_GIT_SHA")
+    dirty = False
+    if sha and sha.endswith("-dirty"):
+        dirty = True
+        sha = sha[: -len("-dirty")] or None
+
+    dirty_override = env("STAPEL_BUILD_DIRTY")
+    if dirty_override is not None:
+        dirty = dirty_override.lower() in ("1", "true", "yes", "on")
+
     return {
         "commit": sha,
         "commit_short": sha[:8] if sha else None,
+        "dirty": dirty if sha or dirty_override is not None else None,
         "image": {"name": env("STAPEL_IMAGE_NAME"), "tag": env("STAPEL_IMAGE_TAG")},
         "built_at": env("STAPEL_BUILD_TIME"),
     }
