@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.60.6] — 2026-09-06
+
+### `StapelValidationError.params` dropped by DRF's own field-error collapse
+
+Raised inside a serializer field validator, `.validate()`, or a nested
+serializer, `StapelValidationError`'s `params` never reached
+`stapel_exception_handler` — DRF's `Serializer.to_internal_value`/
+`run_validation` catch it and re-raise a plain `ValidationError` wrapping the
+collected errors, and every one of those re-raises runs the detail through
+`rest_framework.exceptions._get_error_details`, which rebuilds a bare
+`ErrorDetail` and discards anything but its text and `.code` (libraries were
+working around this by moving validation into views). `StapelValidationError`
+now packs `error_key`/`params` into a `_StapelErrorCode` object riding as that
+surviving `.code`, and `stapel_exception_handler` unpacks it back into the
+envelope at any nesting depth, so the params reach the client regardless of
+how many times DRF rewraps the exception.
+
 ## [0.60.5] — 2026-09-05
 
 ### `stapel_core.nav.E004` fired against every sibling library's CI harness

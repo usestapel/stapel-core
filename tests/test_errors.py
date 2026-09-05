@@ -472,6 +472,127 @@ class TestIronExceptionHandler:
 
 
 # ---------------------------------------------------------------------------
+# StapelValidationError params surviving DRF's own collapse
+#
+# DRF's Serializer.to_internal_value/run_validation catch a ValidationError
+# raised from a field validator, .validate(), or a nested serializer and
+# re-raise a *new* ValidationError wrapping the collected errors — every
+# re-raise runs the detail through rest_framework.exceptions
+# ._get_error_details, which discards anything but the leaf's text and
+# `.code`. Before the _StapelErrorCode carrier, `params` never survived that
+# trip and only the registered error_key string did (measured in
+# stapel-listings 0.22.3: draft_meta_too_large lost max_bytes). All four
+# paths below must land on the same params the caller raised with.
+# ---------------------------------------------------------------------------
+
+
+class TestStapelValidationErrorParamsSurviveCollapse:
+    CODE = "error.400.draft_meta_too_large"
+
+    def _doc_serializer(self, raise_in):
+        """raise_in: 'field_validator' | 'validators_list' | 'validate' — where
+        the StapelValidationError is raised inside the serializer."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class _Doc:
+            meta: str
+
+        params = {"max_bytes": 4096}
+
+        if raise_in == "field_validator":
+
+            class _S(StapelDataclassSerializer):
+                class Meta:
+                    dataclass = _Doc
+
+                def validate_meta(self, value):
+                    raise StapelValidationError(
+                        TestStapelValidationErrorParamsSurviveCollapse.CODE, params=params
+                    )
+
+            return _S
+
+        if raise_in == "validators_list":
+
+            def _validator(value):
+                raise StapelValidationError(
+                    TestStapelValidationErrorParamsSurviveCollapse.CODE, params=params
+                )
+
+            class _S(StapelDataclassSerializer):
+                class Meta:
+                    dataclass = _Doc
+                    extra_kwargs = {"meta": {"validators": [_validator]}}
+
+            return _S
+
+        class _S(StapelDataclassSerializer):
+            class Meta:
+                dataclass = _Doc
+
+            def validate(self, attrs):
+                raise StapelValidationError(
+                    TestStapelValidationErrorParamsSurviveCollapse.CODE, params=params
+                )
+
+        return _S
+
+    def test_field_validator_method(self):
+        serializer_cls = self._doc_serializer("field_validator")
+        serializer = serializer_cls(data={"meta": "x"})
+        with pytest.raises(DRFValidationError) as excinfo:
+            serializer.is_valid(raise_exception=True)
+
+        resp = stapel_exception_handler(excinfo.value, _ctx())
+        assert resp.data["localizable_error"] == self.CODE
+        assert resp.data["params"]["max_bytes"] == 4096
+        assert resp.data["params"]["field"] == "meta"
+
+    def test_field_validators_kwarg(self):
+        serializer_cls = self._doc_serializer("validators_list")
+        serializer = serializer_cls(data={"meta": "x"})
+        with pytest.raises(DRFValidationError) as excinfo:
+            serializer.is_valid(raise_exception=True)
+
+        resp = stapel_exception_handler(excinfo.value, _ctx())
+        assert resp.data["localizable_error"] == self.CODE
+        assert resp.data["params"]["max_bytes"] == 4096
+
+    def test_validate_method(self):
+        serializer_cls = self._doc_serializer("validate")
+        serializer = serializer_cls(data={"meta": "x"})
+        with pytest.raises(DRFValidationError) as excinfo:
+            serializer.is_valid(raise_exception=True)
+
+        resp = stapel_exception_handler(excinfo.value, _ctx())
+        assert resp.data["localizable_error"] == self.CODE
+        assert resp.data["params"]["max_bytes"] == 4096
+
+    def test_nested_serializer(self):
+        from rest_framework import serializers as drf_serializers
+
+        inner_cls = self._doc_serializer("field_validator")
+
+        class _Outer(drf_serializers.Serializer):
+            inner = inner_cls()
+
+        serializer = _Outer(data={"inner": {"meta": "x"}})
+        with pytest.raises(DRFValidationError) as excinfo:
+            serializer.is_valid(raise_exception=True)
+
+        resp = stapel_exception_handler(excinfo.value, _ctx())
+        assert resp.data["localizable_error"] == self.CODE
+        assert resp.data["params"]["max_bytes"] == 4096
+
+    def test_directly_from_a_view(self):
+        exc = StapelValidationError(self.CODE, params={"max_bytes": 4096})
+        resp = stapel_exception_handler(exc, _ctx())
+        assert resp.data["localizable_error"] == self.CODE
+        assert resp.data["params"]["max_bytes"] == 4096
+
+
+# ---------------------------------------------------------------------------
 # register_service_errors
 # ---------------------------------------------------------------------------
 

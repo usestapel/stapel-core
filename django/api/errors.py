@@ -12,6 +12,7 @@ Provides:
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from rest_framework.exceptions import ErrorDetail as DRFErrorDetail
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -525,6 +526,35 @@ def error_500_internal():
 # =============================================================================
 
 
+class _StapelErrorCode:
+    """Carries an error_key/params pair as an ErrorDetail's ``.code``.
+
+    DRF's ``Serializer.to_internal_value``/``run_validation`` catch a
+    ``ValidationError`` raised from a field validator, a ``validate_<field>``
+    method, or ``.validate()`` and re-raise a *new* ``ValidationError``
+    wrapping the collected errors (once per field, again for the whole
+    serializer, again in ``StapelDataclassSerializer.is_valid()``, and again
+    for every layer of a nested serializer). Every one of those re-raises
+    runs the detail through ``rest_framework.exceptions._get_error_details``,
+    which unconditionally rebuilds a **plain** ``ErrorDetail(text, code)`` —
+    so any params carried by an ``ErrorDetail`` *subclass*, or by any
+    attribute other than ``.code``, are dropped at the very next collapse.
+    ``.code`` is the one attribute ``_get_error_details`` forwards untouched
+    at every level (``code = getattr(data, 'code', default_code)`` always
+    prefers the existing code over the new default) — so a
+    ``StapelValidationError`` packs its error_key/params into one of these
+    and rides it as ``code`` instead of a plain string, surviving however
+    many times DRF rewraps the exception before it reaches
+    ``stapel_exception_handler``.
+    """
+
+    __slots__ = ("error_key", "params")
+
+    def __init__(self, error_key: str, params: Dict[str, Any]):
+        self.error_key = error_key
+        self.params = params
+
+
 class StapelValidationError(DRFValidationError):
     """
     Raise from serializer validators to produce StapelError responses.
@@ -532,12 +562,24 @@ class StapelValidationError(DRFValidationError):
     Usage:
         raise StapelValidationError(ERR_400_DISPLAY_NAME_EMOJI)
         raise StapelValidationError(ERR_400_RATE_LIMIT, params={'retry_after': 30})
+
+    Survives DRF's own collapse of a serializer field validator,
+    ``.validate()``, or a nested serializer's exception into a plain
+    ``ValidationError(detail=<str>)`` — see :class:`_StapelErrorCode`. Raised
+    directly from a view, ``stapel_exception_handler`` reads ``error_key``/
+    ``error_params`` straight off the exception (Tier 1) and never needs to
+    unpack ``.detail`` at all.
     """
 
     def __init__(self, error_key: str, params: Optional[Dict[str, Any]] = None):
         self.error_key = error_key
-        self.error_params = params or {}
-        super().__init__(detail=error_key)
+        self.error_params = dict(params or {})
+        # Bypass DRFValidationError.__init__: it runs `detail` through
+        # _get_error_details with a plain string code, discarding params on
+        # the spot. Set .detail directly so the carrier rides from the very
+        # first construction onward.
+        carrier = _StapelErrorCode(self.error_key, self.error_params)
+        self.detail = [DRFErrorDetail(str(error_key), carrier)]
 
 
 class StapelServiceError(Exception):
@@ -618,6 +660,36 @@ def _field_limit_params(serializer, field_name: str, code: Optional[str]) -> Dic
     return {attr: value}
 
 
+def _carrier_of(detail) -> Optional[_StapelErrorCode]:
+    """The :class:`_StapelErrorCode` riding as *detail*'s ``.code``, if any."""
+    code = getattr(detail, "code", None)
+    return code if isinstance(code, _StapelErrorCode) else None
+
+
+def _first_leaf(detail):
+    """Descend into a nested error-detail tree and return its first leaf.
+
+    A ``StapelValidationError`` raised inside a field validator, a
+    ``validate_<field>`` method, ``.validate()``, or a nested serializer
+    always ends up as a plain string/``ErrorDetail`` *somewhere* inside
+    ``detail`` — wrapped in a list (field/non-field collection), a dict
+    (per-field errors), or a dict-of-dicts (a nested serializer's own
+    ``non_field_errors``/field errors under the parent's field name). This
+    finds that leaf regardless of how many layers deep it landed, so its
+    carrier (see :func:`_carrier_of`) can be recovered.
+    """
+    if isinstance(detail, dict):
+        for key, value in detail.items():
+            if key == "non_field_errors":
+                continue
+            return _first_leaf(value)
+        non_field = detail.get("non_field_errors")
+        return _first_leaf(non_field) if non_field else None
+    if isinstance(detail, list):
+        return _first_leaf(detail[0]) if detail else None
+    return detail
+
+
 def _extract_first_field_error(detail, serializer=None):
     """
     Extract the first field error from DRF ValidationError detail.
@@ -630,11 +702,18 @@ def _extract_first_field_error(detail, serializer=None):
     - For non-field: error_key='error.400.validation_error', params={}
     - If the detail string itself is a registered error key (e.g. an
       StapelValidationError raised inside validate_<field>), it is preserved.
+    - If the leaf carries a :class:`_StapelErrorCode` (a StapelValidationError
+      that passed through DRF's own collapse — field validator, .validate(),
+      or a nested serializer), its original error_key/params are restored
+      verbatim rather than falling back to the DRF-code-based mapping.
     """
     from rest_framework.exceptions import ErrorDetail
 
     # Simple string or ErrorDetail
     if isinstance(detail, (str, ErrorDetail)):
+        carrier = _carrier_of(detail)
+        if carrier is not None:
+            return carrier.error_key, dict(carrier.params), str(detail)
         key = _registered_key(detail)
         if key:
             return key, {}, str(detail)
@@ -648,6 +727,9 @@ def _extract_first_field_error(detail, serializer=None):
     # List — non-field errors, take first
     if isinstance(detail, list) and detail:
         first = detail[0]
+        carrier = _carrier_of(first)
+        if carrier is not None:
+            return carrier.error_key, dict(carrier.params), str(first)
         key = _registered_key(first)
         if key:
             return key, {}, str(first)
@@ -663,10 +745,13 @@ def _extract_first_field_error(detail, serializer=None):
         for field_name, errors in detail.items():
             if field_name == "non_field_errors":
                 continue
-            if isinstance(errors, list) and errors:
-                first_err = errors[0]
-            else:
-                first_err = errors
+            first_err = _first_leaf(errors)
+            if first_err is None:
+                continue
+            carrier = _carrier_of(first_err)
+            if carrier is not None:
+                params = {"field": field_name, **carrier.params}
+                return carrier.error_key, params, str(first_err)
             key = _registered_key(first_err)
             if key:
                 return key, {"field": field_name}, str(first_err)
@@ -679,7 +764,10 @@ def _extract_first_field_error(detail, serializer=None):
         # Only non_field_errors
         non_field = detail.get("non_field_errors", [])
         if non_field:
-            first = non_field[0] if isinstance(non_field, list) else non_field
+            first = _first_leaf(non_field)
+            carrier = _carrier_of(first)
+            if carrier is not None:
+                return carrier.error_key, dict(carrier.params), str(first)
             key = _registered_key(first)
             if key:
                 return key, {}, str(first)
