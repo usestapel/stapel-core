@@ -4,7 +4,26 @@ on:
     tags: ["v*"]
 
 jobs:
+  # Releases are cut from main only. A tag on a side branch can publish a
+  # higher version that does not contain a lower one's fix — 0.60.2 did
+  # exactly that to 0.60.1 — and nothing downstream would go red. Runs
+  # before anything is built. See release-check.sh.
+  release-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the gate needs full history and every v* tag
+
+      - name: release-check (on main, and contains every published tag)
+        run: |
+          # Belt and braces: the gate is an error, not a skip, without a
+          # main ref to compare against, so make sure one is there.
+          git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+          make release-check
+
   test:
+    needs: release-gate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

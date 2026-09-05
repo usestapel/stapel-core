@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: migration-lint contract contract-check
+.PHONY: migration-lint contract contract-check release-check
 
 # Expand/contract gate for Django migrations (release-management.md §3;
 # stapel_tools.migration_lint). Requires stapel-tools importable (the
@@ -53,3 +53,11 @@ contract-check:
 	$(PYTHON) -m stapel_tools.surface . --check
 	$(PYTHON) -m stapel_tools.llms_txt . --check --budget 6800
 	$(PYTHON) -m stapel_tools.readme . --check
+
+# Release gate — a tag must be cut from main and must not go backwards.
+# 0.60.1 and 0.60.2 were tagged on two branches off 0.60.0, neither merged
+# back, so the higher version published without the lower one's fix. The
+# publish workflow runs this before it builds anything; run it locally
+# before tagging. See release-check.sh for the two rules.
+release-check:
+	sh ./release-check.sh

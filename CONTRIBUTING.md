@@ -54,6 +54,21 @@ The pre-push hook runs the same command; CI rejects anything it flags.
 Conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`); one logical
 change per commit; add a CHANGELOG entry under **Unreleased**.
 
+## Releases
+
+**Releases are cut from main only.** Bump the version, run `make contract`,
+merge to main, and tag the commit on main — never a side branch. 0.60.1 and
+0.60.2 were tagged on two branches off 0.60.0 and neither was merged back,
+so 0.60.2 published *without* the 0.60.1 fix and two fleets had to pin the
+lower version to keep it; every build was green throughout, because nothing
+compares one tag against another. `make release-check` (also the first job
+of the publish workflow) is that comparison: it fails if the commit being
+released is not contained in main, or if it does not contain every `v*` tag
+that already exists, naming the tags whose changes would be dropped. Run it
+before you tag. Push the tag explicitly — `git push origin vX.Y.Z` —
+because `--follow-tags` silently skips a lightweight tag and the release
+then never happens.
+
 ## Coverage policy (CI)
 
 Two Codecov statuses with different semantics (see `codecov.yml`):
