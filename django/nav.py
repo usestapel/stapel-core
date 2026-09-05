@@ -166,14 +166,28 @@ def sibling_prefixes() -> List[str]:
 
     This is the only honest signal the framework has that a deployment is
     split: it is the deployment's own declaration, not a guess from
-    ``URL_PREFIX`` (a monolith may legitimately be mounted under one).
+    ``URL_PREFIX`` (a monolith may legitimately be mounted under one) — which
+    is also why a mount that exists only because nothing in settings said
+    otherwise (``mounts._explicitly_declared_mount_keys``) is excluded here:
+    the framework's own default guess is not the deployment declaring
+    anything. That default fires identically for a real split deployment
+    that never overrode it and for a single-module library test harness that
+    never had an opinion on mount topology — see
+    ``stapel_core.django.mounts._explicitly_declared_mount_keys`` for why
+    that distinction is safe for every generated project.
     """
-    from stapel_core.django.mounts import get_mounts
+    from stapel_core.django.mounts import (
+        _explicitly_declared_mount_keys,
+        get_mounts,
+    )
 
     current = _current_prefix()
+    declared = _explicitly_declared_mount_keys()
     out = []
-    for mount in get_mounts().values():
+    for key, mount in get_mounts().items():
         if not mount.external:
+            continue
+        if key not in declared:
             continue
         prefix = mount.prefix.strip("/")
         if prefix and prefix != current:

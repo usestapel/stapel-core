@@ -92,6 +92,41 @@ class TestRegistry:
         settings.STAPEL_AUTH_SERVICE_PREFIX = "sso"
         assert get_mount("auth").prefix == "sso/"
 
+
+class TestExplicitlyDeclaredMountKeys:
+    """``_explicitly_declared_mount_keys`` — the signal ``stapel_core.nav``'s
+    E004 check uses to tell a deployment's own declaration apart from the
+    "auth" builtin's default guess (see ``mounts._builtin_mounts``)."""
+
+    def test_absent_prefix_declares_nothing(self, settings):
+        from stapel_core.django.mounts import _explicitly_declared_mount_keys
+
+        assert not hasattr(settings, "STAPEL_AUTH_SERVICE_PREFIX")
+        assert _explicitly_declared_mount_keys() == set()
+
+    def test_explicit_prefix_declares_auth(self, settings):
+        from stapel_core.django.mounts import _explicitly_declared_mount_keys
+
+        settings.STAPEL_AUTH_SERVICE_PREFIX = "auth"
+        assert "auth" in _explicitly_declared_mount_keys()
+
+    def test_explicit_empty_prefix_still_declares_auth(self, settings):
+        """A monolith explicitly opting out (``= ""``) still touched the
+        setting — the attribute is present, even though ``get_mounts()``
+        drops the mount entirely because the value is falsy."""
+        from stapel_core.django.mounts import _explicitly_declared_mount_keys
+
+        settings.STAPEL_AUTH_SERVICE_PREFIX = ""
+        assert "auth" in _explicitly_declared_mount_keys()
+
+    def test_mounts_overlay_keys_are_always_declared(self, settings):
+        from stapel_core.django.mounts import _explicitly_declared_mount_keys
+
+        settings.STAPEL_MOUNTS = {"billing": {"prefix": "billing/", "external": True}}
+        declared = _explicitly_declared_mount_keys()
+        assert "billing" in declared
+        assert "auth" not in declared
+
     def test_overlay_merges_over_builtins(self, settings):
         settings.STAPEL_MOUNTS = {
             "auth": {"prefix": "sso/", "external": True},

@@ -494,3 +494,50 @@ class TestSplitDeploymentServicesCheck:
         settings.STAPEL_AUTH_SERVICE_PREFIX = "auth"
         settings.STAPEL_SERVICES = "{not json"
         assert check_services_declared() == []
+
+    def test_library_test_harness_is_clean(self, settings):
+        """A single-module library test harness — the shape every sibling
+        library's CI uses (``stapel_core.testing.configure_django``, or a
+        hand-rolled cousin like a codegen'd ``_codegen_settings.py``) — never
+        assigns ``STAPEL_AUTH_SERVICE_PREFIX`` or ``STAPEL_MOUNTS`` at all; it
+        has no opinion on mount topology. The builtin "auth" mount still
+        appears in ``get_mounts()`` (the historical default), but that
+        default is the framework's own guess, not this settings module
+        declaring a sibling service — E004 must not fire from it.
+
+        This is the regression from core 0.55.0 onward: every sibling
+        library's CI (single-module test settings) failed E004 at
+        migrate/check time even though nothing in the harness ever declared
+        a split deployment.
+        """
+        from stapel_core.django.nav_checks import check_services_declared
+
+        assert not hasattr(settings, "STAPEL_AUTH_SERVICE_PREFIX")
+        settings.STAPEL_SERVICES = None
+        settings.URL_PREFIX = "analytics/"
+        assert check_services_declared() == []
+
+    def test_explicit_custom_external_mount_without_registry_is_an_error(
+        self, settings
+    ):
+        """A deployment that never touches ``STAPEL_AUTH_SERVICE_PREFIX`` but
+        explicitly declares its own external mount via ``STAPEL_MOUNTS`` has
+        made a real declaration — writing the entry *is* the declaration,
+        unlike the bare "auth" default. Forgetting ``STAPEL_SERVICES`` next
+        to it is still the AS-4 regression E004 exists to catch."""
+        from stapel_core.django.nav_checks import (
+            E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT,
+            check_services_declared,
+        )
+
+        assert not hasattr(settings, "STAPEL_AUTH_SERVICE_PREFIX")
+        settings.STAPEL_SERVICES = None
+        settings.URL_PREFIX = "billing/"
+        settings.STAPEL_MOUNTS = {
+            "payments": {"prefix": "payments/", "external": True}
+        }
+        errors = check_services_declared()
+        assert any(
+            e.id == E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT for e in errors
+        ), errors
+        assert "payments/" in errors[0].msg

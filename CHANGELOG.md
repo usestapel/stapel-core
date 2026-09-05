@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.60.5] — 2026-09-05
+
+### `stapel_core.nav.E004` fired against every sibling library's CI harness
+
+`0.55.0` added `stapel_core.nav.E004`: an external mount with no
+`STAPEL_SERVICES` registry reads as a split deployment that forgot to seed
+one. Since that release, `manage.py check`/`migrate` failed with E004 in
+**every** sibling library's single-module CI harness (e.g. stapel-analytics'
+`_codegen_settings.py`) — aborting the job before a single test ran. The
+last green sibling CI was stapel-analytics v0.3.2.
+
+The cause was in the mount registry, not the check: `mounts._builtin_mounts`
+registers an external `"auth"` mount whenever `STAPEL_AUTH_SERVICE_PREFIX`
+is entirely absent from settings, defaulting to `"auth"` — the "historical
+microservices layout" convenience. A library test harness
+(`stapel_core.testing.configure_django` and hand-rolled cousins) never
+mentions that setting at all, so it got the same default a genuinely split
+deployment gets, and `stapel_core.nav.sibling_prefixes()` could not tell
+the two apart: both simply have an external `auth/` mount and no
+`STAPEL_SERVICES`.
+
+`stapel_core.django.mounts._explicitly_declared_mount_keys()` is the fix:
+it reports which mount keys the deployment's *own* settings actually
+touched — `"auth"` only when `STAPEL_AUTH_SERVICE_PREFIX` is present in
+settings at all (any value, including `""`; every `stapel-create-project`/
+`stapel-new-service` generated settings module assigns it explicitly, so
+this changes nothing for a real deployment), and every key an explicit
+`STAPEL_MOUNTS` overlay mentions (writing one *is* the declaration).
+`sibling_prefixes()` now only counts an external mount as evidence of a
+sibling when its key is in that set — the framework's own default guess no
+longer counts as the deployment declaring anything. `mounts.get_mounts()`
+itself, and every URL the "auth" default derives (`admin_login_url()` and
+friends), are unchanged: the default mount still exists exactly where it
+always did, this only narrows what E004 treats as a claim.
+
+A genuine fleet member that explicitly points at a dedicated auth service
+(or declares any other external mount via `STAPEL_MOUNTS`) and forgets
+`STAPEL_SERVICES` still gets E004 — that declaration is real, not a guess.
+
 ## [0.60.4] — 2026-09-05
 
 ### An unknown API path stopped answering an HTML "Not Found" page
