@@ -1,5 +1,73 @@
 # Changelog
 
+## [0.60.1] — 2026-09-04
+
+### A first contact must not tombstone the person it is mirroring
+
+Consumer mode (`JWT_CREATE_USERS_FROM_TOKEN=True`) materialises a local row
+for a user it has never seen. Two first contacts race constantly — one page
+fires `GET` and `POST` of the same resource in a tick, an upload step fires
+two parallel POSTs — and both read `User.DoesNotExist`. One created the row.
+The other then found that brand-new row by an alternate unique key and ran
+the **shadow-row re-key** path on it: a path written for a service database
+restored from before the person's issuer id changed, whose repair is to
+DELETE the row and create it again.
+
+Two things went wrong there at once, and the second is what made it
+unrecoverable.
+
+`pk` arrives as a `str` off the JWT claim; `existing_user.pk` is a
+`uuid.UUID` for a UUID primary key. `UUID(x) != str(x)` is True in Python, so
+the same id compared unequal and the repair ran on a row that needed no
+repairing. The production logs say it plainly: `updating PK from X to X`,
+with the two ids identical, 8 times in 24 h on one stand.
+
+And the delete published a **fleet-wide deletion tombstone** — `tombstone.py`
+does that from a `post_delete` receiver, on purpose, so that a deletion
+cannot happen without one. `get_or_create_user_from_jwt` consults tombstones
+before any claim, in every service. So a brand-new seller was locked out of
+the entire fleet by the very code that mirrors them in, for the tombstone's
+TTL (a week, derived from the refresh lifetime), while their session cookie
+stayed perfectly valid and the auth service — issuer mode, which never reads
+a tombstone — kept answering `GET /me/` with 200. Every other service
+answered `401 {"detail":"Authentication credentials were not provided."}`,
+which is DRF's phrasing for "nobody authenticated", not for "your token is
+bad" — so from outside it read as a client that had dropped its credentials.
+
+Three changes, because one of them alone would have left the trap armed:
+
+- **Compared as text.** `str(old_pk) != str(pk)` — the same id is the same
+  id whatever type it arrives as.
+
+- **`shadow_rekey(uid)`** (`django/jwt/tombstone.py`) — a context manager the
+  re-key holds around its delete, so the receiver can tell a row being moved
+  onto a new id from an account being deleted. Keyed by uid and thread-local:
+  a cascade that reaches ANOTHER user's row inside the block still tombstones
+  that user, and a concurrent real deletion of the same uid is not covered by
+  this one's suppression.
+
+- **Create first, repair only on a collision.** The lookup that led to the
+  destructive path now runs only when `create_user` actually collides, and
+  only after re-reading the issuer id. The loser of a first-contact race gets
+  an `IntegrityError` on the primary key, re-reads it, and returns the
+  winner's row — it can no longer reach the repair at all. The repair is left
+  for the case it was written for: a collision on an alternate key, i.e. the
+  same person under a different local id.
+
+### `manage.py lift_tombstones --issuer-check`
+
+Cleans up after the versions that had the defect. Runs **at the issuer** (the
+service whose database is the account store) because only the issuer can
+answer "is this account actually alive?", and lifts the tombstones of uids it
+still holds as active. The revocation namespace is fleet-wide, so one lift
+there heals every peer, and consumers re-mirror the row on the uid's next
+request — no cross-service call is made or needed.
+
+Reports by default and changes nothing without `--apply`; `--issuer-check` is
+required, because a lift without an issuer verdict is a way for a still-valid
+token to undo a deletion. `--uid` (repeatable) names them explicitly when the
+cache backend cannot enumerate keys.
+
 ## [0.60.0] — 2026-09-03
 
 ### comm Tasks: a retry ladder that waits, an idempotency key, and a reason
