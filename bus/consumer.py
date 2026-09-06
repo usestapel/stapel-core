@@ -25,6 +25,11 @@ class BaseBusConsumerCommand(BaseCommand):
     topics: list[str] = []
     consumer_group: str = ""
 
+    #: handle() calls serve_metrics(), so EXPORTER_PORT means something here.
+    #: Read by check stapel_core.observability.W005, which warns when the
+    #: setting is on a command that opens no listener.
+    stapel_serves_metrics = True
+
     def add_arguments(self, parser):
         parser.add_argument("--poll-timeout", type=float, default=0.1)
         parser.add_argument(

@@ -56,6 +56,10 @@ def fit_reply(data: bytes, max_payload: int, name: str) -> bytes:
 class Command(BaseCommand):
     help = "Serve this service's registered comm Functions over NATS request-reply."
 
+    #: See BaseBusConsumerCommand — read by check
+    #: stapel_core.observability.W005.
+    stapel_serves_metrics = True
+
     def handle(self, *args, **options):
         from stapel_core.comm.config import comm_setting
         from stapel_core.comm.registry import function_registry

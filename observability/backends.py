@@ -263,8 +263,28 @@ class PrometheusMetricsBackend(MetricsBackend):
         :func:`stapel_core.observability.exporter.register_prometheus_exporter`,
         so facade metrics appear on the scrape URL a Stapel service already
         serves — no second endpoint, no host wiring.
+
+        Under ``PROMETHEUS_MULTIPROC_DIR`` the answer comes from a
+        ``MultiProcessCollector`` over that directory instead. This process's
+        own registry holds only what *this* process recorded, and the whole
+        point of multiprocess mode is that the counters live in the forked
+        children (a Celery prefork worker, a gunicorn worker) while the
+        scrape reaches the parent. A fresh registry per call is the documented
+        pattern — the collector reads the directory as it is now, and caching
+        it would pin a view of the children that existed at boot.
         """
-        if self._client is None or self._registry is None:
+        if self._client is None:
+            return ""
+        from .exporter import multiprocess_dir
+
+        path = multiprocess_dir()
+        if path:
+            exposition = self._expose_multiprocess(path)
+            if exposition is not None:
+                return exposition
+            # Fall through: a broken multiproc directory must not cost the
+            # deployment the numbers this process can still answer for.
+        if self._registry is None:
             return ""
         try:
             return self._client.generate_latest(self._registry).decode("utf-8")
@@ -274,6 +294,35 @@ class PrometheusMetricsBackend(MetricsBackend):
                 exc_info=True,
             )
             return ""
+
+    def _expose_multiprocess(self, path: str) -> str | None:
+        """Exposition collected across every process writing to *path*.
+
+        None when it could not be produced (the directory does not exist, is
+        not readable, holds a corrupt file) — reported once, then the caller
+        falls back to this process's own registry.
+        """
+        try:
+            from prometheus_client import CollectorRegistry, multiprocess
+
+            registry = CollectorRegistry()
+            multiprocess.MultiProcessCollector(registry, path=path)
+            return self._client.generate_latest(registry).decode("utf-8")
+        except Exception as exc:
+            key = ("multiprocess", path)
+            if key not in self._warned:
+                self._warned.add(key)
+                logger.warning(
+                    "stapel_core.observability: PROMETHEUS_MULTIPROC_DIR=%s "
+                    "could not be collected (%s), so this scrape reports only "
+                    "what this process recorded — a forked worker's counters "
+                    "are missing from it. The directory must exist, be "
+                    "writable, and hold nothing but this deployment's .db "
+                    "files.",
+                    path,
+                    exc,
+                )
+            return None
 
 
 class StatsdMetricsBackend(MetricsBackend):

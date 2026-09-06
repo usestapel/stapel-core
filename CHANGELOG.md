@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.60.7] — 2026-09-06
+
+### A Celery worker with `EXPORTER_PORT` set never opened a port
+
+`serve_metrics()` — the listener a process with no HTTP surface needs before
+anything can scrape it — was called from exactly two places in the framework:
+`BaseBusConsumerCommand.handle()` and `manage.py serve_functions`. A plain
+`celery -A config worker` runs through neither. So a fleet service that
+dispatches its comm Tasks onto Celery (`STAPEL_COMM["TASK_EXECUTOR"] =
+"celery"`) set `EXPORTER_PORT=9102` on that container, added the scrape job,
+and got nothing: `comm_task_failed_total`, `bus_dlq_total` for a given-up
+Task and a product's own ladder counters (stapel-moderation's
+`screen_failed` / `case_dlq`) all incremented in a process that had never
+bound a socket. Nothing was red. A counter nothing can scrape and a counter
+that never fires draw the same flat line, which is exactly the outage the
+metric was added to report.
+
+**A fleet service does nothing.** The fix is not a third call site — it is the
+same call hung off Celery's own startup signals in
+`stapel_core.observability.celery`, installed from the `stapel_core.django`
+app's `ready()`. `celery -A config worker` imports Django through Celery's
+own fixup (`django.setup()` runs on the `import_modules` signal, which
+`WorkController.__init__` sends *before* `on_before_init` sends
+`celeryd_init`), so `ready()` has always run by the time the handler is
+needed. `celery beat` gets the same listener through `beat_init`. Setting
+`EXPORTER_PORT` on the worker container is the whole of the wiring; a project
+that does not install `stapel_core.django` can put one documented line in
+`config/celery.py` instead:
+
+```python
+from stapel_core.observability.celery import install
+install(force=True)
+```
+
+`manage.py dispatch_outbox` — a loop, no HTTP, and it parks give-ups in the
+DLQ — was the same hole and now opens the listener too (not under `--once`: a
+cron pass that binds and exits leaves a target that is up for a second a
+minute, which is worse than no target).
+
+### Prefork: the port can be up and still report nothing
+
+The listener runs in the **main** worker process. Under the default
+`--pool=prefork` with concurrency above one, every task body runs in a forked
+child and `prometheus_client` keeps per-process values, so the parent's
+registry — the one being served — never sees those increments. The scrape
+succeeds and the numbers are still missing. Two supported answers, and the
+worker says so at startup when it has neither:
+
+* `--pool=solo` or `--pool=threads` — task bodies run in the process that
+  serves the port. The right answer for a low-throughput fleet worker.
+* `PROMETHEUS_MULTIPROC_DIR=/an/empty/writable/dir` — `prometheus_client`
+  switches to mmap-backed values that survive the fork, and
+  `PrometheusMetricsBackend.expose()` now collects through a
+  `MultiProcessCollector` over that directory whenever the variable is set.
+  It has to be in the process *environment*: `prometheus_client` decides
+  which value class to use at import time. This applies to `/api/metrics/`
+  too, so a gunicorn deployment in multiprocess mode gets the same
+  correction. A directory that cannot be collected is reported once and falls
+  back to this process's own registry rather than answering with nothing.
+
+### `EXPORTER_PORT` on a process that opens no listener is now said out loud
+
+New W-level check `stapel_core.observability.W005`: the port is configured
+and this `manage.py <command>` opens no listener. Which commands do is
+**declared**, not guessed from a naming convention — `stapel_serves_metrics
+= True` on the Command class, set by `BaseBusConsumerCommand`,
+`serve_functions` and `dispatch_outbox`, and available to a product's own
+long-running command. Django's own commands are exempt wholesale: they are
+short-lived (`migrate`, `check`, `collectstatic`) or already serve
+`/api/metrics/` (`runserver`), and a warning in front of every boot gate is a
+warning people learn to scroll past. Gated on adoption like the other four.
+
 ## [0.60.6] — 2026-09-06
 
 ### `StapelValidationError.params` dropped by DRF's own field-error collapse

@@ -224,6 +224,20 @@ class CommonDjangoConfig(AppConfig):
 
         register_prometheus_exporter()
 
+        # The same thing for a process with no /api/metrics/ to register
+        # onto: a Celery worker records comm-Task and product counters in a
+        # task body and serves no HTTP, so until 0.60.7 setting EXPORTER_PORT
+        # on that container opened nothing at all. Connecting the startup
+        # signal here — Celery's Django fixup runs django.setup() before
+        # celeryd_init fires — is what makes `celery -A config worker` serve
+        # the port with no per-service line anywhere. No-op (and no celery
+        # import) in a process that is not running under Celery.
+        from stapel_core.observability.celery import (
+            install as install_celery_exporter,
+        )
+
+        install_celery_exporter()
+
         # Verification factors declared by the host in
         # STAPEL_VERIFICATION["EXTRA_FACTORS"] (#145). MODULE.md documents the
         # setting as THE way a host substitutes or adds a factor, but until

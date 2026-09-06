@@ -459,9 +459,14 @@ and a half days while every container reported healthy.
 
 A process that parks events usually serves no HTTP, so it has no
 `/api/metrics/` for a scrape to reach. Set
-`STAPEL_OBSERVABILITY["EXPORTER_PORT"]` and the consumer command and
-`serve_functions` open a listener serving the same exposition text; without it
-the counter increments where nothing can read it. `BaseBusConsumerCommand`
+`STAPEL_OBSERVABILITY["EXPORTER_PORT"]` and every long-lived worker the
+framework starts — the consumer commands, `serve_functions`,
+`dispatch_outbox`, `celery worker` and `celery beat` — opens a listener
+serving the same exposition text; without it the counter increments where
+nothing can read it. The table under
+[Scraping a process that serves no HTTP](#scraping-a-process-that-serves-no-http)
+says which process is wired where, and why `--pool=prefork` still needs
+`PROMETHEUS_MULTIPROC_DIR`. `BaseBusConsumerCommand`
 also declares the series at zero for its topics at startup, so an alert on
 `rate(bus_dlq_total[15m])` has a subject before the first failure rather than
 after it.
@@ -1296,6 +1301,7 @@ Public surface (all re-exported from `stapel_core.observability`):
 | `METRIC_NAMESPACE` | `"stapel_"` | replace | Prefix on every metric name (matches `STAPEL_METRICS_PREFIX` on `/api/metrics/`) |
 | `HISTOGRAM_BUCKETS` | HTTP-latency ladder (s) | replace | Default histogram buckets; per-call `buckets=` wins |
 | `STATSD_HOST` / `STATSD_PORT` | `"127.0.0.1"` / `8125` | replace | `StatsdMetricsBackend` target |
+| `EXPORTER_PORT` / `EXPORTER_ADDR` | `None` / `"0.0.0.0"` | replace | Metrics listener for a process with no HTTP (consumers, `serve_functions`, `dispatch_outbox`, `celery worker`/`beat`). `None` = off; `0` = any free port |
 | `REQUEST_ID_HEADER` / `TRACE_ID_HEADER` / `CORRELATION_ID_HEADER` | `X-Request-ID` / `X-Trace-Id` / `X-Correlation-Id` | replace | Headers `TraceContextMiddleware` reads and echoes |
 | `TRUST_INCOMING_TRACE` | `True` | replace | Accept a caller-presented trace (what makes one trace span services). Incoming ids are always sanitized; turn off at an internet-facing edge that wants ids it minted |
 | `ECHO_TRACE_HEADERS` | `True` | replace | Stamp the ids on the response |
@@ -1324,7 +1330,48 @@ gated on adoption** — a service with no `STAPEL_OBSERVABILITY` block is told
 nothing, the `netintel.W003` rule): `W001` backend could not be built,
 `W002` backend is unavailable, `W003` reporter could not be built / is the
 no-op default while `SENTRY_DSN` is set, `W004` `TraceContextMiddleware` is in
-no `MIDDLEWARE` so no request starts a trace.
+no `MIDDLEWARE` so no request starts a trace, `W005` `EXPORTER_PORT` is set on
+a `manage.py` command that opens no listener.
+
+#### Scraping a process that serves no HTTP
+
+A web process publishes facade metrics on `/api/metrics/` and needs nothing.
+Every other long-lived process — the ones that record the numbers worth
+alarming on — has to open a port of its own, and that is the single setting
+`STAPEL_OBSERVABILITY["EXPORTER_PORT"]` (off by default; a worker listening on
+a port nobody asked for is a surprise, and in some deployments a finding).
+
+`serve_metrics()` is called for you from every one of them:
+
+| Process | Wired in |
+|---|---|
+| `manage.py consume_*` (any `BaseBusConsumerCommand`) | `bus/consumer.py` |
+| `manage.py serve_functions` | the command's `handle()` |
+| `manage.py dispatch_outbox` (loop mode, not `--once`) | the command's `handle()` |
+| `celery -A config worker`, `celery -A config beat` | `observability/celery.py`, installed by `stapel_core.django`'s `ready()` |
+
+The Celery half needs **no per-service code**: Celery's Django fixup runs
+`django.setup()` from the `import_modules` signal, which is sent before
+`celeryd_init`, so the app's `ready()` has connected the handler by the time
+the worker starts. A project that does not install the `stapel_core.django`
+app puts one line in `config/celery.py` instead — `from
+stapel_core.observability.celery import install; install(force=True)`.
+
+**Prefork is the trap.** The listener lives in the main worker process; under
+`--pool=prefork` with concurrency above one, task bodies run in forked
+children whose counters the parent's registry never sees, so the scrape
+succeeds and reports nothing. Either run the worker `--pool=solo` /
+`--pool=threads`, or set `PROMETHEUS_MULTIPROC_DIR` to an existing empty
+writable directory in the container's **environment** (`prometheus_client`
+picks its value class at import time) — `PrometheusMetricsBackend.expose()`
+then collects through a `MultiProcessCollector`, on `/api/metrics/` as well as
+on the worker port. A worker that is prefork, concurrent and has neither logs
+a warning naming both ways out at startup.
+
+A long-running command of your own joins this list by calling
+`stapel_core.observability.exporter.serve_metrics()` from `handle()` and
+setting `stapel_serves_metrics = True` on the Command class — the declaration
+`W005` reads.
 
 #### Correlation — what no off-the-shelf APM can do here
 
@@ -1366,7 +1413,9 @@ STAPEL_OBSERVABILITY = {
 Facade metrics need no wiring at all: `stapel_core.observability.exporter`
 registers the backend's exposition into the `/api/metrics/` endpoint core
 already serves, so a module's counter shows up on the scrape URL the
-deployment already scrapes — no second endpoint, no second port.
+deployment already scrapes — no second endpoint, no second port. A process
+with no HTTP surface gets the same exposition on `EXPORTER_PORT`; see
+[Scraping a process that serves no HTTP](#scraping-a-process-that-serves-no-http).
 
 ### Event store — `STAPEL_EVENTSTORE` (`eventstore/`)
 

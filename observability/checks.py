@@ -18,6 +18,9 @@ W004 Observability is configured, but ``TraceContextMiddleware`` is in no
      MIDDLEWARE — ``trace_id`` is then empty on every request-scoped log line
      and every event the request emits, which is the one field the whole
      correlation story rests on.
+W005 ``EXPORTER_PORT`` is set on a management command that opens no listener,
+     so everything this process records is scrapable from nowhere — which
+     reads on a dashboard exactly like a counter that never fires.
 
 **All four are gated on evidence of intent** — a ``STAPEL_OBSERVABILITY``
 block in the settings module (or a flat setting from the namespace). A
@@ -31,6 +34,7 @@ W001_METRICS_BACKEND_BROKEN = "stapel_core.observability.W001"
 W002_METRICS_UNAVAILABLE = "stapel_core.observability.W002"
 W003_ERROR_REPORTER = "stapel_core.observability.W003"
 W004_NO_TRACE_MIDDLEWARE = "stapel_core.observability.W004"
+W005_EXPORTER_NEVER_SERVED = "stapel_core.observability.W005"
 
 _MIDDLEWARE_PATH = (
     "stapel_core.observability.middleware.TraceContextMiddleware"
@@ -203,4 +207,105 @@ def check_trace_middleware(app_configs=None, **kwargs):
         "and on every comm envelope those requests emit.",
         hint=f"Add '{_MIDDLEWARE_PATH}' to MIDDLEWARE, as early as possible.",
         id=W004_NO_TRACE_MIDDLEWARE,
+    )]
+
+
+# ─── W005: a port set on a process that opens no port ────────────────────
+#
+# The whole failure this warns about, once: a deployment sets EXPORTER_PORT
+# on a worker container, adds the scrape job, and the process never binds —
+# so the counters that container exists to produce increment where nothing
+# can read them, and the dashboard shows the same flat zero it would show if
+# the system were healthy. 0.60.7 closed that for Celery; a command with a
+# loop in it and no listener is the remaining shape.
+#
+# Which commands DO serve is declared, not guessed: a Command class sets
+# ``stapel_serves_metrics = True``. A naming convention (``consume_*``) would
+# have been a rule the framework cannot enforce and a product cannot join.
+#
+# Django's own commands are exempt wholesale. They are short-lived (migrate,
+# check, collectstatic, loaddata) or serve HTTP with /api/metrics/ already on
+# it (runserver) — and firing on `manage.py check` would put this warning in
+# front of every boot gate in the fleet, which is how a real finding becomes
+# something people scroll past.
+
+_MANAGEMENT_ENTRYPOINTS = frozenset(
+    {"manage.py", "django-admin", "django-admin.py"}
+)
+
+
+def _running_management_command() -> str | None:
+    """The management command this process is running, if that is what it is.
+
+    None for gunicorn, uvicorn, ``celery``, pytest and anything else that is
+    not ``manage.py <name>`` — for those the answer is either "it serves HTTP"
+    or "the Celery hook has it", and neither is this check's business.
+    """
+    import os
+    import sys
+
+    argv = list(getattr(sys, "argv", ()) or ())
+    if len(argv) < 2:
+        return None
+    if os.path.basename(argv[0] or "") not in _MANAGEMENT_ENTRYPOINTS:
+        return None
+    name = argv[1]
+    if not name or name.startswith("-"):
+        return None
+    return name
+
+
+def _command_serves_metrics(name: str) -> bool:
+    """Whether *name* is a command that opens the exporter listener.
+
+    True (i.e. "say nothing") whenever the answer cannot be established: an
+    unknown command name, an app that will not import. A check that guesses
+    wrong in the noisy direction is a check people turn off.
+    """
+    from django.core.management import get_commands, load_command_class
+
+    try:
+        app_name = get_commands().get(name)
+    except Exception:
+        return True
+    if app_name is None or str(app_name).startswith("django."):
+        return True
+    try:
+        command = load_command_class(app_name, name)
+    except Exception:
+        return True
+    return bool(getattr(command, "stapel_serves_metrics", False))
+
+
+@checks.register("stapel_observability")
+def check_exporter_port_is_served(app_configs=None, **kwargs):
+    from .conf import observability_settings
+
+    if not _adopted():
+        return []
+    try:
+        port = observability_settings.EXPORTER_PORT
+    except Exception:  # pragma: no cover - unreadable settings are W001's job
+        return []
+    if port is None:
+        return []
+
+    name = _running_management_command()
+    if name is None or _command_serves_metrics(name):
+        return []
+
+    return [checks.Warning(
+        f"STAPEL_OBSERVABILITY['EXPORTER_PORT'] is {port}, but `manage.py "
+        f"{name}` opens no metrics listener — every counter this process "
+        "records is scrapable from nowhere, which on a dashboard is "
+        "indistinguishable from a counter that never fires.",
+        hint="The port is served by the bus-consumer commands, "
+             "`serve_functions`, `dispatch_outbox`, and by `celery worker` / "
+             "`celery beat` (stapel_core.observability.celery, installed by "
+             "the stapel_core.django app). Either drop EXPORTER_PORT from "
+             "this container, or — for a long-running command of your own — "
+             "call stapel_core.observability.exporter.serve_metrics() from "
+             "its handle() and set `stapel_serves_metrics = True` on the "
+             "Command class so this check knows.",
+        id=W005_EXPORTER_NEVER_SERVED,
     )]

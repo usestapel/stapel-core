@@ -14,12 +14,41 @@ wiring of its own.
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 _registered = False
 
-__all__ = ["register_prometheus_exporter", "facade_exposition", "serve_metrics"]
+__all__ = [
+    "register_prometheus_exporter",
+    "facade_exposition",
+    "serve_metrics",
+    "multiprocess_dir",
+]
+
+# prometheus_client renamed this in 0.4; both spellings are still read by the
+# library itself, so both are read here or the two halves would disagree
+# about whether this process is in multiprocess mode.
+_MULTIPROC_ENV = ("PROMETHEUS_MULTIPROC_DIR", "prometheus_multiproc_dir")
+
+
+def multiprocess_dir() -> str | None:
+    """The ``PROMETHEUS_MULTIPROC_DIR`` this process runs under, if any.
+
+    Set, ``prometheus_client`` backs every value with an mmap'd file instead
+    of process memory, so a counter incremented in a forked child (a Celery
+    prefork worker, a gunicorn worker) is readable from the parent that
+    serves the scrape. Read from the environment and not from settings on
+    purpose: ``prometheus_client`` decides which value class to use when
+    ``prometheus_client.values`` is first imported, so a value written from
+    Python is already too late to mean anything.
+    """
+    for name in _MULTIPROC_ENV:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
 
 
 def facade_exposition() -> str:
@@ -68,6 +97,14 @@ def serve_metrics(port: int | None = None, addr: str | None = None) -> bool:
     Off unless ``STAPEL_OBSERVABILITY["EXPORTER_PORT"]`` is set — a worker
     that starts listening on a port nobody asked for is a surprise, and in
     some deployments a security finding.
+
+    Called for you from every long-lived worker the framework starts: the bus
+    consumer, ``serve_functions``, ``dispatch_outbox``, and — through
+    :mod:`stapel_core.observability.celery`, installed by the
+    ``stapel_core.django`` app — ``celery worker`` and ``celery beat``. A
+    process that opens the port under a **prefork** pool serves the parent's
+    registry only; see that module for the two ways to make a forked child's
+    counters visible.
 
     Never raises. A worker must not fail to start because its metrics port is
     taken; it logs and carries on doing the job it exists for.
