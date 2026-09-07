@@ -3,8 +3,10 @@
 This is the generalization of the flow-i18n contour (``flows/i18n.py``) to
 arbitrary content *domains* (i18n-shipping.md §1). A domain ``D`` (``"flows"``,
 ``"errors"``, …) ships per-app catalogs ``<app>/translations/D.<lang>.json`` —
-flat ``{key: text}`` — discovered over INSTALLED_APPS and merged **later-wins**
-(the host app, last in INSTALLED_APPS, overrides module texts without a fork).
+flat ``{key: text}`` — discovered over the packages of registered error
+owners, INSTALLED_APPS and ``EXTRA_CATALOG_DIRS`` (:func:`catalog_search_dirs`)
+and merged **later-wins** (the host app, last in INSTALLED_APPS, overrides
+module texts without a fork).
 The same merge-over-builtins semantics as every other stapel registry.
 
 Byte-stable file format everywhere (sorted keys, 2-space indent,
@@ -91,15 +93,74 @@ def _extra_catalog_dirs() -> list[Path]:
         return []
 
 
+def _package_dir(name: str) -> Path | None:
+    """The directory of the regular package *name*; ``None`` for anything else.
+
+    A bare module has no directory to hold ``translations/``; a namespace
+    package has several portions and no single one to answer for a key. Both
+    are skipped, as is a name that does not import at all.
+    """
+    from importlib.util import find_spec
+
+    try:
+        spec = find_spec(name)
+    except Exception:  # a broken owner must not break catalog loading
+        logger.debug("error owner %r is not importable — skipped", name, exc_info=True)
+        return None
+    if spec is None or not spec.origin or not spec.submodule_search_locations:
+        return None
+    locations = list(spec.submodule_search_locations)
+    return Path(locations[0]) if len(locations) == 1 else None
+
+
+def error_owner_roots() -> dict[str, Path | None]:
+    """``{owner package: package dir}`` for every registered error owner.
+
+    A library installed only as a client (its ``.client`` imported, its app
+    never in INSTALLED_APPS) still registers its codes by import side effect,
+    and its wheel still carries the ``translations/`` those codes are
+    translated in. The registry's owners are therefore the places a catalog
+    can live that INSTALLED_APPS does not know about. ``None`` marks an owner
+    with no package directory (a bare module, a namespace package, an
+    unimportable name): nothing to walk, listed so a debug reading can see it
+    was skipped rather than lost.
+    """
+    try:
+        from stapel_core.django.api.errors import error_owners
+
+        owners = sorted(set(error_owners().values()))
+    except Exception:  # no registry in this process
+        return {}
+    return {owner: _package_dir(owner) for owner in owners}
+
+
+def _error_owner_dirs() -> list[Path]:
+    return [d for d in error_owner_roots().values() if d is not None]
+
+
 def catalog_search_dirs() -> list[Path]:
-    """Every root the loader looks under: app packages + ``EXTRA_CATALOG_DIRS``.
+    """Every root the loader looks under, lowest precedence first.
+
+    1. the package directory of every registered error owner
+       (:func:`error_owner_roots`) — a library that is installed but not in
+       INSTALLED_APPS ships its catalogs here and nowhere else;
+    2. every installed app's package directory, in INSTALLED_APPS order;
+    3. ``STAPEL_I18N["EXTRA_CATALOG_DIRS"]``.
+
+    A directory reached by more than one route keeps its LATEST position, so
+    an owner that is also an installed app, or an extra root, has exactly the
+    precedence it had before owners were discovered: the merge is later-wins
+    and the host still overrides every library.
 
     The single source of truth for "where a catalog can live" — both
     :func:`load_app_catalogs` (read side) and :func:`resolve_catalog_dir`
     (write side) go through it, so the two can never disagree about where a
     catalog is visible from.
     """
-    return _installed_app_dirs() + _extra_catalog_dirs()
+    ordered = _error_owner_dirs() + _installed_app_dirs() + _extra_catalog_dirs()
+    keyed = [(d.resolve(), d) for d in ordered]
+    last = {key: index for index, (key, _) in enumerate(keyed)}
+    return [d for index, (key, d) in enumerate(keyed) if last[key] == index]
 
 
 def load_app_catalogs(
@@ -109,7 +170,8 @@ def load_app_catalogs(
 ) -> dict[str, str]:
     """Merge ``translations/<domain>.<language>.json`` catalogs, later-wins.
 
-    *dirs* defaults to every installed app's package directory plus
+    *dirs* defaults to :func:`catalog_search_dirs`: registered error owners'
+    packages, every installed app's package directory, then
     ``STAPEL_I18N["EXTRA_CATALOG_DIRS"]``. On key collision the later dir wins
     (INSTALLED_APPS order — the host app, last, overrides module texts). Empty
     / non-string values are dropped so a stub entry never shadows a real one.
@@ -125,26 +187,37 @@ def load_app_catalogs(
 
 
 def _owner_app_dirs() -> list[tuple[str, Path]]:
-    """``(owning package, app package dir)`` for every installed app.
+    """``(owning package, package dir)`` for every installed app and error owner.
 
     The owner is the app's *top-level* package — the unit a key's owner is
     named by in the error registry (``stapel_core``, ``stapel_profiles``), and
     the unit that gets released. An app deeper in a distribution
     (``stapel_core.django``) still belongs to its distribution's package.
+
+    A registered error owner that is not an installed app (a library used as
+    a client) contributes its package directory too, so ownership resolves
+    over exactly the roots :func:`catalog_search_dirs` walks: the pairing gate
+    and the loader agree on what such a library ships.
     """
     from django.apps import apps
 
-    return [(ac.name.split(".")[0], Path(ac.path)) for ac in apps.get_app_configs()]
+    pairs = [(ac.name.split(".")[0], Path(ac.path)) for ac in apps.get_app_configs()]
+    seen = {path.resolve() for _, path in pairs}
+    for owner, root in error_owner_roots().items():
+        if root is not None and root.resolve() not in seen:
+            pairs.append((owner, root))
+    return pairs
 
 
 def owner_of_dir(path: Path | str) -> str | None:
     """Which package owns the catalogs in *path* (a ``translations`` dir).
 
-    Resolved against INSTALLED_APPS: a ``translations`` directory belongs to
-    the app package that contains it. ``None`` when *path* is not an installed
-    app's catalog directory (a tmp_path unit test, an ``EXTRA_CATALOG_DIRS``
-    root) — callers treat that as "ownership unknown" and fall back to the
-    unscoped behaviour rather than guessing.
+    Resolved against INSTALLED_APPS and the registered error owners: a
+    ``translations`` directory belongs to the package that contains it.
+    ``None`` when *path* is neither an installed app's nor an owner's catalog
+    directory (a tmp_path unit test, an ``EXTRA_CATALOG_DIRS`` root) — callers
+    treat that as "ownership unknown" and fall back to the unscoped behaviour
+    rather than guessing.
     """
     target = Path(path).resolve()
     if target.name == CATALOG_DIRNAME:
@@ -160,7 +233,7 @@ def owner_of_dir(path: Path | str) -> str | None:
 
 
 def owner_languages(owner: str, domain: str) -> set[str]:
-    """The languages *owner* ships *domain* catalogs in, over INSTALLED_APPS.
+    """The languages *owner* ships *domain* catalogs in, over its package dirs.
 
     "Does the owner translate at all, and into what" — the fact the pairing
     gate needs before it can demand a code from the owner's catalog: a package
@@ -286,10 +359,17 @@ def _app_package_dir(app: str) -> Path:
     raise CatalogDirError(f"{app!r} is not an installed app — known labels: {known}")
 
 
-def _where_the_loader_looks(roots: list[Path]) -> str:
+def _where_the_loader_looks(roots: list[Path], skipped: Iterable[str] = ()) -> str:
     shown = [str(r / CATALOG_DIRNAME) for r in roots[:6]]
     more = "" if len(roots) <= 6 else f" (+{len(roots) - 6} more)"
-    return "\n".join(f"  - {s}" for s in shown) + more
+    text = "\n".join(f"  - {s}" for s in shown) + more
+    skipped = sorted(skipped)
+    if skipped:
+        text += (
+            "\n  (error owners with no package directory, skipped: "
+            + ", ".join(skipped) + ")"
+        )
+    return text
 
 
 def resolve_catalog_dir(
@@ -317,8 +397,10 @@ def resolve_catalog_dir(
       or the nearest app package above it). Outside any app package there is no
       defensible default, so it raises rather than inventing one.
     """
+    skipped: list[str] = []
     if roots is None:
         search = catalog_search_dirs()
+        skipped = [o for o, d in error_owner_roots().items() if d is None]
     else:
         search = [Path(r) for r in roots]
     resolved_roots = [Path(r).resolve() for r in search]
@@ -339,7 +421,7 @@ def resolve_catalog_dir(
             f"cannot default the catalog directory: {here} is not an installed "
             f"app package, and a catalog outside one is never loaded. Pass "
             f"--app <label> (or --out <app package>/{CATALOG_DIRNAME}). The "
-            f"loader reads:\n{_where_the_loader_looks(resolved_roots)}"
+            f"loader reads:\n{_where_the_loader_looks(resolved_roots, skipped)}"
         )
 
     target = Path(out)
@@ -351,7 +433,7 @@ def resolve_catalog_dir(
     raise CatalogDirError(
         f"{target} is not a catalog directory the loader reads — a catalog "
         f"written there would never be found. Pass --app <label>, or point "
-        f"--out at one of:\n{_where_the_loader_looks(resolved_roots)}"
+        f"--out at one of:\n{_where_the_loader_looks(resolved_roots, skipped)}"
     )
 
 
@@ -624,6 +706,7 @@ __all__ = [
     "catalog_search_dirs",
     "content_hash",
     "dump_catalog",
+    "error_owner_roots",
     "is_curated",
     "is_reviewed",
     "is_seeded",

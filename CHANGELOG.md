@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.60.8] — 2026-09-07
+
+### Catalogs of a library installed only as a client are now discovered
+
+`load_app_catalogs` / `catalog_search_dirs()` walked INSTALLED_APPS package
+directories plus `STAPEL_I18N["EXTRA_CATALOG_DIRS"]`. A library a host uses
+only through its `.client` — installed, never listed as an app — still puts its
+error codes into the canon: the client import reaches the module that calls
+`register_service_errors`, so the codes and their `owner` are in the registry
+and in every `docs/errors.json` the host emits. The `translations/` the same
+wheel ships were invisible, and the host's coverage gate reported every one of
+those keys untranslated while the installed wheel carried them in every
+language. The only cure was a per-host `EXTRA_CATALOG_DIRS` line naming the
+package — a patch for one host, for a class every host shares.
+
+`catalog_search_dirs()` now also includes the package directory of every
+registered error owner (`error_owners()` → `importlib.util.find_spec`), lowest
+in precedence: owner roots first, then INSTALLED_APPS in order, then the extra
+dirs, a root reached twice keeping its latest position. Later-wins is
+untouched — the host still overrides every library and an owner that is also
+an installed app keeps its INSTALLED_APPS slot. An owner with no package
+directory (a bare module, a namespace package, an unimportable name) is
+skipped and named in the listing `resolve_catalog_dir()` prints;
+`error_owner_roots()` exposes the map. `owner_of_dir()` / `owner_languages()`
+/ `owner_catalog()` resolve over the same roots, so `generate_error_keys`'
+pairing gate no longer calls such a library `unshipped` while the loader
+serves its texts. No new setting; `EXTRA_CATALOG_DIRS` keeps its meaning and a
+line that names an owner's package is now redundant.
+
 ## [0.60.7] — 2026-09-06
 
 ### A Celery worker with `EXPORTER_PORT` set never opened a port

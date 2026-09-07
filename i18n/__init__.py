@@ -6,8 +6,8 @@ on-demand language) with framework libraries, lets a host add languages or
 override texts **without a fork**, and gates the result:
 
 * **catalogs** — per-app ``translations/<domain>.<lang>.json`` (flat
-  ``{key: text}``), discovered over INSTALLED_APPS, merged later-wins
-  (:func:`load_app_catalogs`);
+  ``{key: text}``), discovered over registered error owners, INSTALLED_APPS
+  and extra dirs, merged later-wins (:func:`load_app_catalogs`);
 * **provenance** — a ``.state.json`` sidecar records per key where a value came
   from: ``llm`` / ``seed:<label>`` / ``imported`` / ``human``
   (:class:`StateSidecar`). Only ``human`` counts as reviewed
@@ -40,6 +40,7 @@ from .catalogs import (
     catalog_search_dirs,
     content_hash,
     dump_catalog,
+    error_owner_roots,
     is_curated,
     is_reviewed,
     is_seeded,
@@ -94,6 +95,7 @@ __all__ = [
     "check_translation_catalogs",
     "content_hash",
     "dump_catalog",
+    "error_owner_roots",
     "export_codes",
     "i18n_settings",
     "is_curated",

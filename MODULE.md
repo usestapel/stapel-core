@@ -722,6 +722,23 @@ as every other registry). `flows.i18n` is the `"flows"` domain over this
 texts live in `translations/errors.<lang>.json`, gen-errors reads them per
 locale.
 
+Catalogs are discovered from three kinds of root, lowest precedence first
+(`catalog_search_dirs()`): the package directory of every **registered error
+owner** (`error_owners()`, resolved with `importlib.util.find_spec`), every
+installed app's package directory in INSTALLED_APPS order, then
+`STAPEL_I18N["EXTRA_CATALOG_DIRS"]`. The first kind is what makes a library
+installed only as a client work: its `.client` import registers its codes by
+side effect, so they are in the canon, and the `translations/` its wheel ships
+are now read from the same place — without the host naming the package in
+`EXTRA_CATALOG_DIRS`. A root reached twice keeps its latest position, so
+INSTALLED_APPS and extra-dir precedence is exactly what it was and the host
+still overrides every library. An owner with no package directory (a bare
+module, a namespace package, an unimportable name) is skipped and named in the
+listing `resolve_catalog_dir()` prints when it refuses a directory
+(`error_owner_roots()` exposes the same map). `owner_of_dir()` /
+`owner_languages()` / `owner_catalog()` resolve ownership over the same roots,
+so the pairing gate and the loader agree on what a client-only library ships.
+
 Localized texts are a **static, reviewed-as-code artifact**, generated
 write-time:
 
@@ -788,9 +805,10 @@ So keys carry an **owner** and the canon is scoped by it:
   passes `owner="stapel_core"` explicitly where import order would otherwise
   decide. `error_owners()` / `error_owner(code)` read it back.
 - The **loader does not change**: `load_app_catalogs` stays a flat later-wins
-  merge over INSTALLED_APPS, so precedence is still position — core's catalog,
-  then a module's declared override, then the host app last. Ownership is
-  enforced at write and gate time, never inside the merge.
+  merge over `catalog_search_dirs()`, so precedence is still position — a
+  client-only owner's catalog, core's catalog, then a module's declared
+  override, then the host app last. Ownership is enforced at write and gate
+  time, never inside the merge.
 - `check_translation_catalogs` requires only the **owned** keys and raises
   **E `foreign`** for a catalog entry belonging to another package that
   already ships that language — with the gap-filling carve-out: covering a key
