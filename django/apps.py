@@ -214,6 +214,16 @@ class CommonDjangoConfig(AppConfig):
         from stapel_core.django import (  # noqa: F401
             error_pages_checks as _error_pages_checks,
         )
+        # Error-envelope check (stapel_core.django.exception_handler_checks):
+        # the other half of the same symptom — W-level when the deployment's
+        # EFFECTIVE REST_FRAMEWORK['EXCEPTION_HANDLER'] is not core's and does
+        # not reach it, so every refusal no view code raises (401/403/404/405/
+        # 429) answers DRF's bare detail instead of the fleet envelope;
+        # E-level when the configured path cannot be resolved to a callable at
+        # all, which turns each of those refusals into a 500.
+        from stapel_core.django import (  # noqa: F401
+            exception_handler_checks as _exception_handler_checks,
+        )
         # Facade metrics onto the /api/metrics/ endpoint this service already
         # serves. Registering here is what makes a module's counter appear on
         # the scrape URL without every product wiring an exporter; nothing is

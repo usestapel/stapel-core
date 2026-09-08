@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.61.1] — 2026-09-08
+
+### A host that never wired the exception handler is no longer silent
+
+0.61.0 routed twelve DRF refusal types through the fleet envelope, and every
+one of them reaches it through a single seam: `REST_FRAMEWORK
+["EXCEPTION_HANDLER"]`. Core sets that key in `django/settings.py` and in
+`testing.py` — and nothing verified that a deployment's **effective** setting
+still carried it. A project that writes its own `REST_FRAMEWORK` dict (the
+ordinary thing to do the moment it wants one different renderer) drops the
+key, DRF falls back to its own `exception_handler`, and every refusal of every
+installed module answers outside the envelope. Nothing raises, nothing logs,
+and each library's tests stay green: the only symptom is a frontend error path
+that finds no `localizable_error` on a 401. Found for real while adopting
+0.61.0 — stapel-cdn's own test settings had exactly this hole, so its suite
+could assert an envelope only where a view had hand-built one.
+
+New system check, tag `stapel_error_envelope`
+(`django/exception_handler_checks.py`, registered from the `stapel_core.django`
+app):
+
+| id | level | meaning |
+|---|---|---|
+| `stapel_core.error_envelope.E001` | Error | `EXCEPTION_HANDLER` does not resolve to a callable. DRF imports that path lazily, so it is not a boot failure — it is an exception raised *inside* exception handling, answering 500 in place of the refusal that was meant |
+| `stapel_core.error_envelope.W001` | Warning | the effective handler is neither core's nor anything that reaches it — refusals answer DRF's bare `{"detail": …}` |
+
+W-level matches `stapel_core.error_pages.W001`, which reports the other half of
+the same symptom (an API path answering Django's HTML error page): the
+deployment serves, and what degrades is the *shape* of refusal bodies. An
+Error would block deploys of hosts that answer correctly on every path a view
+wrote by hand, and a whole tag in `SILENCED_SYSTEM_CHECKS` protects nobody.
+The check reads `rest_framework.settings.api_settings` — the effective value
+DRF will actually call — never `settings.REST_FRAMEWORK` and never core's own
+preset: an absent key resolves there to DRF's default, which is the
+degradation being reported.
+
+**A wrapper that delegates passes, and a name is never the evidence.** A host
+may wrap the handler — add a header, log the refusal, convert one of its own
+exception types first — and that must not be reported. The configured callable
+is imported and inspected in four widening steps: identity with
+`stapel_exception_handler`; unwrapping (`functools.wraps`, `functools.partial`,
+a bound method, a callable object's `__call__`); reference by identity through
+`inspect.getclosurevars` — the globals and closure cells the code actually
+reads, module values looked through by `co_names`, functions found this way
+followed one level further; and, for an import deferred into the function body
+(where identity is not available without running it), evidence in the code
+object — the exact dotted path in `co_consts` (`import_string`), or the
+handler's `__name__` in `co_names` **together with** a reference to the module
+that defines it. Both halves are required; the symbol name alone is never
+enough. What this cannot see is a wrapper that *computes* its delegate from a
+registry or a setting, and those declare themselves in one greppable
+attribute — `handler.stapel_delegates_to_exception_handler = True` — the same
+bargain `stapel_anonymous_access` strikes in `stapel_core.adoption`.
+
+The other way this closure fails silently is a view that *intercepts* a
+refusal the handler owns, and that one cannot be caught from inside the
+process — it is closed by `stapel-lint`'s **R012** (stapel-tools 0.65.0),
+which reports a `handle_exception` override branching on a
+`rest_framework.exceptions` type. Converting a module's own exception type
+there stays legitimate and is not reported.
+
 ## [0.61.0] — 2026-09-08
 
 ### Auth, permission and routing failures now answer the fleet envelope

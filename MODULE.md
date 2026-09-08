@@ -1035,6 +1035,59 @@ settings preset needs no change; a hand-assembled `MIDDLEWARE` list that
 mounts API urls but drops the middleware gets `stapel_core.error_pages.W001`
 (`django/error_pages_checks.py`) instead of silent HTML on its API surface.
 
+### The envelope's own wiring is checked — `stapel_error_envelope` (`django/exception_handler_checks.py`)
+
+Every one of the twelve refusals above reaches the envelope through one seam,
+`REST_FRAMEWORK["EXCEPTION_HANDLER"]`, and until 0.62.0 nothing verified that
+a deployment's **effective** setting still carried it. A project that writes
+its own `REST_FRAMEWORK` dict — the ordinary thing to do the moment it wants
+one different renderer — drops the key, DRF falls back to its own
+`exception_handler`, and every refusal of every installed module answers
+outside the envelope. Nothing raises and nothing logs; the symptom is a
+frontend error path that cannot translate a 401. Found for real while adopting
+0.61.0: a library's own test settings had exactly this hole, so its suite could
+assert an envelope only where a view had hand-built one.
+
+| id | level | meaning |
+|---|---|---|
+| `stapel_core.error_envelope.E001` | Error | `EXCEPTION_HANDLER` does not resolve to a callable — DRF imports it lazily, so this is not a boot failure but a 500 raised inside exception handling on the first refused request |
+| `stapel_core.error_envelope.W001` | Warning | the effective handler is neither core's nor anything that reaches it — refusals answer DRF's bare `{"detail": …}` instead of the fleet envelope |
+
+W-level matches `stapel_core.error_pages.W001`, which reports the other half of
+the same symptom: the deployment serves, and what degrades is the *shape* of
+refusal bodies. It reads `rest_framework.settings.api_settings`, never
+`settings.REST_FRAMEWORK` and never core's own preset — an absent key resolves
+there to DRF's default, which is the degradation being reported.
+
+**A wrapper that delegates is not a finding, and a name is never the
+evidence.** A host may wrap the handler (add a header, log the refusal,
+convert one of its own exception types first) and such a wrapper must pass.
+The configured callable is imported and inspected, in four widening steps:
+identity with `stapel_exception_handler`; unwrapping (`functools.wraps`,
+`functools.partial`, a bound method, a callable object's `__call__`);
+reference by identity, via `inspect.getclosurevars` — the globals and closure
+cells the code actually reads, module values looked through by `co_names`, and
+functions found this way followed one level further; and, for an import
+deferred into the function body where identity is not available without
+running it, evidence in the code object — the exact dotted path in `co_consts`
+(`import_string`), or the handler's `__name__` in `co_names` **together with**
+a reference to the module that defines it. Both halves are required; the
+symbol name alone is never enough.
+
+What that cannot see is a wrapper that *computes* its delegate from a
+registry or a setting. Those declare themselves in one greppable attribute —
+`my_handler.stapel_delegates_to_exception_handler = True` — the same bargain
+`stapel_anonymous_access` strikes in `stapel_core.adoption`: a claim its author
+makes, not a fact the check verifies.
+
+The complementary rule, for the other way this closure fails silently, lives
+outside the process: `stapel-lint`'s **R012** reports a view that overrides
+`handle_exception` and branches on a `rest_framework.exceptions` type, i.e.
+intercepts a refusal this handler owns (stapel-cdn 0.20.0 was exactly that —
+its describe view converted `Throttled` itself and answered a wait one second
+off the `Retry-After` on the same response). Converting a module's **own**
+exception type there stays legitimate and is not reported.
+
 ### OpenAPI hooks (`django/openapi/`)
 
 `get_spectacular_settings(title, description, version, **extra)` merges
