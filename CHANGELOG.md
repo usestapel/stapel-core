@@ -1,5 +1,93 @@
 # Changelog
 
+## [0.61.0] — 2026-09-08
+
+### Auth, permission and routing failures now answer the fleet envelope
+
+`stapel_exception_handler` ran its own tiers and then handed everything else
+to DRF's `exception_handler`. But the exceptions that matter most to a client
+are exactly the ones **no view code raises**: authenticators raise
+`NotAuthenticated`/`AuthenticationFailed`, permission classes raise
+`PermissionDenied`, `get_object_or_404` raises `Http404`, dispatch raises
+`MethodNotAllowed`/`NotAcceptable`/`UnsupportedMediaType`, throttles raise
+`Throttled`. None of them ever passed through `StapelErrorResponse`, so all of
+them answered DRF's bare `{"detail": "..."}` — no `localizable_error`, nothing
+a frontend's single error path can translate. Every endpoint of every host on
+this handler returned two different error shapes depending on which layer
+refused the request; a host measured the bare shape on four unrelated
+endpoints and wrote its own wrapper handler to compensate. The library already
+registered the keys and even shipped `error_401_unauthorized()` /
+`error_403_forbidden()` — the handler simply never reached for them.
+
+A new **Tier 4** closes it. DRF's own handler still decides status, headers and
+rollback; only the body it produced is re-dressed:
+
+```json
+{"localizable_error": "error.401.unauthorized", "error": "Authentication required",
+ "params": {"detail": "Authentication credentials were not provided."},
+ "error_language": "en"}
+```
+
+**What is preserved, deliberately.** The response object DRF built is kept and
+only its `.data` is replaced, so the status DRF decided and *every header DRF
+set* survive by construction — including `WWW-Authenticate`, without which a
+401 stops telling a client how to authenticate (a security-relevant
+regression; pinned by a test), and `Retry-After` on a 429. The 401-vs-403
+verdict is DRF's too: `APIView.handle_exception` downgrades a
+`NotAuthenticated` to 403 on the exception *instance* when no authenticator
+offers a challenge, so the key is chosen from the response's status, never
+from the exception class. Authenticated-but-forbidden stays 403; unauthenticated
+with a challenge stays 401. The original DRF body rides on as
+`params["detail"]` — the same place the ValidationError tiers already put it —
+so nothing the old shape carried is lost.
+
+**`NotFound`, `MethodNotAllowed` and `Throttled` are in, not left bare.**
+Stated because it was a choice: consistency won. Leaving three of nine bare
+would recreate the same two-shapes-per-service split this fixes, one status
+lower. Two facts settled it. `ApiErrorPagesMiddleware` (0.60.4) already answers
+an *unmatched* 404 and a plain view's 405 with this envelope, and both its
+docstring and MODULE.md claimed the in-view ones were already handled — they
+were not, so a service answered the same 404 in two shapes depending on
+whether a URL pattern matched. And `Throttled` carries `wait`, which now
+reaches the client as `params.retry_after` (truncated exactly as DRF truncates
+the `Retry-After` header, so the two halves of one response cannot disagree)
+instead of only as a header a browser fetch wrapper rarely surfaces.
+
+**Key resolution.** An `APIException` subclass whose `default_code` names a
+registered key gets that key — which is how `api.permissions.MandateUnavailable`
+(503, `default_code = "error.503.mandate_unavailable"`) finally reaches the
+text registered alongside it, and how a host's own subclass opts in without
+touching the table. Otherwise the status decides, via
+`_DRF_STATUS_ERROR_KEYS` — 400, 401, 402, 403, 404, 405, 406, 408, 409, 410,
+413, 415, 422, 423, 429, 500, every value a key `COMMON_ERRORS` already
+registers, so no code can appear in a response that `build_error_registry`
+cannot name. A status with neither (a host's own 503, a 418) keeps DRF's shape
+rather than being handed an invented code; `StapelServiceError` remains the
+way to raise an enveloped error on an arbitrary status. An exception DRF does
+not handle at all still returns `None` and reaches Django's 500 path,
+unchanged.
+
+**Breaking, hence the minor.** This changes the response *body* of status
+codes that already existed. Nothing in the library or its tests read `detail`
+off an error response, and a sweep of the sibling repos found no consumer that
+does — `@stapel/core`'s `errors.ts` keys on `localizable_error` only, and the
+one frontend that touches `detail` at all tries `error` first, which the
+envelope always sets. A host that parses `{"detail": …}` off a 401/403/404/405/
+429 must read `localizable_error`/`error` instead (`params.detail` still
+carries the old string verbatim).
+
+**A host that wrapped the handler for this can delete it.** Any
+`EXCEPTION_HANDLER` that calls `stapel_exception_handler` and then re-dresses
+`NotAuthenticated`/`AuthenticationFailed`/`PermissionDenied` into
+`StapelErrorResponse` is now doing the work twice — and the second pass, built
+with no `params`, silently drops the `params.detail` this release adds. Delete
+the wrapper and point `REST_FRAMEWORK["EXCEPTION_HANDLER"]` back at
+`stapel_core.django.api.errors.stapel_exception_handler`.
+
+Two 403/404 bodies elsewhere in core are still bare by construction and out of
+this scope: `django/nav_views.py` and `django/monitoring/version.py` answer
+with a plain Django `JsonResponse` and never enter DRF's exception machinery.
+
 ## [0.60.8] — 2026-09-07
 
 ### Catalogs of a library installed only as a client are now discovered

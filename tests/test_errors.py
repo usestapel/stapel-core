@@ -2,14 +2,25 @@ from dataclasses import dataclass
 
 import pytest
 from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework.exceptions import ErrorDetail
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.exceptions import (
+    APIException,
+    AuthenticationFailed,
+    ErrorDetail,
+    NotAuthenticated,
+    Throttled,
+)
 from rest_framework.exceptions import ValidationError as DRFValidationError
-from rest_framework.test import APIRequestFactory
+from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.test import APIRequestFactory, force_authenticate
 from stapel_core.django.api.errors import (
     ERR_400_BAD_REQUEST,
+    ERR_401_UNAUTHORIZED,
     ERR_403_FORBIDDEN,
     ERR_404_NOT_FOUND,
+    ERR_405_METHOD_NOT_ALLOWED,
     ERR_429_RATE_LIMIT,
+    ERR_429_TOO_MANY_REQUESTS,
     ERR_500_INTERNAL,
     REMEDIATION_VOCAB,
     StapelErrorResponse,
@@ -35,6 +46,15 @@ _factory = APIRequestFactory()
 
 def _ctx():
     return {"request": _factory.get("/"), "view": None}
+
+
+class _AuthedUser:
+    """Enough of a user for IsAuthenticated — no database needed."""
+
+    is_authenticated = True
+    is_active = True
+    is_anonymous = False
+    pk = 1
 
 
 # ---------------------------------------------------------------------------
@@ -689,3 +709,197 @@ class TestBuildErrorRegistry:
             e for e in build_error_registry() if e["code"] == "error.400.dup"
         )
         assert entry["params"] == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# Tier 4 — the exceptions no view raises
+#
+# DRF's authenticators raise NotAuthenticated/AuthenticationFailed, its
+# permission classes raise PermissionDenied, its dispatch raises
+# MethodNotAllowed, get_object_or_404 raises Http404 and throttles raise
+# Throttled. None of them ever passes through StapelErrorResponse, so all of
+# them used to answer DRF's bare {"detail": ...} — measured on a live stand
+# across four unrelated endpoints. They now carry the same envelope every
+# other error does, with DRF's status verdict and DRF's headers untouched.
+# ---------------------------------------------------------------------------
+
+
+CHALLENGE = 'Bearer realm="api"'
+
+
+class _ChallengingAuth(BaseAuthentication):
+    """Authenticates nobody, but offers a WWW-Authenticate challenge — the
+    shape that makes DRF answer 401 rather than coercing to 403."""
+
+    def authenticate(self, request):
+        return None
+
+    def authenticate_header(self, request):
+        return CHALLENGE
+
+
+class _SilentAuth(BaseAuthentication):
+    """No challenge to offer, so DRF downgrades an unauthenticated refusal to
+    403 (APIView.handle_exception). The envelope must follow that verdict."""
+
+    def authenticate(self, request):
+        return None
+
+
+class _DenyAll(BasePermission):
+    def has_permission(self, request, view):
+        return False
+
+
+def _view(**attrs):
+    """A GET-only APIView with the given policy attributes."""
+    from rest_framework.views import APIView
+
+    body = {"get": lambda self, request: StapelResponse({"ok": True})}
+    body.update(attrs)
+    return type("_TestView", (APIView,), body).as_view()
+
+
+class TestDrfExceptionsGetTheEnvelope:
+    def test_anonymous_is_401_with_envelope_and_challenge_header(self):
+        view = _view(
+            authentication_classes=[_ChallengingAuth],
+            permission_classes=[IsAuthenticated],
+        )
+        resp = view(_factory.get("/"))
+        assert resp.status_code == 401
+        assert resp.data["localizable_error"] == ERR_401_UNAUTHORIZED
+        assert resp.data["error"] == "Authentication required"
+        assert "params" in resp.data and "error_language" in resp.data
+        # Losing this header would leave a client unable to authenticate.
+        assert resp["WWW-Authenticate"] == CHALLENGE
+
+    def test_anonymous_without_a_challenge_keeps_drfs_403_verdict(self):
+        view = _view(
+            authentication_classes=[_SilentAuth],
+            permission_classes=[IsAuthenticated],
+        )
+        resp = view(_factory.get("/"))
+        assert resp.status_code == 403
+        assert resp.data["localizable_error"] == ERR_403_FORBIDDEN
+        assert "WWW-Authenticate" not in resp
+
+    def test_authenticated_but_forbidden_stays_403(self):
+        view = _view(
+            authentication_classes=[_ChallengingAuth],
+            permission_classes=[_DenyAll],
+        )
+        request = _factory.get("/")
+        force_authenticate(request, user=_AuthedUser())
+        resp = view(request)
+        assert resp.status_code == 403
+        assert resp.data["localizable_error"] == ERR_403_FORBIDDEN
+        # An authenticated caller is not asked to authenticate again.
+        assert "WWW-Authenticate" not in resp
+
+    def test_authentication_failed_is_401_with_challenge(self):
+        class _RejectingAuth(BaseAuthentication):
+            def authenticate(self, request):
+                raise AuthenticationFailed("bad token")
+
+            def authenticate_header(self, request):
+                return CHALLENGE
+
+        view = _view(authentication_classes=[_RejectingAuth])
+        resp = view(_factory.get("/"))
+        assert resp.status_code == 401
+        assert resp.data["localizable_error"] == ERR_401_UNAUTHORIZED
+        assert resp["WWW-Authenticate"] == CHALLENGE
+        assert resp.data["params"]["detail"] == "bad token"
+
+    def test_original_detail_is_kept_in_params(self):
+        exc = NotAuthenticated()
+        resp = stapel_exception_handler(exc, _ctx())
+        assert resp.data["params"]["detail"] == exc.detail
+
+    # --- the three optional ones: NotFound, MethodNotAllowed, Throttled ---
+
+    def test_http404_from_a_view_is_enveloped(self):
+        from django.http import Http404
+
+        def _get(self, request):
+            raise Http404("no such thing")
+
+        resp = _view(get=_get)(_factory.get("/"))
+        assert resp.status_code == 404
+        assert resp.data["localizable_error"] == ERR_404_NOT_FOUND
+
+    def test_method_not_allowed_is_enveloped(self):
+        resp = _view()(_factory.delete("/"))
+        assert resp.status_code == 405
+        assert resp.data["localizable_error"] == ERR_405_METHOD_NOT_ALLOWED
+        assert 'Method "DELETE" not allowed.' in str(resp.data["params"]["detail"])
+
+    def test_throttled_is_enveloped_and_keeps_retry_after(self):
+        def _get(self, request):
+            raise Throttled(wait=30)
+
+        resp = _view(get=_get)(_factory.get("/"))
+        assert resp.status_code == 429
+        assert resp.data["localizable_error"] == ERR_429_TOO_MANY_REQUESTS
+        assert resp["Retry-After"] == "30"
+        assert resp.data["params"]["retry_after"] == 30
+
+    def test_django_permission_denied_is_enveloped(self):
+        from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+
+        def _get(self, request):
+            raise DjangoPermissionDenied("nope")
+
+        resp = _view(get=_get)(_factory.get("/"))
+        assert resp.status_code == 403
+        assert resp.data["localizable_error"] == ERR_403_FORBIDDEN
+
+    # --- key resolution ---
+
+    def test_default_code_naming_a_registered_key_wins_over_the_status(self):
+        """MandateUnavailable (503) has no generic status key and does not need
+        one — its default_code names the registered key directly."""
+        from stapel_core.django.api.permissions import MandateUnavailable
+
+        resp = stapel_exception_handler(MandateUnavailable(), _ctx())
+        assert resp.status_code == 503
+        assert resp.data["localizable_error"] == "error.503.mandate_unavailable"
+
+    def test_unmapped_status_keeps_drfs_shape(self):
+        """A status with neither a registered key nor a mapping is left alone
+        rather than given an invented code — StapelServiceError is the way to
+        raise an enveloped error on an arbitrary status."""
+
+        class _Teapot(APIException):
+            status_code = 418
+            default_detail = "I am a teapot."
+            default_code = "teapot"
+
+        resp = stapel_exception_handler(_Teapot(), _ctx())
+        assert resp.status_code == 418
+        assert resp.data == {"detail": "I am a teapot."}
+
+    def test_validation_error_tier_is_unchanged(self):
+        exc = DRFValidationError(
+            {"email": [ErrorDetail("This field is required.", code="required")]}
+        )
+        resp = stapel_exception_handler(exc, _ctx())
+        assert resp.status_code == 400
+        assert resp.data["localizable_error"] == "error.400.field.required"
+        assert resp.data["params"]["field"] == "email"
+
+    def test_non_api_exception_still_falls_through_to_none(self):
+        assert stapel_exception_handler(ValueError("nope"), _ctx()) is None
+
+    def test_every_mapped_key_is_registered(self):
+        from stapel_core.django.api.errors import (
+            _DRF_STATUS_ERROR_KEYS,
+            build_error_registry,
+        )
+
+        known = {e["code"] for e in build_error_registry()}
+        assert set(_DRF_STATUS_ERROR_KEYS.values()) <= known
+        # The status a key names must match the status it is served under.
+        for status_code, key in _DRF_STATUS_ERROR_KEYS.items():
+            assert key.split(".")[1] == str(status_code)

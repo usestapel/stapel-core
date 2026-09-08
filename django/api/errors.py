@@ -776,15 +776,118 @@ def _extract_first_field_error(detail, serializer=None):
     return ERR_400_VALIDATION_ERROR, {}, "Validation error"
 
 
+#: HTTP status -> the registered key an exception carrying that status is
+#: dressed in when it never passed through :func:`StapelErrorResponse`.
+#:
+#: These are the exceptions no view raises: DRF's authenticators raise
+#: ``NotAuthenticated``/``AuthenticationFailed``, its permission classes raise
+#: ``PermissionDenied``, its dispatch raises ``MethodNotAllowed``/
+#: ``NotAcceptable``/``UnsupportedMediaType``, its throttles raise
+#: ``Throttled``, and ``get_object_or_404`` raises Django's ``Http404``. All of
+#: them used to reach DRF's own ``exception_handler`` and answer its bare
+#: ``{"detail": "..."}``, so every service on this handler returned two
+#: different error shapes depending on which layer refused the request.
+#:
+#: Every value here is a key :data:`COMMON_ERRORS` already registers, so no
+#: code appears in a response that ``build_error_registry`` cannot name. A
+#: status with no entry (a host's own 503, say) keeps DRF's shape rather than
+#: being given an invented key — :class:`StapelServiceError` is the way to
+#: raise an enveloped error on an arbitrary status.
+_DRF_STATUS_ERROR_KEYS: Dict[int, str] = {
+    400: ERR_400_BAD_REQUEST,
+    401: ERR_401_UNAUTHORIZED,
+    402: ERR_402_PAYMENT_REQUIRED,
+    403: ERR_403_FORBIDDEN,
+    404: ERR_404_NOT_FOUND,
+    405: ERR_405_METHOD_NOT_ALLOWED,
+    406: ERR_406_NOT_ACCEPTABLE,
+    408: ERR_408_REQUEST_TIMEOUT,
+    409: ERR_409_CONFLICT,
+    410: ERR_410_GONE,
+    413: ERR_413_PAYLOAD_TOO_LARGE,
+    415: ERR_415_UNSUPPORTED_MEDIA_TYPE,
+    422: ERR_422_UNPROCESSABLE_ENTITY,
+    423: ERR_423_LOCKED,
+    429: ERR_429_TOO_MANY_REQUESTS,
+    500: ERR_500_INTERNAL,
+}
+
+
+def _drf_exception_error_key(exc, status_code: int) -> Optional[str]:
+    """The registered key for a DRF-handled *exc* answered with *status_code*.
+
+    An ``APIException`` subclass may name its own key by setting
+    ``default_code`` to a registered code — this is how
+    ``api.permissions.MandateUnavailable`` (503, ``default_code =
+    "error.503.mandate_unavailable"``) reaches its own registered text instead
+    of the generic key for its status, and how a host's subclass opts in
+    without touching this table. Failing that, the status decides
+    (:data:`_DRF_STATUS_ERROR_KEYS`); failing that, ``None`` — leave DRF's
+    response alone.
+
+    *status_code* comes from the response DRF built, never from the class:
+    ``APIView.handle_exception`` downgrades a ``NotAuthenticated`` to 403 on
+    the exception instance when no authenticator offers a ``WWW-Authenticate``
+    challenge, and that verdict must survive into the envelope.
+    """
+    detail = getattr(exc, "detail", None)
+    for candidate in (
+        getattr(detail, "code", None),
+        getattr(exc, "default_code", None),
+        detail,
+    ):
+        key = _registered_key(candidate)
+        if key:
+            return key
+    return _DRF_STATUS_ERROR_KEYS.get(status_code)
+
+
+def _envelope_drf_response(response, exc):
+    """Rewrite a DRF-built error *response*'s body into the fleet envelope.
+
+    The response object itself is kept and only its ``.data`` is replaced, so
+    the status DRF decided and **every header DRF set** survive by
+    construction — ``WWW-Authenticate`` on a 401 (without it a client cannot
+    tell how to authenticate) and ``Retry-After`` on a 429, plus anything a
+    future DRF adds. The original body rides on as ``params["detail"]``, the
+    same place the ValidationError tiers put DRF's own detail, so nothing the
+    old shape carried is lost.
+    """
+    key = _drf_exception_error_key(exc, response.status_code)
+    if key is None:
+        return response
+
+    params: Dict[str, Any] = {}
+    original = response.data
+    if isinstance(original, dict) and set(original) == {"detail"}:
+        params["detail"] = original["detail"]
+    elif original is not None:
+        params["detail"] = original
+    wait = getattr(exc, "wait", None)
+    if wait:
+        # Retry-After is a header a browser fetch wrapper rarely surfaces; the
+        # same number in params is what a countdown UI can render. Truncated
+        # exactly as DRF truncates the header ('%d' % wait) so the two halves
+        # of one response never disagree.
+        params["retry_after"] = int(wait)
+
+    response.data = StapelErrorResponse(response.status_code, key, params).data
+    return response
+
+
 def stapel_exception_handler(exc, context):
     """
     DRF exception handler — converts all validation errors to StapelError format.
 
-    Four tiers:
+    Five tiers:
     0. StapelServiceError — any HTTP status, raised from service layer
     1. StapelValidationError — business logic, has explicit error key
     2. DRF field errors — mapped via DRF error code to error.400.field.{code}
     3. Legacy/fallback — wrapped as error.400.validation_error with original message
+    4. Everything DRF's own handler answers — the auth/permission/routing/
+       throttling exceptions no view raises — re-dressed in the same envelope
+       (:func:`_envelope_drf_response`), keeping DRF's status and headers.
+       An exception DRF does not handle still returns ``None``.
     """
     from django.core.exceptions import ValidationError as DjangoValidationError
     from rest_framework.views import exception_handler
@@ -822,7 +925,13 @@ def stapel_exception_handler(exc, context):
         data = StapelError(localizable_error=error_key, error=fallback, params=params)
         return Response(StapelErrorSerializer(data).data, status=400)
 
-    return exception_handler(exc, context)
+    # Tier 4: DRF's own handler decides status, headers and rollback for
+    # everything else it knows (Http404 and Django's PermissionDenied
+    # included); we only re-dress the body it produced.
+    response = exception_handler(exc, context)
+    if response is None:
+        return None
+    return _envelope_drf_response(response, exc)
 
 
 # =============================================================================

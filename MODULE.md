@@ -979,6 +979,25 @@ by `stapel_exception_handler` (wired as DRF's `EXCEPTION_HANDLER` in the
 common settings). Subclass `ErrorKeysView` and override
 `get_service_errors()` to serve a service's key dictionary.
 
+**Every DRF error carries the envelope, including the ones no view raises**
+(since 0.61.0). `NotAuthenticated`/`AuthenticationFailed` (authenticators),
+`PermissionDenied` (permission classes), `Http404`, `MethodNotAllowed`/
+`NotAcceptable`/`UnsupportedMediaType` (dispatch) and `Throttled` are answered
+with the same `{localizable_error, error, params, error_language}` body as
+everything else — DRF's own handler still decides status, headers and
+rollback, and only the body is re-dressed, so `WWW-Authenticate` on a 401 and
+`Retry-After` on a 429 survive intact and DRF's 401-vs-403 verdict is taken
+from the response, not from the exception class. The original DRF detail rides
+on as `params.detail`; a `Throttled`'s wait also lands in `params.retry_after`.
+The key comes from the exception's `default_code` when that names a registered
+key (this is how `MandateUnavailable`'s `error.503.mandate_unavailable` is
+reached, and how a host's own `APIException` subclass opts in), otherwise from
+the status via `_DRF_STATUS_ERROR_KEYS` (400–500, all `COMMON_ERRORS` keys). A
+status with neither keeps DRF's bare shape — raise `StapelServiceError` to get
+an enveloped error on an arbitrary status. A host that wrapped
+`stapel_exception_handler` to dress auth failures itself can delete the
+wrapper.
+
 The optional `remediation` map declares a machine-readable "what to do" hint
 per key from the finite `REMEDIATION_VOCAB` (`retry`, `wait_and_retry`,
 `reauthenticate`, `verify`, `fix_input`, `contact_support`, `bug`); undeclared
