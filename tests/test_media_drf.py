@@ -96,7 +96,7 @@ class TestImageBuilder:
     @pytest.mark.parametrize(
         "exc",
         [
-            # The live meettoday failure: a stapel-cdn ref (a DIRECTORY of the
+            # The live client failure: a stapel-cdn ref (a DIRECTORY of the
             # variant ladder) mis-tagged `file`, opened as a plain file.
             IsADirectoryError(21, "Is a directory"),
             PermissionError(13, "Permission denied"),

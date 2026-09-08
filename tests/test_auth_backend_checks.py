@@ -101,7 +101,7 @@ def _shipped_backends():
     version of this test named ONE backend, so
     stapel_core.django.jwt.backends.JWTAuthBackend — which overrides
     authenticate() and carried no declaration — passed review and would have
-    refused to boot every project that wires it (ironmemo does). A guard that
+    refused to boot every project that wires it (a client fleet does). A guard that
     checks a hand-written constant only ever guards that constant.
     """
     import importlib

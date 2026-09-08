@@ -157,7 +157,7 @@ def load_configured_factors() -> None:
     host only has to *declare* the dotted path, exactly as MODULE.md
     promises. (Before 0.16.1 the function had no caller anywhere in the
     framework, so a host that followed the documentation to the letter got
-    a decorative setting and no warning; meettoday #124 had to call this
+    a decorative setting and no warning; a client #124 had to call this
     loader from its own app layer to make a security fix real.)
 
     Order-independent: entries are registered *pinned*, so a factor id the

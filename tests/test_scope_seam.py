@@ -200,7 +200,7 @@ def test_scoped_gate_still_503s_when_a_wired_seam_cannot_answer(provider):
 
 # ---------------------------------------------------------------------------
 # An unmounted surface: the provider is configured open and consulted by
-# nothing (2026-08-16, stapel_video.E009 against meettoday).
+# nothing (2026-08-16, stapel_video.E009 against a client stand).
 # ---------------------------------------------------------------------------
 
 

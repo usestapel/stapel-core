@@ -22,7 +22,7 @@ Its idiom is the same three parts, and they are the point:
 
 Point 3 is the whole design. A check that demanded
 :class:`~stapel_core.django.api.permissions.IsNotAnonymousUser` everywhere
-would be wrong on its first real consumer: in meettoday an anonymous guest
+would be wrong on its first real consumer: in a meeting app an anonymous guest
 joining a call *is the product*, and several of those views must stay open.
 Such a check gets silenced wholesale on day one and protects nothing. So the
 red state is **silence**, never the choice. A view is green as soon as it has
@@ -70,7 +70,7 @@ What this does not catch
 ------------------------
 * **Views that never declared ``permission_classes``** and inherit the DRF
   project default. When that default is bare ``IsAuthenticated`` (the common
-  case, and meettoday's), flagging them would mean an Error on every view in
+  case, and a client's), flagging them would mean an Error on every view in
   every installed module for a line the project never wrote — the exact flood
   that gets a check muted. Those are covered once, by W001.
 * **Authorization inside the view body** — a ``get_object`` filtered by

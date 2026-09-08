@@ -9,7 +9,7 @@ reuses — for days.
 connection when the app already recorded an error on it, or when
 ``CONN_MAX_AGE`` expired. A connection the DATABASE SERVER dropped while the
 loop sat idle looks healthy to Django until something tries to use it, and by
-then the event is already in flight. That is how ironmemo lost 46 hours of
+then the event is already in flight. That is how a client lost 46 hours of
 notifications (2026-08-26 21:58 UTC → 2026-08-28): one idle drop, then
 ``InterfaceError: connection already closed`` on every event after it,
 forever, because nothing in the loop ever reset the connection. The retry

@@ -1,7 +1,7 @@
 """Revocation lives inside validation, so "valid" cannot mean "except revoked".
 
 Before 0.25.0 the blacklist was a second step every caller had to remember.
-Two whole populations did not: ``JWTAuthBackend`` (which ironmemo wires as a
+Two whole populations did not: ``JWTAuthBackend`` (which a client fleet wires as a
 Django auth backend) and every direct caller of ``jwt_provider.validate_token``.
 A user who logged out kept authenticating on those paths until the token
 expired on its own — up to the full access-token lifetime, and on the refresh

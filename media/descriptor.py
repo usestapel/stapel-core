@@ -9,7 +9,7 @@ global ``STAPEL_MEDIA_BACKEND``:
 
 - ``source="cdn"`` — resolved through the **CDN** provider (`cdn.describe`
   comm), which reads stapel-cdn's OWN flat ``<hash>/{tier}{branch}.webp``
-  variant naming. This is the fix for the live gap meettoday hit (libgaps H3):
+  variant naming. This is the fix for the live gap a client hit (libgaps H3):
   a deployment whose default backend is ``"pil"`` was describing cdn-uploaded
   avatars with the PIL provider, which looks for a DIFFERENT naming
   (``<stem>__{tier}{branch}.webp``) and therefore found ZERO variants — the
@@ -42,8 +42,8 @@ def _describe_by_source(source: ImageSource, value: str) -> Optional[dict]:
 
     THE GUARD IS BY CLASS, NOT BY EXCEPTION NAME. It used to catch
     ``(LookupError, ValueError)`` — the two types the providers were known to
-    raise — and that is not the promise :func:`image` makes. Live on the
-    meettoday sandbox a profile carried a stapel-cdn ref (a DIRECTORY holding
+    raise — and that is not the promise :func:`image` makes. Live on a
+    client sandbox a profile carried a stapel-cdn ref (a DIRECTORY holding
     the variant ladder) mis-tagged ``file``, so the PIL provider opened it as
     a plain file and raised ``IsADirectoryError`` — an ``OSError``, outside
     the tuple, straight past the guard. A cosmetic avatar 500'd

@@ -1,6 +1,6 @@
 """A function call must never die silently on the transport's size cap.
 
-The defect, measured on ironmemo (2026-08-06, upload path): a
+The defect, measured on a client stand (2026-08-06, upload path): a
 ``llm.complete`` reply over a meeting transcript exceeded NATS's 1 MiB
 ``max_payload``. ``msg.respond()`` raised ``MaxPayloadError`` INSIDE the
 subscription callback — after the function had already run. Nothing was sent

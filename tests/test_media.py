@@ -196,7 +196,7 @@ class TestPilDescribe:
 
     def test_directory_ref_is_an_unknown_ref_not_an_oserror(self, storage, tmp_path):
         """`storage.exists()` answers True for a DIRECTORY, so it was never a
-        guard that the ref names a readable image. Live on the meettoday
+        guard that the ref names a readable image. Live on a client
         sandbox: a stapel-cdn ref (`avatar/<64-hex>/` holding the ladder)
         mis-tagged `file` reached this provider, passed `exists()`, and
         `open()` raised IsADirectoryError — an OSError, outside the descriptor

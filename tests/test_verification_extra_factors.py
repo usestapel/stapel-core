@@ -4,7 +4,7 @@
 host-project escape hatch for substituting or adding a verification factor.
 Until 0.16.1 nothing in the framework called it: a host that followed the
 documentation to the letter got a decorative setting and no warning at all
-(meettoday #124 had to call the loader from its own app layer, or its
+(a client #124 had to call the loader from its own app layer, or its
 security fix would have been a prop).
 
 The assertions below look at the **live registry after boot**, never at the

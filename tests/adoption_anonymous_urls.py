@@ -56,7 +56,7 @@ class CapabilityGatedView(_Base):
 
 # --- green 3: an explicit declaration on the view -------------------------
 class GuestsWelcomeView(_Base):
-    """The meettoday shape: an anonymous guest joining a call is the product."""
+    """The meeting-app shape: an anonymous guest joining a call is the product."""
 
     permission_classes = [permissions.IsAuthenticated]
     stapel_anonymous_access = ANONYMOUS_ALLOWED

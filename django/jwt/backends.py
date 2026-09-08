@@ -28,7 +28,7 @@ class JWTAuthBackend(BaseBackend):
     keyword alone and returns ``None`` for a username/password call, so it can
     never admit anyone on an unverified secret. ``verifies_credentials`` states
     that out loud for the ``stapel_auth_backends`` boot gate — without it, a
-    project that wires this backend (ironmemo does) refuses to start.
+    project that wires this backend (a client fleet does) refuses to start.
     """
 
     #: See the class docstring: this backend checks a real credential.

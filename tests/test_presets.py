@@ -1,6 +1,6 @@
 """A named posture is values PLUS the check that keeps them true.
 
-The case that motivated the artifact: meettoday's stand carried its posture as
+The case that motivated the artifact: a client's stand carried its posture as
 a bespoke settings tier that re-read the mock-OTP flags from the environment,
 defaulting them ON, over a production layer that pinned them off — and
 silenced the two auth checks that report exactly that. Nothing named the

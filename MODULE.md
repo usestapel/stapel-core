@@ -885,7 +885,7 @@ a serializer, hand a DTO to the service layer, render through a serializer,
 return `StapelResponse`. Nothing in that shape is module-specific — and yet
 twenty-three stapel modules hand-wrote the same `SerializerSeamMixin` — twenty-four
 definitions counting the stapel-tools library template — because the
-core did not ship one (`docs/reference/module-extension-gaps.md`, meettoday-gap
+core did not ship one (`docs/reference/module-extension-gaps.md`, client-gap
 item 2). 0.37.0 ships it once.
 
 ```python
@@ -2737,7 +2737,7 @@ discoverable, and inventing one would mean guessing which FK is "a user".
   module shows the correct fail-safe pattern.
 - **A best-effort `try/except` around a network call is only correct paired
   with two other things**, never on its own
-  (docs/pending/env-address-class-v2.md §3.6, motivated by meettoday's
+  (docs/pending/env-address-class-v2.md §3.6, motivated by a client's
   LiveKit twirp calls — host-kick and room-PIN wrapped every failure in
   `try/except` + `logger.warning` and then silently did nothing in
   production for as long as LiveKit was unreachable, with no signal anywhere

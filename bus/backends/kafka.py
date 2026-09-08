@@ -91,7 +91,7 @@ class KafkaBus(BusBackend):
         A consumer already DECLARES its topics — it is passing them to
         `subscribe()` on the next line. Requiring someone to also list them,
         by hand, somewhere else (a deploy script, a runbook, an infra repo) is
-        a second source of truth that drifts silently: the ironmemo stand ran
+        a second source of truth that drifts silently: a client stand ran
         for weeks with six recordings topics missing from its deploy script's
         list, and all that surfaced was an endless
 
@@ -218,7 +218,7 @@ class KafkaBus(BusBackend):
                         # dropped the idle connection, so all four attempts
                         # reuse the same dead socket and the event is DLQ'd
                         # — and so is every event after it, forever, because
-                        # nothing ever resets it. (ironmemo, 46h of lost
+                        # nothing ever resets it. (a client stand, 46h of lost
                         # notifications, 2026-08-26.) The NATS backend and
                         # the function server already did this; the Kafka
                         # path was the one loop that did not.

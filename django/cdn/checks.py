@@ -15,7 +15,7 @@ nothing catches the mismatch" finding):
   viewsets skip.
 * **E002** — *any* CDN field is declared at all, but ``cdn.media_exists``
   is not reachable over this deployment's comm transport — i.e. the cdn
-  module/service was never wired up. This is the literal meettoday incident
+  module/service was never wired up. This is the literal client incident
   (cdn-modularity.md §0.5): a model field frozen to CDN format with no CDN
   service behind it, caught only when a user clicks "Change avatar" in
   production.

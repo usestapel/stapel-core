@@ -6,7 +6,7 @@ and it is exactly the number nobody has, because parking an event is a
 handful of lines inside each backend's retry loop and every backend spells
 it differently.
 
-ironmemo, 2026-08-25 → 2026-08-28: eight login codes were parked here, one
+A client stand, 2026-08-25 → 2026-08-28: eight login codes were parked here, one
 after another, over two and a half days. Every one was logged at ERROR. The
 containers stayed "Up", the HTTP layer kept answering "Verification code sent
 successfully" because publishing to the bus really had succeeded, and the

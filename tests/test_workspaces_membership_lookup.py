@@ -1,6 +1,6 @@
 """Membership lookup: a routing 404 is not a verdict.
 
-Owner-reported live incident, 2026-07-26, app.ironmemo.com. Opening "My
+Owner-reported live incident, 2026-07-26, on a client host. Opening "My
 meetings" showed a toast reading `Forbidden: not a member of this workspace`
 — to the account that OWNS the workspace, with the membership row sitting
 right there in the workspaces database (`role=owner`, accepted, not

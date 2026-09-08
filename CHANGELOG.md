@@ -1174,7 +1174,7 @@ that loses it entirely — there is a test that asserts precisely that.
 
 ### A retry that reuses the dead connection is not a retry
 
-ironmemo, 2026-08-26 21:58 UTC: the database dropped the notifications
+A client stand, 2026-08-26 21:58 UTC: the database dropped the notifications
 consumer's idle connection. Every event after that failed with
 `InterfaceError: connection already closed` — for 46 hours, into the DLQ, while
 the container reported "Up 3 days" and the HTTP layer kept answering
@@ -3014,7 +3014,7 @@ provider seam and its subscribers, with its own URL surface left unmounted,
 because the host owns the rooms/boards and the library owns a provider or two.
 There the shipped scope provider decides nothing — nothing routes to the code
 that would consult it. Refusing that boot demands a provider that provably never
-runs. meettoday hit exactly this on 2026-08-16: `stapel_video.E009` kept the
+runs. A client hit exactly this on 2026-08-16: `stapel_video.E009` kept the
 sandbox backend down over a tenancy hole the deployment does not have, while the
 same file's `E008` was already gating on a URLconf walk and passing.
 
@@ -3368,7 +3368,7 @@ with and deliberately did not consult it; its docstring said "caller should do
 that separately". Callers split into two populations. The ones that
 remembered: `JWTAuthMiddleware`, the DRF `JWTCookieAuthentication`, channels,
 and assorted stapel-auth views. The ones that did not: **`JWTAuthBackend`** —
-the Django auth backend ironmemo wires — `stapel-auth/sessions/services.py`,
+the Django auth backend a client fleet wires — `stapel-auth/sessions/services.py`,
 `openid/views.py`, and every future caller of `jwt_provider.validate_token`, a
 method that reads as "validate this token" and silently meant "validate
 everything except revocation". On those paths a user who logged out kept
@@ -4126,7 +4126,7 @@ returned it **without comparing a password**. Its docstring said passwords were
 `AUTHENTICATION_BACKENDS`: any project that listed the dotted path handed the
 backend every `django.contrib.auth.authenticate()` call in the process, and a
 known email address plus any nonempty string became a valid login. The
-2026-08-11 IronMemo audit found exactly that wiring in production code
+2026-08-11 client audit found exactly that wiring in production code
 (AUTH-01, P0) reachable through stapel-auth's legacy `/token/` endpoint.
 
 The backend now does what its name promises and nothing more — email is the
@@ -4439,7 +4439,7 @@ staying put — is asserted to stay silent.
 
 ### Fixed — a Function call no longer dies silently on the transport's size cap
 
-Measured on ironmemo (upload path, 2026-08-06): a ``llm.complete`` reply over a
+Measured on a client stand (upload path, 2026-08-06): a ``llm.complete`` reply over a
 meeting transcript exceeded NATS's 1 MiB ``max_payload``. ``msg.respond()``
 raised ``MaxPayloadError`` INSIDE the subscription callback — after the
 function had already run. Nothing was sent back, so the caller sat until its
@@ -4478,7 +4478,7 @@ working.
   `stapel_dependency_up{dependency="<name>"}` on the metrics endpoint.
 
   Motivated by a production incident (`docs/pending/env-address-class-v2.md`
-  §3.6): meettoday's host-kick and room-PIN writes both go through twirp calls
+  §3.6): a client's host-kick and room-PIN writes both go through twirp calls
   wrapped in best-effort `try/except`, so an unreachable LiveKit meant those
   two features silently did nothing — for a day, with nothing anywhere saying
   so. Best-effort is a legitimate pattern; best-effort *without a lamp* is how
@@ -4606,7 +4606,7 @@ working.
   `stapel_anonymous_access = ANONYMOUS_ALLOWED` / `ANONYMOUS_DENIED` on the
   view (new constants in `stapel_core.django.api.permissions`).
 - The formulation is the substance. A check that demanded `IsNotAnonymousUser`
-  everywhere would be wrong on its first real consumer — in meettoday an
+  everywhere would be wrong on its first real consumer — in a meeting app an
   anonymous guest joining a call is the product, and several views must stay
   open to one — and would be added to `SILENCED_SYSTEM_CHECKS` whole on day
   one. Turning an unwritten assumption into a declared one is also worth as
@@ -4636,7 +4636,7 @@ working.
 ### Notes
 - Minor, not patch: a new Error-level check can turn a currently green
   consumer red at `manage.py check` / `stapel_preflight` time. Nothing is
-  removed or renamed, so it is not a major. First live run (meettoday,
+  removed or renamed, so it is not a major. First live run (a client fleet,
   63 findings): 25 E001 in the project's own `rooms`/`recordings`/`accounts`/
   `calendar_app` views, 37 W002 across five installed modules, 1 W001.
 
@@ -4753,7 +4753,7 @@ working.
   directly and this HTTP client is never reached. The peer URL defaults to a
   service hostname that only exists in a microservice compose, so every
   monolith got a warning about a broken peer that nothing talks to (found on
-  meettoday, 2026-07-26), plus a 3s timeout on each preflight run. The check
+  a client stand, 2026-07-26), plus a 3s timeout on each preflight run. The check
   now skips when the app is installed locally. A check that warns about a
   topology it never established is the same defect this one exists to catch.
 
@@ -4833,7 +4833,7 @@ cross-service call in the fleet after that incident.
 
 ### Fixed
 - **A routing 404 from a peer service is no longer read as a verdict.**
-  Owner-reported live incident: opening "My meetings" on the ironmemo stand
+  Owner-reported live incident: opening "My meetings" on a client stand
   showed `Forbidden: not a member of this workspace` — to the account that
   OWNS the workspace, with the membership row (`role=owner`, accepted, not
   suspended) sitting right there in the workspaces database.
@@ -4875,7 +4875,7 @@ cross-service call in the fleet after that incident.
   already declares them — it passes them to `subscribe()` on the next line.
   Requiring somebody to *also* list them by hand somewhere else (a deploy
   script, a runbook, an infra repo) is a second source of truth, and it
-  drifted: the ironmemo stand ran for weeks with six recordings topics
+  drifted: a client stand ran for weeks with six recordings topics
   missing from its deploy script's list, delivering nothing, on containers
   that reported healthy. The NATS backend never had this failure mode — its
   stream captures `<prefix>.>`, so a new topic needs no broker-side change
@@ -4912,7 +4912,7 @@ crashing.
 ### Added
 - **`manage.py stapel_preflight`** (`--json` for a release harness): a
   read-only pre-deploy check that runs against the real settings, database
-  and installed packages. Every check is a failure that took the ironmemo
+  and installed packages. Every check is a failure that took a client
   stand down on 2026-07-25/26, each one predictable from information that
   was already there:
   - `preflight.E001` — an unapplied INITIAL migration whose table already
@@ -4939,7 +4939,7 @@ crashing.
   0 — and a container restart policy turns that into an infinite quiet
   loop with zero events delivered. 0.11.0 flipped the default backend from
   Kafka to MemoryBus, so every deployment that did not then set
-  `STAPEL_BUS_BACKEND` landed there and could not tell (ironmemo stand: all
+  `STAPEL_BUS_BACKEND` landed there and could not tell (a client stand: all
   actions/consumer workers restart-looping for weeks, cross-service events
   dead). `BaseBusConsumerCommand` now raises `CommandError` naming the
   setting and a broker backend; `--allow-in-process` keeps the
@@ -4957,7 +4957,7 @@ crashing.
   hit `relation "stapel_tasks_taskrecord" already exists`. Result:
   `manage.py migrate` died at container boot for the whole fleet, while
   fresh installs were fine — which is why it stayed invisible until a
-  real upgrade (ironmemo stand, three weeks behind). The table and its
+  real upgrade (a client stand, three weeks behind). The table and its
   index are now created only when genuinely absent
   (`CreateModelIfAbsent` / `AddIndexIfAbsent`, both driven by the
   HISTORICAL `to_state` model so a fresh database still gets the
@@ -5076,7 +5076,7 @@ the server (`stapel-cdn` 0.7.0+) already accepted any configured type —
   `STAPEL_CDN["ASSET_TYPES"]` (would fail `validate()`/`full_clean()` on
   every save attempt). `stapel_core.cdn.E002`: any CDN field is declared
   but no `cdn.*` comm route is configured at all — the class of "design
-  shouldn't allow this" bug from the meettoday incident (a `CdnImageField`
+  shouldn't allow this" bug from a client incident (a `CdnImageField`
   frozen to CDN format with no CDN service behind it, caught only when a
   user clicks "Change avatar" in production).
 - Removed `CDN_ASSET_TYPES`/`CDN_IMAGE_TYPES`/`CDN_ALL_TYPES` module
@@ -5369,7 +5369,7 @@ release too).
 
 ### Changed — BREAKING: bus default backend kafka → memory (in-process)
 
-Live run finding (meettoday): `request_notification` (OTP emails) silently
+Live run finding (a client stand): `request_notification` (OTP emails) silently
 never left the process — `STAPEL_BUS_BACKEND` defaulted to
 `stapel_core.bus.backends.kafka.KafkaBus`, `confluent-kafka` was not
 installed, and every `publish()` raised `ModuleNotFoundError` deep inside

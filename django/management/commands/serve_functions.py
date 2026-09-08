@@ -26,7 +26,7 @@ def fit_reply(data: bytes, max_payload: int, name: str) -> bytes:
     """*data*, or a small marker explaining why the real answer cannot be sent.
 
     Split out of the handler so it is testable: this is the half that actually
-    broke on ironmemo, and a closure inside an asyncio callback is not
+    broke on a client stand, and a closure inside an asyncio callback is not
     something a test can reach.
 
     ``max_payload`` of 0 means "the broker announced no limit" — pass the data
@@ -117,7 +117,7 @@ class Command(BaseCommand):
             callback. The function had already run; the result was simply
             dropped, nothing reached the caller, and it sat until its timeout
             and reported a generic failure. The only line naming the real cause
-            was in THIS process's log, on another host. Measured on ironmemo
+            was in THIS process's log, on another host. Measured on a client stand
             (2026-08-06): llm.complete over a meeting transcript, upload path.
 
             So: check the size ourselves and send a small, structured marker the

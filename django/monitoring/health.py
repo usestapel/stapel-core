@@ -50,7 +50,7 @@ def register_dependency_check(name, probe, *, critical=False):
     Register an outbound-dependency probe surfaced on ``/api/health/`` and
     ``/api/metrics/`` (docs/pending/env-address-class-v2.md §3.6).
 
-    Motivating incident: meettoday's host-kick and room-PIN endpoints wrapped
+    Motivating incident: a client's host-kick and room-PIN endpoints wrapped
     every LiveKit twirp call in ``try/except`` + ``logger.warning`` (best
     effort, so an unreachable LiveKit never breaks the caller) — and then
     silently did nothing in production for as long as LiveKit was
@@ -282,7 +282,7 @@ def prometheus_metrics(request):
 
     # Registered dependency checks (register_dependency_check) — one gauge
     # per dependency so an unreachable best-effort-wrapped call (the
-    # meettoday LiveKit twirp incident: kick/PIN silently no-op'd in prod)
+    # client LiveKit twirp incident: kick/PIN silently no-op'd in prod)
     # lights up in monitoring instead of nowhere.
     #
     # Two series, because there are three states. `dependency_probe_ok` is

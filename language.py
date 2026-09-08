@@ -27,7 +27,7 @@ collapsing the two removes the ability to express that.
 Ported from the marketplace codebase, where this was in service for years
 and then quietly failed to make the trip into the framework — with the
 result that stapel_notifications resolved every anonymous notification to
-a hardcoded "en" (found live by meettoday, 2026-07-28: OTP codes arrived
+a hardcoded "en" (found live by a client, 2026-07-28: OTP codes arrived
 in English regardless of locale).
 
 Two things were fixed in the move rather than carried over:

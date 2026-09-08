@@ -83,7 +83,7 @@ def test_health_check_degraded_on_db_error(rf, monkeypatch):
 
 # ---------------------------------------------------------------------------
 # register_dependency_check (docs/pending/env-address-class-v2.md §3.6) —
-# the "meettoday LiveKit twirp call silently no-op'd in prod" lamp.
+# the "client LiveKit twirp call silently no-op'd in prod" lamp.
 # ---------------------------------------------------------------------------
 
 

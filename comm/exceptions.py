@@ -29,7 +29,7 @@ class FunctionPayloadTooLarge(FunctionCallError):
     and reported a generic failure. The work was done, the answer thrown away,
     and the log line naming the real cause lived on the other host.
 
-    Measured on ironmemo (2026-08-06): ``llm.complete`` over a meeting
+    Measured on a client stand (2026-08-06): ``llm.complete`` over a meeting
     transcript, upload path, exactly this shape.
 
     A function is a request/response seam, not a file transfer. If a payload

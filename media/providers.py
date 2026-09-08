@@ -63,7 +63,7 @@ class PilRenderMetadataProvider:
         storage = self.storage
         # `exists()` is NOT a guard that the ref names a readable image — it
         # answers True for a DIRECTORY on FileSystemStorage. That is exactly
-        # how the meettoday sandbox got `IsADirectoryError` out of this
+        # how a client sandbox got `IsADirectoryError` out of this
         # method: a stapel-cdn ref (a directory holding the variant ladder)
         # mis-tagged `file` sailed past this check and blew up on `open()`.
         # So the guard is the OPEN, not the stat: anything that cannot be

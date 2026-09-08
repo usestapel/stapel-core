@@ -1,6 +1,6 @@
 """Pre-upgrade check: does THIS deployment match what the code expects?
 
-Every failure of the ironmemo stand upgrade (2026-07-25/26) was the same
+Every failure of a client stand upgrade (2026-07-25/26) was the same
 shape — a library arrived carrying an implicit requirement about the
 deployment it lands in, nothing declared it, and it was discovered by
 crashing in production:
@@ -288,7 +288,7 @@ def check_peer_internal_routes() -> list[Finding]:
     # directly and this HTTP client is never called — so probing a peer URL
     # (which defaults to a service hostname that exists only in a
     # microservice compose) reports a broken peer that nothing talks to.
-    # Found on meettoday, 2026-07-26: W002 fired against
+    # Found on a client stand, 2026-07-26: W002 fired against
     # `http://stapel-workspaces:8000` in a monolith whose workspaces app is
     # local. A check that warns about a topology it never established is the
     # same defect it exists to catch.

@@ -1,6 +1,6 @@
 """Two threads may enter any package's import graph at once.
 
-Context (ironmemo stand, 2026-07-26): a service answered 502 after every
+Context (a client stand, 2026-07-26): a service answered 502 after every
 deploy until someone restarted it, and the cause was diagnosed as an
 import-lock inversion specific to Python 3.14 — a package body doing
 ``from .base import X`` holds lock(pkg) while taking lock(pkg.base), while a

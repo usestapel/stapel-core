@@ -68,7 +68,7 @@ TASK_FAILED = "task.failed"
 #
 # `bus_dlq_total` is reused for the give-up rather than a fourth
 # task-specific counter: a deployment already alerts on it (it is the
-# metric the ironmemo outage produced), and "work this system gave up on"
+# metric a client outage produced), and "work this system gave up on"
 # is one question whether the work was an Action or a Task. The topic label
 # is `task.<kind>` so the two producers stay separable in a query.
 TASK_STARTED_METRIC = "comm_task_started_total"

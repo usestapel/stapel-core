@@ -117,8 +117,8 @@ def test_retry_is_counted_separately_from_failure(recorded):
 def test_giving_up_counts_the_reason_and_reaches_the_dlq_series(recorded):
     """The give-up lands in `bus_dlq_total` as well as its own counter.
 
-    A deployment already alerts on that series — it is the metric the
-    ironmemo dropped-login-codes outage produced — and "work this system
+    A deployment already alerts on that series — it is the metric a
+    client dropped-login-codes outage produced — and "work this system
     gave up on" is one question whether the work was an Action or a Task.
     """
     register_task("metric.broken", lambda p: (_ for _ in ()).throw(RuntimeError("x")))

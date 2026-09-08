@@ -8,8 +8,8 @@ migrated before 0.8.0 records those rows under the old app label, so this
 app arrives looking unapplied and a plain ``CreateModel`` walks straight
 into `relation "stapel_tasks_taskrecord" already exists` — every upgrade
 of a pre-0.8.0 deployment dies inside `manage.py migrate`, while fresh
-installs are fine (which is exactly why it stayed invisible until the
-ironmemo stand upgraded, 2026-07-25).
+installs are fine (which is exactly why it stayed invisible until a
+client stand upgraded, 2026-07-25).
 
 ``replaces = [("stapel_tasks", …)]`` is NOT usable here: the old label now
 belongs to a different, real app, and claiming its migrations would

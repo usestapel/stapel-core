@@ -1,8 +1,8 @@
 """`manage.py stapel_preflight` — ask the deployment questions BEFORE
 touching it.
 
-Each check here exists because the corresponding failure took down the
-ironmemo stand on 2026-07-25/26, and in every case the information needed
+Each check here exists because the corresponding failure took down a
+client stand on 2026-07-25/26, and in every case the information needed
 to predict it was already sitting in the settings or the database.
 """
 import json
@@ -233,7 +233,7 @@ class TestPeerInternalRoutes:
     def test_a_monolith_is_not_probed_over_http_at_all(self, monkeypatch):
         """With workspaces installed locally, membership never leaves the process.
 
-        meettoday, 2026-07-26: this check warned that
+        A client stand, 2026-07-26: this check warned that
         `http://stapel-workspaces:8000` was unreachable in a monolith whose
         workspaces app is installed and whose hosts import
         `stapel_workspaces.permissions.require_role` directly. The peer URL

@@ -1,6 +1,6 @@
 """A Kafka consumer provisions the topics it subscribes to.
 
-Owner-reported, 2026-07-26, on the ironmemo stand:
+Owner-reported, 2026-07-26, on a client stand:
 
     ERROR stapel_core.bus.backends.kafka: KafkaBus consumer error:
     KafkaError{code=UNKNOWN_TOPIC_OR_PART,...,str="Subscribed topic not

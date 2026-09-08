@@ -3,7 +3,7 @@ that keeps them true.
 
 A posture is the handful of settings that decide *what kind of installation
 this is*: does a person off the street get an account, and does that account
-get a mandate. Until now the fleet had no artifact for it. meettoday's stand
+get a mandate. Until now the fleet had no artifact for it. A client's stand
 carried its posture as a bespoke settings tier — sixty-five lines of product
 code that re-read the mock-OTP flags from the environment, defaulting them
 **on**, over a production layer that pinned them off, and silenced the two
@@ -201,7 +201,7 @@ def _private_spec(*, door: str = "invite_only") -> dict[str, dict[str, PresetVal
         ),
     }
     # The requests door opens ONE method, explicitly, in the returned values —
-    # so "meettoday lets anyone register" is a line in the deployment's
+    # so "this deployment lets anyone register" is a line in the deployment's
     # settings rather than a default nobody chose.
     spec["STAPEL_AUTH"].update(_registration(
         EMAIL=(door == "requests"),

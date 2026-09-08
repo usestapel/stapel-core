@@ -5,7 +5,7 @@ database while every endpoint it had reported healthy. Nothing in the process
 ever asked the question, so nothing could answer it. This module asks it once
 per scrape and puts the answer where an operator already looks.
 
-Lifted from a product-local copy (ironmemo's ``iron-*/core/schema_health.py``,
+Lifted from a product-local copy (a client's per-service ``core/schema_health.py``,
 duplicated per service because there was no shared package to import from).
 "Is my schema at head" is not product knowledge; it is the same question in
 every Django service, so it lives here and a product deletes its copy on the

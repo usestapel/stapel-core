@@ -49,7 +49,7 @@ class BaseBusConsumerCommand(BaseCommand):
         # and a container restart policy turns that into an infinite silent
         # loop. Core 0.11.0 flipped the default from Kafka to MemoryBus, and
         # every deployment that did not then set STAPEL_BUS_BACKEND got
-        # exactly that — no error, no events, just restarts (ironmemo stand,
+        # exactly that — no error, no events, just restarts (a client stand,
         # weeks). Refuse loudly instead.
         if getattr(bus, "in_process", False) and not options.get("allow_in_process"):
             raise CommandError(

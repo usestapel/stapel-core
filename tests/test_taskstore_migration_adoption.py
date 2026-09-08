@@ -6,7 +6,7 @@ but the migration STATE stayed under the old label. On every deployment
 that had already migrated before 0.8.0, the "new" app looked unapplied and
 a plain CreateModel hit `relation "stapel_tasks_taskrecord" already
 exists`, killing `manage.py migrate` at boot. Fresh installs were fine,
-which is why it stayed invisible until a real upgrade (ironmemo stand,
+which is why it stayed invisible until a real upgrade (a client stand,
 2026-07-25).
 
 These tests exercise both paths through the executor, on the real

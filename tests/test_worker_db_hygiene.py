@@ -1,6 +1,6 @@
 """A long-lived worker must start each unit of work on a live connection.
 
-ironmemo, 2026-08-26 21:58 UTC → 2026-08-28: the notifications consumer had
+A client stand, 2026-08-26 21:58 UTC → 2026-08-28: the notifications consumer had
 been "Up 3 days" and had delivered nothing for 46 hours. Every event since
 that timestamp failed with::
 
