@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.61.2] — 2026-09-09
+
+### A service's Celery worker must consume its own queue, and boot smoke says so
+
+A stapel fleet shares one broker and isolates work by queue: each service gets
+its own Celery app (`Celery("<slug>")`) and its own `CELERY_TASK_DEFAULT_QUEUE`,
+a bare `celery -A config worker` consumes exactly that queue, and the service's
+beat publishes onto it. No routing table is needed and none exists. The whole
+arrangement rests on the two names agreeing, and nothing checked that they did.
+
+Measured on a client stand, 2026-09-08: one service's settings carried a
+neighbour's queue name — one word, copied along with the settings file — and
+every consequence was silent to everyone except whoever opened a log.
+
+* Its beat published ~360 sweeps an hour onto the neighbour's queue.
+* Both workers consumed that queue, so ~63% of the sweeps reached the worker
+  with no such task registered: **226 tracebacks an hour**, and the task ran at
+  **37% of its schedule** while reporting nothing wrong.
+* Worse, and invisible: a task **both** services register — this library's own
+  `stapel_core.django.taskstore.sweep_tasks` — was executed by the wrong
+  process against the wrong database. In that hour the neighbour's task store
+  was swept sixty times by a schedule it does not own, and the publishing
+  service's own store was not swept once. No traceback, no metric, no 5xx.
+
+Fixing the one word repairs a deployment; it does not close the class, because
+the next copied settings file reopens it. New system check, tag
+`stapel_celery` (`django/celery_checks.py`):
+
+* **E001** — the default queue names a different app than the Celery app does.
+  E-level deliberately: the damage is silent by construction (a worker running
+  a neighbour's task against its own database is a correct-looking process), so
+  a warning would join the noise it exists to interrupt, which is how this
+  survived. A deployment that really does route one app's work onto another
+  queue puts `stapel_core.celery.E001` in `SILENCED_SYSTEM_CHECKS`.
+* **W002** — the queue is still Celery's own `"celery"`, which every service
+  that never set one shares. W-level: a single-service deployment with a broker
+  of its own is entitled to the default.
+
+Hyphen and underscore are folded before comparing: `stapel-tools` renders the
+app name from the module (`classified_core`) and the queue from the slug
+(`classified-core`), so every generated multiword service differs by exactly
+that character. Reports nothing when celery is not installed, and nothing when
+no project app is bound — reading a queue off Celery's module-level default app
+would report the library's default as the service's own choice.
+
 ## [0.61.1] — 2026-09-08
 
 ### A host that never wired the exception handler is no longer silent

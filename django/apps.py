@@ -147,6 +147,13 @@ class CommonDjangoConfig(AppConfig):
         # no cdn.* comm route is wired at all — the "half the stack is
         # modular, half isn't" design gap (cdn-modularity.md §0.1/§0.5).
         from stapel_core.django.cdn import checks as _cdn_checks  # noqa: F401
+        # Celery queue-ownership check (stapel_core.django.celery_checks):
+        # E-level when this service's default queue names a different app than
+        # its Celery app does. Fleets share one broker and isolate work by
+        # queue; a copied settings file breaks that silently — the neighbour's
+        # worker refuses tasks it has no code for, and runs the ones it DOES
+        # share against its own database.
+        from stapel_core.django import celery_checks as _celery_checks  # noqa: F401
         # Check-silencing guard (stapel_core.django.check_guard): E-level when
         # a blanket SILENCED_SYSTEM_CHECKS line mutes a check a library
         # declares security-critical, W-level listing everything else it
