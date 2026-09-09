@@ -304,20 +304,32 @@ class CommonDjangoConfig(AppConfig):
 
             setup_admin_visibility()
 
-        # DRF caches api_settings on first access. If any module (e.g. drf-spectacular)
-        # triggers that access before Django settings are fully loaded, the cache will
-        # contain DRF defaults instead of our REST_FRAMEWORK config. Force a full reload
-        # now that Django is ready and all settings are available.
-        # Also patch APIView.authentication_classes — it's set at class-definition time
-        # from the cached (stale) api_settings value, so we must update it too.
+        # DRF binds settings onto class attributes in its class bodies, once,
+        # at import time — and a settings module that imports this package
+        # before it defines REST_FRAMEWORK makes every one of those binds read
+        # DRF's defaults. rebind_api_settings() reloads api_settings and writes
+        # the deployment's values back onto every such attribute of every DRF
+        # module already imported; the set is DERIVED from the installed DRF's
+        # source, so a DRF upgrade that adds one is covered without a release
+        # here. Two attributes used to be repaired by hand and the other
+        # twenty-one were silently inert.
+        from stapel_core.django.drf_rebind import rebind_api_settings
+
         try:
-            from rest_framework.settings import api_settings
-            from rest_framework.views import APIView
-            api_settings.reload()
-            APIView.authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES
-            APIView.permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES
-        except Exception:
-            pass
+            rebind_api_settings()
+        except Exception:  # never let a repair take the boot down
+            import logging
+            logging.getLogger(__name__).exception(
+                "rebind_api_settings() failed; REST_FRAMEWORK keys may be "
+                "inert — check stapel_core.drf_settings.E001."
+            )
+        # The loud half (stapel_core.django.drf_rebind_checks): E-level when a
+        # DRF class attribute still disagrees with the REST_FRAMEWORK value
+        # this deployment configured, whatever the reason. Checks the outcome,
+        # so it cannot be satisfied by the repair above merely running.
+        from stapel_core.django import (  # noqa: F401
+            drf_rebind_checks as _drf_rebind_checks,
+        )
 
         # Auto-load Staff group fixture if enabled
         auto_load = getattr(settings, 'STAFF_GROUP_AUTO_LOAD', False)

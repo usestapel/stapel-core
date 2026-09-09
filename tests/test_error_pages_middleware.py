@@ -80,3 +80,28 @@ class TestPrefixConfigRespectedEndToEnd:
 
 def test_handled_statuses_are_exactly_404_and_405():
     assert set(HANDLED_STATUSES) == {404, 405}
+
+
+class TestErrorLanguageOfTheEnvelope:
+    """The live shape (meettoday sandbox, 2026-09-09).
+
+    ``GET /auth/api/v1/register/`` on a service whose active locale is ``ru``
+    answered an English sentence labelled ``"error_language": "ru"``. The
+    label is what @stapel/core 0.26.1 gates on before printing ``error`` to a
+    user, so a Russian speaker was shown English as though it were Russian.
+    Fails on the code before 0.62.0.
+    """
+
+    @override_settings(ROOT_URLCONF=URLS, MIDDLEWARE=MIDDLEWARE, LANGUAGE_CODE="ru")
+    def test_an_unknown_api_path_does_not_claim_the_request_locale(self):
+        from django.utils.translation import override
+
+        with override("ru"):
+            response = Client().get("/search/api/v1/does-not-exist/")
+
+        body = response.json()
+        assert response.status_code == 404
+        assert body["localizable_error"] == "error.404.not_found"
+        assert body["error"] == "Requested resource not found"  # English
+        assert body["error_language"] != "ru"
+        assert body["error_language"] == "en"

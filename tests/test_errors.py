@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.test import override_settings
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import (
     APIException,
@@ -14,6 +15,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.test import APIRequestFactory, force_authenticate
 from stapel_core.django.api.errors import (
+    COMMON_ERRORS,
     ERR_400_BAD_REQUEST,
     ERR_401_UNAUTHORIZED,
     ERR_403_FORBIDDEN,
@@ -23,6 +25,7 @@ from stapel_core.django.api.errors import (
     ERR_429_TOO_MANY_REQUESTS,
     ERR_500_INTERNAL,
     REMEDIATION_VOCAB,
+    StapelError,
     StapelErrorResponse,
     StapelResponse,
     StapelServiceError,
@@ -272,37 +275,66 @@ class TestError429RateLimit:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def registry_sandbox():
+    """Register error keys and take them back out again.
+
+    The registry is process-global by design, so a test that adds a key must
+    remove it or every later test sees it — including build_error_registry's
+    drift gate.
+    """
+    from stapel_core.django.api import errors as errors_module
+
+    added: list = []
+
+    def _register(mapping, **kwargs):
+        added.extend(mapping)
+        register_service_errors(mapping, **kwargs)
+
+    yield _register
+
+    for code in added:
+        errors_module._GLOBAL_REGISTRY.pop(code, None)
+        errors_module._LANGUAGE_REGISTRY.pop(code, None)
+        errors_module._OWNER_REGISTRY.pop(code, None)
+
+
 class TestErrorLanguage:
-    """error_language: which locale `error` (the fallback/debug message) was
-    rendered in — canon stays client-side translation by
-    localizable_error+params; the client needs to know whether `error` is
-    safe to show verbatim (see StapelError docstring)."""
+    """error_language labels the LANGUAGE THE `error` STRING IS IN.
 
-    def test_default_matches_active_language(self):
-        from django.utils.translation import get_language
+    A client (@stapel/core 0.26.1) compares it to the UI locale with `===`
+    and prints `error` verbatim on a match, so a wrong label is the trigger,
+    not a cosmetic detail. Until 0.62.0 the field defaulted to the active
+    locale at dataclass construction, which labelled the registry's plain
+    English templates as the language of whoever asked.
+    """
 
-        resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
-        assert resp.data["error_language"] == (get_language() or "")
-
-    def test_follows_active_translation_override(self):
+    def test_a_registry_template_is_not_claimed_to_be_the_request_locale(self):
+        """The live defect (meettoday sandbox, 2026-09-09): a service whose
+        active locale is `ru` answered an English registry sentence labelled
+        `"error_language": "ru"`. Fails on the code before this release."""
         from django.utils.translation import override
 
         with override("ru"):
-            resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
-            assert resp.data["error_language"] == "ru"
+            resp = StapelErrorResponse(404, ERR_404_NOT_FOUND)
+
+        assert resp.data["error"] == "Requested resource not found"  # English
+        assert resp.data["error_language"] != "ru"
+        assert resp.data["error_language"] == "en"
+
+    def test_a_registry_template_is_the_same_language_in_every_locale(self):
+        from django.utils.translation import override
+
+        with override("ru"):
+            ru = StapelErrorResponse(400, ERR_400_BAD_REQUEST).data
         with override("en"):
-            resp = StapelErrorResponse(400, ERR_400_BAD_REQUEST)
-            assert resp.data["error_language"] == "en"
+            en = StapelErrorResponse(400, ERR_400_BAD_REQUEST).data
+        assert ru["error"] == en["error"]
+        assert ru["error_language"] == en["error_language"] == "en"
 
-    def test_present_on_exception_handler_django_validation_tier(self):
-        from django.utils.translation import override
-
-        with override("ru"):
-            exc = DjangoValidationError({"name": ["This field is required."]})
-            resp = stapel_exception_handler(exc, _ctx())
-            assert resp.data["error_language"] == "ru"
-
-    def test_present_on_exception_handler_drf_validation_tier(self):
+    def test_the_tier_gettext_really_translates_keeps_the_active_locale(self):
+        """str(detail) over DRF's gettext_lazy messages IS in the request's
+        locale — the one tier for which the old default was right."""
         from django.utils.translation import override
 
         with override("ru"):
@@ -310,13 +342,87 @@ class TestErrorLanguage:
             resp = stapel_exception_handler(exc, _ctx())
             assert resp.data["error_language"] == "ru"
 
-    def test_present_on_service_error_tier(self):
+    def test_django_validation_tier_keeps_the_active_locale(self):
+        from django.utils.translation import override
+
+        with override("ru"):
+            exc = DjangoValidationError({"name": ["This field is required."]})
+            resp = stapel_exception_handler(exc, _ctx())
+            assert resp.data["error_language"] == "ru"
+
+    def test_service_error_tier_is_registry_sourced(self):
         from django.utils.translation import override
 
         with override("ru"):
             exc = StapelServiceError(403, ERR_403_FORBIDDEN)
             resp = stapel_exception_handler(exc, _ctx())
-            assert resp.data["error_language"] == "ru"
+            assert resp.data["error"] == COMMON_ERRORS[ERR_403_FORBIDDEN]
+            assert resp.data["error_language"] == "en"
+
+    def test_drf_refusal_tier_is_registry_sourced(self):
+        """Tier 4 re-dresses DRF's body through the registry, so the sentence
+        the client sees is core's English one and must be labelled as such."""
+        from django.utils.translation import override
+
+        with override("ru"):
+            resp = stapel_exception_handler(NotAuthenticated(), _ctx())
+        assert resp.data["localizable_error"] == ERR_401_UNAUTHORIZED
+        assert resp.data["error_language"] == "en"
+
+    def test_an_unregistered_key_claims_no_language(self):
+        """`error` is then the key itself, which is not a sentence at all."""
+        resp = StapelErrorResponse(400, "error.400.nobody.registered.this")
+        assert resp.data["error"] == "error.400.nobody.registered.this"
+        assert resp.data["error_language"] == ""
+
+    def test_a_host_declares_the_language_it_wrote_its_templates_in(
+        self, registry_sandbox
+    ):
+        from django.utils.translation import override
+
+        registry_sandbox({"error.400.po_russki": "Неверный запрос"}, language="ru")
+        with override("en"):
+            resp = StapelErrorResponse(400, "error.400.po_russki")
+        assert resp.data["error_language"] == "ru"
+
+    def test_an_undeclared_host_key_claims_nothing_by_default(
+        self, registry_sandbox
+    ):
+        """Fail closed where the library cannot know: no declaration, no claim,
+        so the client translates from localizable_error+params."""
+        registry_sandbox({"error.400.undeclared": "Something a host wrote"})
+        resp = StapelErrorResponse(400, "error.400.undeclared")
+        assert resp.data["error_language"] == ""
+
+    @override_settings(STAPEL_CORE={"ERROR_REGISTRY_LANGUAGE": "en"})
+    def test_the_deployment_can_say_what_undeclared_means(self, registry_sandbox):
+        """Shape (A): assume undeclared templates are English. A declaration
+        still wins over the assumption."""
+        registry_sandbox({"error.400.undeclared_a": "Something a host wrote"})
+        registry_sandbox({"error.400.declared_a": "Неверный запрос"}, language="ru")
+        assert StapelErrorResponse(400, "error.400.undeclared_a").data[
+            "error_language"
+        ] == "en"
+        assert StapelErrorResponse(400, "error.400.declared_a").data[
+            "error_language"
+        ] == "ru"
+
+    @override_settings(STAPEL_CORE={"ERROR_REGISTRY_LANGUAGE": ""})
+    def test_the_deployment_can_fail_closed_for_everything(self, registry_sandbox):
+        """Shape (B): no client ever prints a registry sentence verbatim —
+        core's own keys and declared host keys included."""
+        registry_sandbox({"error.400.declared_b": "Неверный запрос"}, language="ru")
+        assert StapelErrorResponse(404, ERR_404_NOT_FOUND).data["error_language"] == ""
+        assert StapelErrorResponse(400, "error.400.declared_b").data[
+            "error_language"
+        ] == ""
+
+    def test_a_construction_site_that_says_nothing_claims_nothing(self):
+        """The root cause was a request-derived default on the dataclass."""
+        from django.utils.translation import override
+
+        with override("ru"):
+            assert StapelError(localizable_error="x", error="y").error_language == ""
 
 
 class TestIronExceptionHandler:

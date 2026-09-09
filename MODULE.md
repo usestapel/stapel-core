@@ -1018,6 +1018,54 @@ the fork-free override seam (i18n-shipping.md §3); it is pinned by
 check. A localized override lives in a catalog instead (see i18n below); either
 kind MUST preserve the canon `{placeholders}` — the gate enforces it.
 
+### What language is `error` in? — `STAPEL_CORE["ERROR_REGISTRY_LANGUAGE"]`
+
+Every envelope carries `error_language` next to `error`, and it is not
+decoration: `@stapel/core` 0.26.1 compares it to the UI locale with `===` and
+prints `error` to the user verbatim on a match. The label is the trigger, so a
+wrong one is a user-visible defect.
+
+Until 0.62.0 the field defaulted, at dataclass construction, to the request's
+**active Django locale**. That is right for exactly one tier — the DRF /
+Django-`ValidationError` fallback, whose message is `str(detail)` over
+`gettext_lazy` strings that really are rendered per request. It is wrong for
+the tier used most: a registry template is a plain Python string that nothing
+translates, so on a service running `ru` an English sentence went out labelled
+`"error_language": "ru"` (measured on a client stand, 2026-09-09:
+`{"localizable_error": "error.404.not_found", "error": "Not found.",
+"error_language": "ru"}`). A fleet whose services all answer `en-us` never saw
+it; the first deployment to set a locale would have seen it everywhere at once.
+
+Since 0.62.0 the label is **derived where the string is produced**, and
+`StapelError.error_language` has no request-derived default at all — a
+construction site that says nothing says `""` ("unknown"), which drives the
+client back to translating `localizable_error` + `params`.
+
+* registry-sourced (`StapelErrorResponse`, every `error_4xx_*` helper, the
+  `ApiErrorPagesMiddleware` envelope and DRF-refusal tier 4) →
+  `registry_language(code)`;
+* the two `ValidationError` tiers → the active locale, as before.
+
+`registry_language` answers per key. Core's own `COMMON_ERRORS` declare
+`"en"` — a fact about strings in this repo, and the same one `errors.json`
+already states by naming the template field `en`. A host says so for its own:
+
+```python
+register_service_errors({"error.400.po_russki": "Неверный запрос"}, language="ru")
+```
+
+**The fork, and it is one line.** What an *undeclared* template is labelled is
+`STAPEL_CORE["ERROR_REGISTRY_LANGUAGE"]`:
+
+| value | shape | cost |
+|---|---|---|
+| unset (`None`, default) | per key: the declared language, `""` where nobody declared | none — it never states anything untrue, but a host that registers templates without declaring gets no verbatim fallback |
+| `""` | fail closed everywhere, declarations and core's keys included; no client ever prints a registry sentence | loses the verbatim fallback even where the label would have been correct |
+| `"en"` (or any tag) | assume undeclared templates are written in that language; declarations still win | a host that registers another language without declaring it is mislabelled again |
+
+`error_languages()` is the inventory: the codes missing from it are exactly
+the ones whose `error` no client will print.
+
 ### JSON error pages for API prefixes — `STAPEL_CORE` (`django/api/error_pages.py`)
 
 `ApiErrorPagesMiddleware` answers an unknown path or wrong method under a
@@ -1087,6 +1135,61 @@ intercepts a refusal this handler owns (stapel-cdn 0.20.0 was exactly that —
 its describe view converted `Throttled` itself and answered a wait one second
 off the `Retry-After` on the same response). Converting a module's **own**
 exception type there stays legitimate and is not reported.
+
+### A `REST_FRAMEWORK` key must actually be in force — `stapel_drf_settings` (`django/drf_rebind.py`)
+
+DRF reads its policy defaults **in its class bodies**, once, at import time:
+
+```python
+class APIView(View):
+    renderer_classes = api_settings.DEFAULT_RENDERER_CLASSES
+    ...
+    metadata_class = api_settings.DEFAULT_METADATA_CLASS
+```
+
+A project on this core imports DRF *from inside its settings module* —
+`config/settings/base.py` does `import stapel_core.django`, which reaches
+`rest_framework.views` through the OpenAPI seam — and it does so **above** its
+own `REST_FRAMEWORK = {...}`. At that moment Django is reading a half-built
+`Settings` object (setting `_wrapped` only after the module finishes, so an
+access from inside it re-enters `_setup()` and sees the attributes defined so
+far), the key does not exist yet, and DRF binds its own defaults. The
+deployment then sets the key and gets no error, no warning and no effect.
+
+`CommonDjangoConfig.ready()` used to rewrite two of those attributes by hand,
+`authentication_classes` and `permission_classes`. DRF 3.17 binds **twenty-four**
+— eight on `APIView`, `filter_backends` and `pagination_class` on
+`GenericAPIView` (that one silently turns a deployment's pagination off),
+`DEFAULT_THROTTLE_RATES` on `SimpleRateThrottle` (a rate limit configured and
+not applied), `PAGE_SIZE` on three paginators, and the filter/versioning/JSON
+flags. The other twenty-two were inert.
+
+`rebind_api_settings()` writes the live `api_settings` value back onto every
+one of them, in every DRF module already imported. **The set is derived from
+the installed DRF's source** (`derive_binds()`, an AST read of each imported
+`rest_framework.*` module), not hand-listed, so a DRF upgrade that adds an
+attribute is covered the day it is installed. `DECLARED_BINDS` is the floor for
+a source-stripped install, and `tests/test_drf_rebind.py` asserts the two
+agree — a DRF that adds a bind turns this repo red rather than a client's
+setting quiet. A module nobody imported is left alone: it binds correctly on
+its own later.
+
+The loud half is `stapel_drf_settings` (`django/drf_rebind_checks.py`), which
+checks the **outcome**, not the repair — every derived bind is compared against
+the live `api_settings` value after boot:
+
+* **E001** — a class attribute does not hold the configured value, naming the
+  class, the attribute, the `REST_FRAMEWORK` key and both values. Error: the
+  whole symptom is silence (the setting reads back correctly from
+  `settings.REST_FRAMEWORK`, `api_settings` agrees with it, and the only thing
+  that disagrees is the class every view inherits from). A deployment that
+  really does patch a DRF class attribute past its own setting silences
+  `stapel_core.drf_settings.E001`.
+* **E002** — a `REST_FRAMEWORK` import string that does not resolve. DRF
+  imports those lazily, so without this the deployment boots green and raises
+  inside the first request that touches the policy.
+* **W001** — an imported DRF module whose source cannot be read, so coverage
+  of it fell back to the declared floor.
 
 ### OpenAPI hooks (`django/openapi/`)
 

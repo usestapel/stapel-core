@@ -17,6 +17,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from stapel_core.conf import AppSettings
 from stapel_core.django.api.permissions import IsServiceRequest, IsStaffUser
 from stapel_core.django.api.serializers import StapelDataclassSerializer
 
@@ -102,6 +103,63 @@ COMMON_ERRORS = {
 # =============================================================================
 
 _GLOBAL_REGISTRY = dict(COMMON_ERRORS)
+
+# =============================================================================
+# What language a registry template is written in
+# =============================================================================
+#
+# ``error`` is a fallback/debug sentence and ``error_language`` is the label a
+# client gates on before printing it verbatim (@stapel/core 0.26.1 compares it
+# to the UI locale with ``===`` and prints on a match). A wrong label is
+# therefore not cosmetic — it is the trigger.
+#
+# Registry templates are plain Python strings: nothing translates them, so a
+# registry-sourced ``error`` is in whatever language it was WRITTEN in, which
+# has nothing to do with the locale of the request that produced it. Labelling
+# it with the active locale — what this library did until 0.62.0 — states, of
+# a sentence like "Requested resource not found", that it is Russian.
+#
+# So the label is a property of the TEMPLATE, declared where the template is
+# registered, and never guessed from the request.
+
+#: The language core's own :data:`COMMON_ERRORS` are written in. A fact about
+#: strings in this file, not an assumption about anyone else's — and the same
+#: fact ``errors.json`` already states by naming the template field ``en``.
+CORE_TEMPLATE_LANGUAGE = "en"
+
+#: ``code -> BCP-47-ish language tag`` for every key whose registrant said so.
+_LANGUAGE_REGISTRY: Dict[str, str] = {}
+
+#: "Nobody declared a language for this key." Distinct from ``""``, which is
+#: the deliberate "unknown — do not trust ``error``".
+_UNDECLARED = None
+
+core_error_settings = AppSettings(
+    "STAPEL_CORE",
+    defaults={
+        # What an UNDECLARED registry template's language is. Three states,
+        # each one line in a settings module:
+        #
+        #   None (default)  per-key: a template's declared language, and ""
+        #                   for one nobody declared. Never states anything
+        #                   untrue, and core's own keys stay honestly "en".
+        #   ""              fail closed everywhere: every registry-sourced
+        #                   error is labelled unknown, declarations included,
+        #                   so no client ever prints a registry sentence
+        #                   verbatim and all of them translate from
+        #                   localizable_error+params — the canon anyway. Costs
+        #                   the verbatim fallback even where it was correct.
+        #   "<tag>"         assume undeclared templates are written in <tag>
+        #                   (e.g. "en", which is what registering under a
+        #                   field named `en` already claims). Declarations
+        #                   still win. Costs a wrong label for any host that
+        #                   registers another language without declaring it.
+        "ERROR_REGISTRY_LANGUAGE": _UNDECLARED,
+    },
+    # A stray STAPEL_CORE_ERROR_REGISTRY_LANGUAGE in the environment must not
+    # decide whether clients print server sentences to users.
+    no_env=("ERROR_REGISTRY_LANGUAGE",),
+)
 
 # =============================================================================
 # Remediation registry (machine-readable "what to do" hints)
@@ -190,6 +248,7 @@ def register_service_errors(
     errors: dict,
     remediation: Optional[dict] = None,
     owner: Optional[str] = None,
+    language: Optional[str] = None,
 ):
     """Register service-specific errors into the global registry.
 
@@ -204,8 +263,20 @@ def register_service_errors(
     top-level package and recorded only for keys nobody owns yet, so
     re-registering another package's key overrides its text without taking
     over its catalog obligation. Pass it explicitly to claim a key outright.
+
+    ``language`` names the language these templates are WRITTEN in (``"en"``,
+    ``"ru"``, …). It becomes the ``error_language`` of every response built
+    from them — the label a client gates on before printing ``error``
+    verbatim — so it is a statement about the strings in ``errors``, never
+    about the locale of a request. Left unset, the keys carry whatever
+    ``STAPEL_CORE["ERROR_REGISTRY_LANGUAGE"]`` says undeclared means, which
+    defaults to "unknown" and keeps clients translating from
+    ``localizable_error``+``params``.
     """
     _GLOBAL_REGISTRY.update(errors)
+    if language is not None:
+        for code in errors:
+            _LANGUAGE_REGISTRY[code] = language
     claimed = owner or _infer_owner()
     if claimed:
         for code in errors:
@@ -230,11 +301,44 @@ def register_service_errors(
 # `register_service_errors` — claim them for core explicitly so ownership does
 # not depend on which module happens to import first.
 _OWNER_REGISTRY.update({code: CORE_OWNER for code in COMMON_ERRORS})
+_LANGUAGE_REGISTRY.update({code: CORE_TEMPLATE_LANGUAGE for code in COMMON_ERRORS})
 
 
 def error_owners() -> Dict[str, str]:
     """``{code: owning package}`` for every key whose owner is known."""
     return dict(_OWNER_REGISTRY)
+
+
+def error_languages() -> Dict[str, str]:
+    """``{code: declared template language}`` for every key that declared one.
+
+    A key absent here has no declaration; what it is labelled with then is
+    ``STAPEL_CORE["ERROR_REGISTRY_LANGUAGE"]`` (see
+    :func:`registry_language`). Useful as an inventory: the codes missing from
+    this map are exactly the ones whose ``error`` string no client will print.
+    """
+    return dict(_LANGUAGE_REGISTRY)
+
+
+def registry_language(code: str) -> str:
+    """The language the registry template for *code* is written in.
+
+    ``""`` means "unknown — do not show ``error`` to a user", which is what an
+    unregistered key and an undeclared one both get by default. Never derived
+    from the request: a template is a plain string that no locale changes.
+    """
+    configured = core_error_settings.ERROR_REGISTRY_LANGUAGE
+    if configured == "":
+        # Fail closed for everything, declarations included.
+        return ""
+    if code not in _GLOBAL_REGISTRY:
+        # StapelErrorResponse renders the key itself as `error`; a key is not
+        # a sentence in any language.
+        return ""
+    declared = _LANGUAGE_REGISTRY.get(code, _UNDECLARED)
+    if declared is not _UNDECLARED:
+        return declared
+    return configured or ""
 
 
 def error_owner(code: str) -> Optional[str]:
@@ -338,18 +442,16 @@ def build_error_registry() -> list:
 
 
 def _current_error_language() -> str:
-    """The active Django locale (e.g. ``'en'``, ``'ru'``) for ``error``.
+    """The active Django locale — the label for a *translated* ``error``.
 
-    ``error`` is *not* reliably English: ``COMMON_ERRORS``/registered
-    templates are plain strings (always English), but the fallback message on
-    the DRF/Django-ValidationError tiers is ``str(detail)`` — and DRF's own
-    built-in field messages are wrapped in ``gettext_lazy``, so they render in
-    whatever locale ``LocaleMiddleware``/``Accept-Language`` activated for the
-    request. The canon stays client-side translation by
-    ``localizable_error``+``params``; ``error`` is a fallback/debug string —
-    but the client needs to know *which* language it is in before deciding
-    whether to show it verbatim or discard it, hence this field (may be
-    English even when active locale isn't, for registry-template errors).
+    Correct for exactly one tier: the DRF/Django-``ValidationError`` fallback,
+    whose message is ``str(detail)`` over messages DRF wraps in
+    ``gettext_lazy``. Those really do render in whatever locale
+    ``LocaleMiddleware``/``Accept-Language`` activated.
+
+    It is **not** correct for a registry template — see
+    :func:`registry_language`, and the module's language-registry section for
+    why one default cannot serve both tiers.
     """
     from django.utils.translation import get_language
 
@@ -366,16 +468,25 @@ class StapelError:
         error: Human-readable fallback/debug message — not reliably English,
             see error_language. Example: Requested resource not found
         params: Context values for template placeholders. Example: {"retry_after": 30}
-        error_language: Active Django locale `error` was rendered in (e.g.
-            'en', 'ru') — the client uses this to decide whether `error` is
-            safe to show verbatim or whether it must translate from
-            localizable_error+params instead. Example: en
+        error_language: The language `error` is written in (e.g. 'en', 'ru'),
+            or '' for "unknown". The client uses this to decide whether
+            `error` is safe to show verbatim or whether it must translate
+            from localizable_error+params instead. Example: en
+
+    ``error_language`` is DERIVED BY THE CALLER, at the point the ``error``
+    string is produced — :func:`registry_language` for a registry template,
+    :func:`_current_error_language` for a message gettext rendered. It has no
+    request-derived default on purpose: the field used to default to the
+    active locale, which labelled every English registry sentence as the
+    caller's language and turned a client's "safe to print" gate into the
+    thing that printed it. A construction site that says nothing now says
+    "unknown", and a client that cannot trust `error` translates the key.
     """
 
     localizable_error: str
     error: str
     params: Dict[str, Any] = field(default_factory=dict)
-    error_language: str = field(default_factory=_current_error_language)
+    error_language: str = ""
 
 
 class StapelErrorSerializer(StapelDataclassSerializer):
@@ -428,7 +539,14 @@ def StapelErrorResponse(http_status, localizable_error, params=None):
     except (KeyError, IndexError):
         error = template
 
-    data = StapelError(localizable_error=localizable_error, error=error, params=params)
+    data = StapelError(
+        localizable_error=localizable_error,
+        error=error,
+        params=params,
+        # The template's own language, not the request's. Nothing translated
+        # this string on the way here.
+        error_language=registry_language(localizable_error),
+    )
     return Response(StapelErrorSerializer(data).data, status=http_status)
 
 
@@ -910,7 +1028,14 @@ def stapel_exception_handler(exc, context):
             detail = [exc.message]
         error_key, params, fallback = _extract_first_field_error(detail)
         params["detail"] = detail
-        data = StapelError(localizable_error=error_key, error=fallback, params=params)
+        data = StapelError(
+            localizable_error=error_key,
+            error=fallback,
+            params=params,
+            # str(detail) over gettext_lazy messages: this tier really is
+            # rendered in the request's active locale.
+            error_language=_current_error_language(),
+        )
         return Response(StapelErrorSerializer(data).data, status=400)
 
     # Tier 2 & 3: DRF ValidationError — field errors or legacy raises
@@ -922,7 +1047,12 @@ def stapel_exception_handler(exc, context):
         serializer = getattr(exc, "stapel_serializer", None)
         error_key, params, fallback = _extract_first_field_error(exc.detail, serializer=serializer)
         params["detail"] = exc.detail
-        data = StapelError(localizable_error=error_key, error=fallback, params=params)
+        data = StapelError(
+            localizable_error=error_key,
+            error=fallback,
+            params=params,
+            error_language=_current_error_language(),
+        )
         return Response(StapelErrorSerializer(data).data, status=400)
 
     # Tier 4: DRF's own handler decides status, headers and rollback for

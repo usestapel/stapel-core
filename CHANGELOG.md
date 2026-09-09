@@ -1,5 +1,119 @@
 # Changelog
 
+## [0.62.0] — 2026-09-09
+
+Two defects found on one client stand (the third from the same sweep was in
+stapel-auth), both of the same family: a thing the deployment configured, or
+the API stated, that was quietly not true.
+
+### Twenty-two of the twenty-four `REST_FRAMEWORK` keys were inert
+
+DRF reads its policy defaults in its class bodies — `metadata_class =
+api_settings.DEFAULT_METADATA_CLASS` and twenty-three more — once, at import
+time. A project on this core imports DRF *from inside its settings module*
+(`config/settings/base.py` does `import stapel_core.django`, which reaches
+`rest_framework.views` through the OpenAPI seam) **above** its own
+`REST_FRAMEWORK = {...}`. Django is then reading a half-built `Settings`
+object, the key does not exist yet, and DRF binds its own defaults. The
+deployment sets the key afterwards and gets no error, no warning and no
+effect.
+
+`CommonDjangoConfig.ready()` repaired two of them by hand,
+`authentication_classes` and `permission_classes`. Everything else stayed
+stale, including `GenericAPIView.pagination_class` (a deployment that
+configured pagination got none) and `SimpleRateThrottle.THROTTLE_RATES` (a
+rate limit configured and not applied). Measured on a client stand,
+2026-09-09: a host set `DEFAULT_METADATA_CLASS` to work around a 500 on
+`OPTIONS`, the key was inert, and the workaround only worked once the project
+monkey-patched `APIView` in its own `AppConfig.ready`.
+
+* `stapel_core.django.drf_rebind.rebind_api_settings()` writes the live
+  `api_settings` value back onto every such attribute of every DRF module
+  already imported. **The set is derived from the installed DRF's source**
+  (`derive_binds()` — an AST read of each imported `rest_framework.*`
+  module), never hand-listed, so a DRF upgrade that adds an attribute is
+  covered the day it is installed rather than the day someone notices.
+  `DECLARED_BINDS` is the floor for a source-stripped install, and
+  `tests/test_drf_rebind.py` asserts the two agree — a DRF that adds a bind
+  turns this repo red instead of a client's setting quiet.
+* New system check, tag `stapel_drf_settings` (`django/drf_rebind_checks.py`),
+  which checks the **outcome** rather than the repair: after boot, every
+  derived bind is compared against the live `api_settings` value.
+  **E001** when a class attribute does not hold the configured value, naming
+  the class, the attribute, the `REST_FRAMEWORK` key and both values —
+  E-level because the whole symptom is silence, and a warning would join the
+  noise it exists to interrupt. **E002** for an import string that does not
+  resolve (DRF resolves those lazily, so otherwise the deployment boots green
+  and raises inside the first request that needs the policy). **W001** when a
+  DRF module's source cannot be read and coverage fell back to the floor.
+
+Why repair *and* check, rather than one of them: repairing alone leaves any
+future DRF attribute stale and leaves the repair itself able to fail the way
+the defect did, in silence; checking alone would name keys for an operator to
+fix by hand, one deployment at a time, for a problem the library created.
+
+### `error_language` described the request, not the sentence it labelled
+
+`error_language` is the label a client gates on before printing `error` to a
+user — `@stapel/core` 0.26.1 compares it to the UI locale with `===` and
+prints verbatim on a match — so a wrong label is the trigger, not a cosmetic
+detail. It defaulted, at dataclass construction, to the request's active
+Django locale. That is right for exactly one tier (the DRF /
+Django-`ValidationError` fallback, whose message is `str(detail)` over
+`gettext_lazy` strings). It is wrong for the tier used most: a registry
+template is a plain Python string that nothing translates. Measured on a
+client stand, 2026-09-09, on a service whose active locale is `ru`:
+
+```
+404 {"localizable_error": "error.404.not_found", "error": "Not found.",
+     "params": {}, "error_language": "ru"}
+```
+
+An English sentence, labelled Russian, on the field whose only job is to say
+whether that sentence is safe to show. A fleet whose services all answer
+`en-us` is latent on this; the first deployment to set a locale wakes it on
+every service at once.
+
+The label is now **derived where the string is produced**, and
+`StapelError.error_language` has no request-derived default at all — a
+construction site that says nothing says `""` ("unknown"), which drives the
+client back to translating `localizable_error` + `params`. Registry-sourced
+responses take `registry_language(code)`; the two `ValidationError` tiers keep
+the active locale.
+
+**The fork is named and it is one line.** `registry_language` answers per key:
+core's own `COMMON_ERRORS` declare `"en"` (a fact about strings in this repo,
+and the same one `errors.json` states by naming the field `en`), and a host
+declares its own with `register_service_errors(..., language="ru")`. What an
+*undeclared* template is labelled is `STAPEL_CORE["ERROR_REGISTRY_LANGUAGE"]`:
+
+* **unset (default)** — per key: the declared language, `""` where nobody
+  declared. Never states anything untrue; costs a host that registers
+  templates without declaring them its verbatim fallback.
+* **`""`** — fail closed everywhere, core's keys and declarations included:
+  no client ever prints a registry sentence, all of them translate from the
+  key, which is the canon anyway. Costs the verbatim fallback even where the
+  label would have been correct.
+* **`"en"`** (or any tag) — assume undeclared templates are written in it;
+  declarations still win. Costs a wrong label for a host that registers
+  another language without declaring it.
+
+The default is the one that cannot lie. Which of the other two a fleet wants
+is a product decision and stays the owner's.
+
+`error_languages()` is the inventory — the codes missing from it are exactly
+the ones whose `error` no client will print.
+
+### Upgrading
+
+* `StapelError(...)` constructed directly by a caller now carries
+  `error_language=""` unless the caller passes one. That is the fail-closed
+  direction: the client translates instead of printing a sentence whose
+  language nobody established.
+* A deployment that was patching a DRF class attribute past its own
+  `REST_FRAMEWORK` value now gets `stapel_core.drf_settings.E001`. Either drop
+  the patch — the setting works now — or silence that id.
+
 ## [0.61.2] — 2026-09-09
 
 ### A service's Celery worker must consume its own queue, and boot smoke says so
