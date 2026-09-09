@@ -310,7 +310,7 @@ class TestErrorLanguage:
     """
 
     def test_a_registry_template_is_not_claimed_to_be_the_request_locale(self):
-        """The live defect (meettoday sandbox, 2026-09-09): a service whose
+        """The live defect (a client stand, 2026-09-09): a service whose
         active locale is `ru` answered an English registry sentence labelled
         `"error_language": "ru"`. Fails on the code before this release."""
         from django.utils.translation import override

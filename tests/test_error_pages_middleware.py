@@ -83,7 +83,7 @@ def test_handled_statuses_are_exactly_404_and_405():
 
 
 class TestErrorLanguageOfTheEnvelope:
-    """The live shape (meettoday sandbox, 2026-09-09).
+    """The live shape (a client stand, 2026-09-09).
 
     ``GET /auth/api/v1/register/`` on a service whose active locale is ``ru``
     answered an English sentence labelled ``"error_language": "ru"``. The
