@@ -284,3 +284,102 @@ def test_health_body_says_unknown_when_the_probe_cannot_ask(monkeypatch):
     resp = health_mod.health_check(RequestFactory().get("/api/health/"))
     assert resp.status_code == 200
     assert json.loads(resp.content)["checks"]["schema"] == "unknown"
+
+
+def test_health_body_says_degraded_when_the_schema_is_behind(monkeypatch):
+    """The other end of the same seam: a determined BEHIND is a verdict.
+
+    ``unknown`` must not be the only non-ok answer this endpoint can give, or
+    a real drift reads as "nobody could tell".
+    """
+    import json
+
+    from django.test import RequestFactory
+
+    class _OkCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql):
+            pass
+
+    class _OkConnection:
+        def cursor(self):
+            return _OkCursor()
+
+    monkeypatch.setattr(sh, "unapplied_migrations", lambda: ["users.0007_x"])
+    monkeypatch.setattr(health_mod, "connection", _OkConnection())
+    monkeypatch.setattr(health_mod, "_dependency_checks", [])
+    monkeypatch.setattr(sh, "_registered", False)
+    sh.register_schema_check()
+
+    resp = health_mod.health_check(RequestFactory().get("/api/health/"))
+    body = json.loads(resp.content)
+    assert body["checks"]["schema"] == "error"
+    assert body["status"] == "degraded"
+
+
+# ---------------------------------------------------------------------------
+# the executor itself, against a real database
+# ---------------------------------------------------------------------------
+
+
+def test_unapplied_migrations_reads_a_real_database(tmp_path):
+    """Every other test here stubs ``unapplied_migrations``.
+
+    So nothing above would notice if the real one stopped agreeing with
+    ``manage.py migrate --check`` — a Django release renaming a
+    ``MigrationExecutor`` member, say. This runs the real executor in a child
+    process against a real sqlite database: non-empty before ``migrate``,
+    empty after.
+    """
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    (tmp_path / "projsettings.py").write_text(
+        textwrap.dedent(f"""
+            SECRET_KEY = "test-only-not-a-real-key-0123456789"
+            DATABASES = {{"default": {{
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": r"{tmp_path / 'db.sqlite3'}"}}}}
+            INSTALLED_APPS = [
+                "django.contrib.contenttypes",
+                "django.contrib.auth",
+            ]
+            USE_TZ = True
+        """),
+        encoding="utf-8",
+    )
+    child_env = dict(os.environ)
+    child_env["DJANGO_SETTINGS_MODULE"] = "projsettings"
+    # tmp_path only: the repo root holds a ``django/`` package directory that
+    # would shadow Django itself in the child.
+    child_env["PYTHONPATH"] = str(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent("""
+            import django
+            django.setup()
+            from django.core.management import call_command
+            from stapel_core.django.monitoring.schema_health import (
+                AT_HEAD, BEHIND, reset_schema_state, schema_state,
+                unapplied_migrations,
+            )
+            pending = unapplied_migrations()
+            assert pending, "an unmigrated database must report pending work"
+            assert any(m.startswith("auth.") for m in pending), pending
+            assert schema_state() is BEHIND
+            call_command("migrate", verbosity=0)
+            reset_schema_state()
+            assert unapplied_migrations() == []
+            assert schema_state() is AT_HEAD
+            print("OK")
+        """)],
+        capture_output=True, text=True, cwd=str(tmp_path), env=child_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "OK" in result.stdout
