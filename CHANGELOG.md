@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.62.1] — 2026-09-09
+
+### Added — every Function reply is measured, not only the ones that fail
+
+`serve_functions` already refused an oversized reply with a precise error.
+What it did not do was say anything about the replies that still fit.
+
+Measured on a client stand: `llm.transcribe` over a 2h28m meeting answered
+**8 647 617 bytes** against an 8 MiB `max_payload` and a user's recording
+was dropped — twice. It missed the cap by **3%**, which means the seam had
+been one long meeting away from breaking for months with nothing on any
+dashboard to show it. The fleet has other Functions whose answers grow with
+their input the same way (summaries, diarization turns, embedding vectors,
+export rows, base64 images), and each of them is that same silence.
+
+* **`comm_function_reply_bytes`** — histogram of serialized reply size,
+  labelled by function, bucketed in powers of two from 1 KiB to 64 MiB
+  (reply sizes span six orders of magnitude, so the default duration
+  buckets say nothing about either end).
+* **`comm_function_reply_too_large_total`** — counter, labelled by
+  function. The one to alert on: every increment is work this system did
+  and then threw away.
+* Recording never raises — this is a reply path — and a fitting reply is
+  still returned as the same object.
+
+### Changed — `FunctionPayloadTooLarge` names the contract, not just the size
+
+The message already said "return a REFERENCE the caller resolves". It now
+says what that looks like as a contract: the caller names a destination and
+the answer comes back as a key, the way `stapel-agent` 0.22.0's
+`llm.transcribe` and `stapel-recordings` 0.23.0's transcribe stage do it.
+No behaviour change.
+
 ## [0.62.0] — 2026-09-09
 
 Two defects found on one client stand (the third from the same sweep was in

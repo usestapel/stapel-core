@@ -174,3 +174,60 @@ class TestServerSubstitutesAMarker:
         assert exc.value.direction == "reply"
         assert exc.value.size == len(big)
         assert exc.value.limit == 1000
+
+
+class TestEveryReplyIsMeasured:
+    """The 2026-09-09 outage missed the cap by 3%, which means the seam had
+    been one long meeting away from breaking with nothing to show it."""
+
+    def _fit(self, *args):
+        from stapel_core.django.management.commands.serve_functions import fit_reply
+
+        return fit_reply(*args)
+
+    def test_a_fitting_reply_is_still_measured(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            "stapel_core.observability.metrics.histogram",
+            lambda name, value, labels=None, **kw: seen.append((name, value, labels)),
+        )
+        data = json.dumps({"result": {"ok": True}}).encode()
+        self._fit(data, 1_048_576, "cdn.media_exists")
+
+        assert seen == [(
+            "comm_function_reply_bytes", float(len(data)),
+            {"function": "cdn.media_exists"},
+        )]
+
+    def test_an_oversized_reply_is_counted_separately(self, monkeypatch):
+        counted = []
+        monkeypatch.setattr(
+            "stapel_core.observability.metrics.histogram", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "stapel_core.observability.metrics.counter",
+            lambda name, value=1.0, labels=None, **kw: counted.append((name, labels)),
+        )
+        self._fit(json.dumps({"result": "x" * 5000}).encode(), 1000, "llm.transcribe")
+
+        assert counted == [(
+            "comm_function_reply_too_large_total", {"function": "llm.transcribe"},
+        )]
+
+    def test_a_broken_metrics_backend_never_breaks_the_reply(self, monkeypatch):
+        def _boom(*a, **k):
+            raise RuntimeError("exporter down")
+
+        monkeypatch.setattr("stapel_core.observability.metrics.histogram", _boom)
+        data = json.dumps({"result": 1}).encode()
+
+        assert self._fit(data, 1_048_576, "fn") is data
+
+    def test_the_buckets_span_the_real_range(self):
+        from stapel_core.django.management.commands.serve_functions import (
+            REPLY_SIZE_BUCKETS,
+        )
+
+        assert REPLY_SIZE_BUCKETS[0] == 1024.0
+        # The 8 MiB cap that broke must land inside the buckets, not past them.
+        assert REPLY_SIZE_BUCKETS[-1] > 8 * 1024 * 1024

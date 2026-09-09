@@ -21,6 +21,39 @@ from django.core.management.base import BaseCommand
 
 logger = logging.getLogger(__name__)
 
+#: Bytes a function's serialized reply came to, per function.
+REPLY_BYTES_METRIC = "comm_function_reply_bytes"
+#: Replies the broker refused. The number that should be alerted on: every
+#: one of them is work this system did and then threw away.
+REPLY_TOO_LARGE_METRIC = "comm_function_reply_too_large_total"
+
+#: Powers of two from 1 KiB to 64 MiB. Sizes here span six orders of
+#: magnitude — a boolean answer and a meeting transcript — and the default
+#: duration buckets say nothing useful about either.
+REPLY_SIZE_BUCKETS = tuple(float(1024 * 2 ** i) for i in range(17))
+
+
+def _observe_reply_size(name: str, size: int, max_payload: int) -> None:
+    """Record one reply's size. Never raises — this is a reply path."""
+    try:
+        from stapel_core.observability import metrics
+
+        metrics.histogram(
+            REPLY_BYTES_METRIC, float(size), {"function": name},
+            description="Serialized size of a comm Function reply, in bytes.",
+            buckets=REPLY_SIZE_BUCKETS,
+        )
+        if max_payload and size > max_payload:
+            metrics.counter(
+                REPLY_TOO_LARGE_METRIC, 1.0, {"function": name},
+                description=(
+                    "Comm Function replies the broker refused as oversized. "
+                    "Each one is completed work that was thrown away."
+                ),
+            )
+    except Exception:  # pragma: no cover — the facade already guards itself
+        logger.debug("comm: reply size not recorded for %s", name, exc_info=True)
+
 
 def fit_reply(data: bytes, max_payload: int, name: str) -> bytes:
     """*data*, or a small marker explaining why the real answer cannot be sent.
@@ -31,7 +64,17 @@ def fit_reply(data: bytes, max_payload: int, name: str) -> bytes:
 
     ``max_payload`` of 0 means "the broker announced no limit" — pass the data
     through rather than inventing a cap of our own.
+
+    EVERY reply is measured, not only the ones that fail. The failure this
+    guards was invisible until it took a client's recording (2026-09-09:
+    llm.transcribe over a 2h28m meeting, 8 647 617 bytes against 8 MiB — it
+    missed by 3%, so the seam had been one long meeting away from breaking
+    for months with nothing to show it). A histogram of reply sizes is what
+    turns "this function is approaching the wire limit" into something a
+    dashboard can say BEFORE a user loses work, and the fleet has other
+    Functions whose answers grow with their input the same way.
     """
+    _observe_reply_size(name, len(data), max_payload)
     if not max_payload or len(data) <= max_payload:
         return data
     logger.error(
