@@ -7,6 +7,7 @@ Provides:
 - /api/health/live/ - Liveness probe (always returns OK)
 """
 import logging
+import re
 import time
 from django.http import JsonResponse, HttpResponse
 from django.db import connection
@@ -41,8 +42,102 @@ def register_metrics_exporter(exporter):
     Usage:
         from stapel_core.django.monitoring.health import register_metrics_exporter
         register_metrics_exporter(my_export_func)
+
+    Registering the same callable twice is a no-op. That only covers the easy
+    half: two *different* callables emitting the same series (a library
+    collector plus a product's leftover copy of it) still register, and the
+    exposition is what refuses to carry both — see
+    :func:`_dedupe_exposition`.
     """
+    if exporter in _custom_metrics_exporters:
+        return
     _custom_metrics_exporters.append(exporter)
+
+
+# name{labels} — everything up to the whitespace before the value.
+_SAMPLE_RE = re.compile(
+    r'^(?P<series>[a-zA-Z_:][a-zA-Z0-9_:]*(?:\{.*\})?)[ \t]+(?P<value>.*)$'
+)
+_META_RE = re.compile(r'^#\s+(?:HELP|TYPE)\s+(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)\b')
+
+
+def _exporter_label(exporter):
+    """Where a fragment came from, so a conflict names both collectors."""
+    module = getattr(exporter, '__module__', '?')
+    name = getattr(exporter, '__qualname__', None) or repr(exporter)
+    return f'{module}.{name}'
+
+
+def _dedupe_exposition(fragments):
+    """One sample per series, whatever registered a collector twice.
+
+    Motivating incident: every service in a fleet exported
+    ``stapel_schema_probe_ok`` and ``stapel_schema_at_head`` twice — core's
+    AppConfig registered the collector, and each product still carried the
+    per-service copy it was lifted from, which registered a second one. Both
+    read 1, so nothing looked wrong; Prometheus logged
+    ``Error on ingesting samples with different value but same timestamp``
+    and dropped one of each pair, ~164 times in two hours.
+
+    Dropping "one of each pair" is the part that matters. Which copy survives
+    is Prometheus' choice, not ours, so the day the two collectors disagree —
+    one probing live, one serving a cached answer — the value that reaches an
+    alert rule is a coin flip. Deduplicating at the registration seam would
+    only have caught callables registered twice; these were two *different*
+    functions emitting the same series, which no registry can tell apart. The
+    exposition can, because a series identity is the thing Prometheus keys on.
+
+    So: first writer of a series wins, later copies are dropped, and a copy
+    that disagrees is logged with both values and both sources instead of
+    silently deciding an alert. ``# HELP``/``# TYPE`` are kept once per metric
+    name for the same reason — repeating them is malformed exposition.
+
+    *fragments* is an iterable of ``(source, text)``; returns
+    ``(lines, conflicts)``.
+    """
+    lines = []
+    seen_series = {}   # series -> (value, source)
+    seen_meta = set()  # metric name, per HELP/TYPE
+    conflicts = 0
+
+    for source, text in fragments:
+        if not text:
+            continue
+        for line in text.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith('#'):
+                meta = _META_RE.match(stripped)
+                if meta:
+                    key = (stripped.split()[1], meta.group('name'))
+                    if key in seen_meta:
+                        continue
+                    seen_meta.add(key)
+                lines.append(line)
+                continue
+            sample = _SAMPLE_RE.match(stripped)
+            if sample is None:
+                lines.append(line)
+                continue
+            series = sample.group('series')
+            value = sample.group('value')
+            if series in seen_series:
+                kept_value, kept_source = seen_series[series]
+                if kept_value != value:
+                    conflicts += 1
+                    logger.error(
+                        "Two metrics collectors disagree about %s: %s says %s, "
+                        "%s says %s. Keeping the first; one of them is a stale "
+                        "duplicate and an alert reading this series cannot tell "
+                        "which answer it got.",
+                        series, kept_source, kept_value, source, value,
+                    )
+                continue
+            seen_series[series] = (value, source)
+            lines.append(line)
+
+    return lines, conflicts
 
 
 def register_dependency_check(name, probe, *, critical=False):
@@ -313,16 +408,26 @@ def prometheus_metrics(request):
                 )
 
     # Append custom metrics from registered exporters
+    fragments = [('this endpoint', '\n'.join(metrics))]
     for exporter in _custom_metrics_exporters:
         try:
             extra = exporter()
             if extra:
-                metrics.append(extra)
+                fragments.append((_exporter_label(exporter), extra))
         except Exception:
             logger.exception("Metrics exporter %s failed", exporter)
 
+    # A series appears once, whoever registered a collector for it twice.
+    lines, conflicts = _dedupe_exposition(fragments)
+    # The drop is itself a number: an exposition that quietly discarded a
+    # disagreeing duplicate looks exactly like one that never had it.
+    lines.append(f'# HELP {mp}metrics_series_conflicts '
+                 f'Series two collectors disagreed about on this scrape')
+    lines.append(f'# TYPE {mp}metrics_series_conflicts gauge')
+    lines.append(f'{mp}metrics_series_conflicts{{service="{service_name}"}} {conflicts}')
+
     return HttpResponse(
-        '\n'.join(metrics) + '\n',
+        '\n'.join(lines) + '\n',
         content_type='text/plain; version=0.0.4; charset=utf-8'
     )
 

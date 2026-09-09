@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.63.0] — 2026-09-10
+
+### Fixed — `/api/metrics/` carries each series once, whoever registered a collector twice
+
+Measured on a client stand: all eight services exported
+`stapel_schema_probe_ok` and `stapel_schema_at_head` **twice** on every
+scrape. Prometheus logged
+`Error on ingesting samples with different value but same timestamp …
+num_dropped=2` about 164 times in two hours and kept one sample of each pair.
+
+Both copies read `1`, so nothing looked broken. That was luck: which copy
+Prometheus keeps is not ours to choose, and two alert rules read exactly those
+two series. The day the collectors disagree — one probing live, one serving a
+cached verdict — the value that reaches the alert is a coin flip.
+
+The cause is the shape this package was built from.
+`monitoring/schema_health.py` was lifted out of a product that carried a
+per-service copy of it, and `CommonDjangoConfig.ready()` now registers the
+library collector while every service that has not yet deleted its copy
+registers a second one. `register_schema_check()`'s `_registered` flag cannot
+see that: the two are different function objects in different modules, and no
+registry can tell them apart.
+
+The exposition can, because a series identity is what Prometheus keys on:
+
+* **A private `_dedupe_exposition`** — first writer of a series wins, later
+  copies are dropped, `# HELP`/`# TYPE` are kept once per metric name.
+  `prometheus_metrics` runs everything it assembles through it, so double
+  registration stops being able to produce a duplicate sample rather than
+  merely not producing one today.
+* **A duplicate that *disagrees* is loud.** It is logged at ERROR with both
+  values and both collectors named (module + qualname), and counted into a new
+  `<prefix>metrics_series_conflicts{service}` gauge — an exposition that
+  quietly discarded a disagreeing copy looks exactly like one that never had
+  it.
+* `register_metrics_exporter` is now idempotent for the same callable. That
+  only ever covered the easy half; it is the exposition that covers the rest.
+
+Nothing legitimate is eaten: a series identity is name **and** labels, so
+`stapel_dependency_up{dependency="livekit"}` and
+`…{dependency="schema"}` both survive, and a label value containing a space is
+not split.
+
+Products still carrying their own `core/schema_health.py` should delete it —
+the duplicate probe also costs a second migration-graph read per scrape — but
+their metrics are correct either way from this release.
+
 ## [0.62.1] — 2026-09-09
 
 ### Added — every Function reply is measured, not only the ones that fail
