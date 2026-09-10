@@ -2890,6 +2890,83 @@ the default queue. `task_routes` given as a callable or a dotted path to a
 router is not read at all: asking a router where a task goes means running host
 code at worker startup.
 
+### Deployment postures and their stage — `STAPEL_POSTURE` (`django/presets.py`)
+
+A posture is the handful of settings that decide *what kind of installation
+this is*: does a person off the street get an account, and does that account
+get a mandate. `private_space(door=..., stage=...)` and
+`public_space(stage=...)` return per-namespace dicts a settings module
+**spreads** — values, not runtime indirection — and
+`check_posture_coherence` (tag `stapel_presets`) re-derives the posture from
+the `STAPEL_POSTURE` manifest and compares it with what the deployment
+actually runs. The manifest records the preset NAME and OPTIONS only; a
+manifest carrying values could be edited into agreement with a drifted
+setting.
+
+```python
+from stapel_core.django.presets import private_space
+
+_preset = private_space(door="requests", stage="live")
+STAPEL_POSTURE = _preset["STAPEL_POSTURE"]
+STAPEL_AUTH = {**STAPEL_AUTH, **_preset["STAPEL_AUTH"]}
+STAPEL_WORKSPACES = {**STAPEL_WORKSPACES, **_preset["STAPEL_WORKSPACES"]}
+```
+
+**Stage — production, and not yet launched.** A stand can be run as
+production (public host, real TLS, real data) while nobody has been told
+about it. On such a stand a mock OTP channel is a decision, and the only way
+to keep it used to be `SILENCED_SYSTEM_CHECKS`, which erases the finding and
+records no intent. `stage` is that intent, admissible values `live` (the
+default) and `prototype`:
+
+| | `live` | `prototype` |
+|---|---|---|
+| `USE_MOCK_SMS_OTP` / `USE_MOCK_EMAIL_OTP` in the spread | pinned `False`, security-relevant (E001 on override) | **absent** — the deployment sets them, the check has nothing to compare |
+| a library's Error about a stub channel | unchanged | Warning under the caller's own id, same text plus `PROTOTYPE_STAGE_NOTE` |
+| everything else the posture says | identical | identical |
+
+Two helpers, for the modules that own such checks:
+
+```python
+from stapel_core.django.presets import stage, stage_finding
+
+stage()  # -> "live" | "prototype" | None  (None: no posture declared)
+
+@checks.register("stapel_auth")
+def check_mock_otp_disabled_in_production(app_configs=None, **kwargs):
+    ...
+    return [stage_finding(error, warning_id="stapel_auth.W011")]
+```
+
+`stage_finding(finding, *, warning_id)` returns *finding* unchanged when the
+stage is `live` or undeclared. In the `prototype` stage it returns a
+`checks.Warning` under `warning_id` with the same message, hint and object,
+plus one sentence: *"Declared posture stage is prototype: this is expected
+until launch. Flip the posture to stage="live" before the deployment is
+advertised; the same finding is then an error."* The id mapping is the
+caller's — the error id travels on the finding, the warning id is named at
+the call site, so the pair is greppable in the module that owns both.
+
+**W003 keeps the stage from outliving its reason.** A declared `prototype`
+stage with no mock one-time-code channel on and a real email backend is a
+warning: *either flip to live or say what is stubbed*. `DEBUG=False` and a
+public `ALLOWED_HOSTS` are deliberately not part of it — a prototype IS
+production, unadvertised.
+
+| id | level | when |
+|---|---|---|
+| `stapel_core.presets.E001` | security-critical error (waiver only) | a security-relevant posture value is overridden |
+| `stapel_core.presets.E002` | error | `STAPEL_POSTURE` malformed, unknown preset, or options the preset refuses |
+| `stapel_core.presets.W001` | warning | a non-security posture value differs |
+| `stapel_core.presets.W002` | warning | a declared `STAPEL_RETIRED_ENV` variable is still set here |
+| `stapel_core.presets.W003` | warning | `prototype` stage declared and nothing prototypical is on |
+
+**Is this host reachable? (`django/hosts.py`).** `looks_public(host)` is the
+one classifier the checks that ask share — localhost/loopback, `.local`,
+`.localhost` and the private IPv4 prefixes are local, everything else is
+public. `"*"` is not a host name and is not classified here; a caller reading
+`ALLOWED_HOSTS` decides what a wildcard means for its own finding.
+
 ## Anti-patterns
 
 - **Do not sync an account-lifecycle flag from a token claim.** A token asserts the state of the moment it was minted for the rest of its life, so a claim that can write `is_active` can reactivate a row and then satisfy the gate that reads it. Lifecycle travels in the revocation namespace; the local column is a local decision.

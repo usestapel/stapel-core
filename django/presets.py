@@ -55,6 +55,32 @@ posture), and any value it cannot justify: every key carries its reason in
 :class:`PresetValue`, and a preset of settings-just-in-case is a design
 document in Python.
 
+Stage: a deployment can be production and not yet launched
+----------------------------------------------------------
+A stand can be run as production — public host, real TLS, real data — while
+nobody has been told about it yet. On such a stand a mock channel is a
+deliberate choice, not an oversight, and the only way to keep it was to
+silence the library check that reports it: ``SILENCED_SYSTEM_CHECKS`` erases
+the finding and records no intent, so the next reader cannot tell a decision
+from a leftover.
+
+So the posture carries a ``stage``: ``"live"`` (the default) or
+``"prototype"``. It changes two things and nothing else.
+
+* The ``prototype`` spread says **nothing** about the mock keys — they are
+  absent from it, so the deployment sets them freely and
+  :func:`check_posture_coherence` has nothing to compare. In ``live`` they
+  stay pinned off and security-relevant, as before.
+* A library check that produced an Error about a mock/console/stub channel
+  passes it through :func:`stage_finding`, which downgrades it to a Warning
+  carrying the same message plus the sentence that says why it is expected —
+  in the ``prototype`` stage only. Undeclared or ``live``: unchanged Error.
+
+The stage is a value in the deployment's own settings file and in the
+declared manifest, so "this is a prototype" is greppable, is reported at
+every boot, and stops being true the moment somebody flips it. W003 keeps it
+from outliving its reason.
+
 Retired environment variables
 -----------------------------
 Adopting a posture usually stops some environment variable from being read —
@@ -75,6 +101,7 @@ W001  a posture value that is not security-relevant differs — visibility, not
       judgement.
 W002  a declared retired environment variable is set on this deployment and
       nothing reads it.
+W003  the ``prototype`` stage is declared and nothing prototypical is on.
 
 What this does not catch
 ------------------------
@@ -112,6 +139,20 @@ E001_POSTURE_VALUE_OVERRIDDEN = declare_security_critical(
 E002_BAD_POSTURE_DECLARATION = "stapel_core.presets.E002"
 W001_POSTURE_VALUE_DIFFERS = "stapel_core.presets.W001"
 W002_RETIRED_ENV_SET = "stapel_core.presets.W002"
+W003_PROTOTYPE_STAGE_IDLE = "stapel_core.presets.W003"
+
+#: Admissible values of the ``stage`` option. ``live`` is the default for the
+#: same reason ``invite_only`` is: the relaxed one has to be chosen by name.
+STAGES = ("live", "prototype")
+
+#: Appended to a finding a library check produced about a stub channel when
+#: the declared stage is ``prototype``. One sentence, always the same one, so
+#: a log reader learns it once.
+PROTOTYPE_STAGE_NOTE = (
+    "Declared posture stage is prototype: this is expected until launch. "
+    'Flip the posture to stage="live" before the deployment is advertised; '
+    "the same finding is then an error."
+)
 
 #: ``{env var name: why nothing reads it any more}``. Declared by the project
 #: whose settings module stopped reading them.
@@ -135,9 +176,26 @@ class PresetValue:
     security_relevant: bool = False
 
 
+def _validate_stage(stage: str) -> str:
+    if stage not in STAGES:
+        raise ValueError(
+            f"stage={stage!r} — admissible stages: {', '.join(STAGES)}"
+        )
+    return stage
+
+
 # The floor both postures stand on: values that are wrong in every named
 # deployment, private or public. One place, so a new preset cannot forget them.
-def _floor() -> dict[str, dict[str, PresetValue]]:
+#
+# In the prototype stage the mock keys are OMITTED rather than set: a posture
+# that pinned them on would be asserting something about a deployment it knows
+# nothing about, and one that pinned them off would be the thing this stage
+# exists to avoid. Absent means the deployment decides and the coherence check
+# has nothing to compare.
+def _floor(*, stage: str = "live") -> dict[str, dict[str, PresetValue]]:
+    _validate_stage(stage)
+    if stage != "live":
+        return {"STAPEL_AUTH": {}}
     return {
         "STAPEL_AUTH": {
             "USE_MOCK_SMS_OTP": PresetValue(
@@ -185,13 +243,15 @@ def _registration(**doors: bool) -> dict[str, PresetValue]:
 PRIVATE_DOORS = ("invite_only", "requests")
 
 
-def _private_spec(*, door: str = "invite_only") -> dict[str, dict[str, PresetValue]]:
+def _private_spec(
+    *, door: str = "invite_only", stage: str = "live",
+) -> dict[str, dict[str, PresetValue]]:
     if door not in PRIVATE_DOORS:
         raise ValueError(
             f"private_space(door={door!r}) — admissible doors: "
             f"{', '.join(PRIVATE_DOORS)}"
         )
-    spec = _floor()
+    spec = _floor(stage=stage)
     spec["STAPEL_WORKSPACES"] = {
         "STREET_LANDING_MODE": PresetValue(
             "none",
@@ -213,8 +273,8 @@ def _private_spec(*, door: str = "invite_only") -> dict[str, dict[str, PresetVal
     return spec
 
 
-def _public_spec() -> dict[str, dict[str, PresetValue]]:
-    spec = _floor()
+def _public_spec(*, stage: str = "live") -> dict[str, dict[str, PresetValue]]:
+    spec = _floor(stage=stage)
     spec["STAPEL_WORKSPACES"] = {
         "STREET_LANDING_MODE": PresetValue(
             "personal",
@@ -240,7 +300,7 @@ def _flatten(name: str, options: Mapping[str, Any],
     return values
 
 
-def private_space(*, door: str = "invite_only") -> dict[str, dict]:
+def private_space(*, door: str = "invite_only", stage: str = "live") -> dict[str, dict]:
     """A private cloud: registration closed, and an account that gets in holds
     no mandate until the owner grants one.
 
@@ -248,24 +308,34 @@ def private_space(*, door: str = "invite_only") -> dict[str, dict]:
     account: ``"invite_only"`` (none — the default) or ``"requests"``, which
     opens email registration so a visitor can ask, and only ask.
 
+    ``stage`` says whether this deployment is launched: ``"live"`` (the
+    default) or ``"prototype"``, which leaves the mock-channel keys out of the
+    spread and turns the library findings about them into warnings that say
+    so. See the module docstring.
+
     Returns ``{"STAPEL_POSTURE": ..., "STAPEL_AUTH": {...},
     "STAPEL_WORKSPACES": {...}}`` for the settings module to spread. It
     imports no module and returns no code: a posture is a composition of keys,
     which is why it can live in the core without the core depending on the
     modules that own them.
     """
-    return _flatten("private_space", {"door": door}, _private_spec(door=door))
+    return _flatten(
+        "private_space",
+        {"door": door, "stage": stage},
+        _private_spec(door=door, stage=stage),
+    )
 
 
-def public_space() -> dict[str, dict]:
+def public_space(*, stage: str = "live") -> dict[str, dict]:
     """A public cloud: registration open on every address-verified method, and
     a street signup lands in a personal workspace.
 
     The sibling of :func:`private_space`, and the reason the private default is
     safe: the two postures differ by KIND, so "open" is something a deployment
-    picks by name rather than something it inherits by forgetting.
+    picks by name rather than something it inherits by forgetting. ``stage``
+    is the same option it is there.
     """
-    return _flatten("public_space", {}, _public_spec())
+    return _flatten("public_space", {"stage": stage}, _public_spec(stage=stage))
 
 
 #: Preset name → spec builder. The check re-derives from here, so a preset that
@@ -309,6 +379,48 @@ def declared_posture() -> tuple[str, dict] | None:
     if not isinstance(name, str) or not isinstance(options, dict):
         return ("", {})
     return (name, options)
+
+
+def stage() -> str | None:
+    """The stage this deployment declares, or ``None`` when no posture is.
+
+    ``None`` and ``"live"`` are different answers to different questions —
+    "nobody said" versus "somebody said launched" — and a caller that only
+    wants to know whether relaxations are sanctioned treats them the same.
+    A posture declared without the option reads as ``"live"``: a manifest
+    that predates the option cannot thereby claim to be a prototype.
+    """
+    declared = declared_posture()
+    if declared is None:
+        return None
+    _, options = declared
+    value = options.get("stage", "live")
+    return value if value in STAGES else "live"
+
+
+def stage_finding(
+    finding: checks.CheckMessage, *, warning_id: str,
+) -> checks.CheckMessage:
+    """An Error about a stub channel, as this deployment's stage reports it.
+
+    Pass an Error a check has already built about a mock/console/stub
+    channel. In the ``live`` stage and with no posture declared it comes back
+    unchanged. In the ``prototype`` stage it comes back as a
+    :class:`~django.core.checks.Warning` under *warning_id* — same message
+    plus :data:`PROTOTYPE_STAGE_NOTE`, same hint, same object.
+
+    The id mapping belongs to the caller: the error id travels on the finding
+    and the warning id is named at the call site, so the pair is greppable in
+    the module that owns both. This helper only decides which one applies.
+    """
+    if stage() != "prototype":
+        return finding
+    return checks.Warning(
+        f"{finding.msg} {PROTOTYPE_STAGE_NOTE}",
+        hint=finding.hint,
+        obj=finding.obj,
+        id=warning_id,
+    )
 
 
 def _effective(namespace: str, key: str) -> Any:
@@ -375,9 +487,61 @@ def _retired_env_findings() -> list:
     ]
 
 
+#: Keys whose truth means "a channel here is stubbed". Namespaced, read
+#: through :func:`_effective` like every other posture value.
+_STUB_CHANNEL_KEYS = (
+    ("STAPEL_AUTH", "USE_MOCK_SMS_OTP"),
+    ("STAPEL_AUTH", "USE_MOCK_EMAIL_OTP"),
+)
+
+#: Substrings of an ``EMAIL_BACKEND`` that delivers nowhere.
+_STUB_EMAIL_BACKENDS = ("console", "locmem", "dummy", "filebased")
+
+
+def _anything_is_stubbed() -> bool:
+    """Is any channel on this deployment a stub?"""
+    for namespace, key in _STUB_CHANNEL_KEYS:
+        value = _effective(namespace, key)
+        if value is not _ABSENT and value:
+            return True
+
+    from django.conf import settings
+
+    backend = str(getattr(settings, "EMAIL_BACKEND", "") or "").lower()
+    return any(name in backend for name in _STUB_EMAIL_BACKENDS)
+
+
+def _idle_prototype_findings() -> list:
+    """W003 — the prototype stage declared over nothing prototypical.
+
+    A prototype stage that runs on real channels costs the deployment
+    nothing today and everything on the day a mock is switched back on: the
+    stage is already there to excuse it. It is a Warning because a stand
+    between "stubs off" and "stage flipped" is a legitimate half-hour, not a
+    defect — the finding exists so the stage does not outlive its reason.
+
+    DEBUG=False and a public ALLOWED_HOSTS are NOT part of this: a prototype
+    IS production but unadvertised, and reporting that combination would be
+    reporting the whole point of the stage.
+    """
+    if _anything_is_stubbed():
+        return []
+    return [checks.Warning(
+        'The declared posture stage is "prototype", but nothing prototypical '
+        "is on: no mock one-time-code channel is enabled and the email "
+        "backend delivers for real. Either flip to live or say what is "
+        "stubbed.",
+        hint='Set stage="live" in the preset call now that the deployment '
+             "runs on real channels — the stage is what turns the library's "
+             "findings about stub channels into warnings, and one left "
+             "behind will excuse the next mock switched on by accident.",
+        id=W003_PROTOTYPE_STAGE_IDLE,
+    )]
+
+
 @checks.register("stapel_presets")
 def check_posture_coherence(app_configs=None, **kwargs):
-    """E001/E002/W001 — what the deployment declares and what it runs agree.
+    """E001/E002/W001/W003 — declaration and behaviour agree.
 
     Independent of how a value arrived: the check reads the effective setting,
     so a hand-written line below the spread, a namespace that was never spread
@@ -413,6 +577,9 @@ def check_posture_coherence(app_configs=None, **kwargs):
             id=E002_BAD_POSTURE_DECLARATION,
         ))
         return findings
+
+    if stage() == "prototype":
+        findings.extend(_idle_prototype_findings())
 
     for namespace, entries in spec.items():
         for key, item in entries.items():
@@ -451,14 +618,19 @@ __all__ = [
     "E002_BAD_POSTURE_DECLARATION",
     "W001_POSTURE_VALUE_DIFFERS",
     "W002_RETIRED_ENV_SET",
+    "W003_PROTOTYPE_STAGE_IDLE",
     "POSTURE_SETTING",
+    "PROTOTYPE_STAGE_NOTE",
     "RETIRED_ENV_SETTING",
     "PRESETS",
     "PRIVATE_DOORS",
+    "STAGES",
     "PresetValue",
     "check_posture_coherence",
     "declared_posture",
     "posture_spec",
     "private_space",
     "public_space",
+    "stage",
+    "stage_finding",
 ]
