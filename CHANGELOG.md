@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.63.1] — 2026-09-10
+
+### A Celery worker that does not consume its own default queue refuses to start
+
+0.63.0 shipped `stapel_celery` E001 — the default queue naming a different app
+— and closed the half of that class a Django system check can see. This is the
+half it cannot see **by construction**: `manage.py check` runs in a process
+that has no worker in it and no command line to read.
+
+Measured on a client stand, 2026-09-09. A worker was started as
+
+```
+celery -A core worker -Q cdn,thumbnails,previews,celery
+```
+
+while its settings said `CELERY_TASK_DEFAULT_QUEUE = "stapel_cdn"`. **`-Q`
+replaces the consumed set, it does not extend it** —
+`WorkController.setup_queues()` calls `app.amqp.queues.select()`, which
+overwrites `_consume_from` outright. So four queues were consumed and
+`stapel_cdn` was consumed by nobody:
+
+* every beat entry and every task with no `task_routes` match published there,
+  including this library's own `stapel_core.django.taskstore.sweep_tasks`;
+* **27,234 messages** accumulated over months, unread;
+* and since 0.60 the sweep is what wakes a retry held on `not_before`, so every
+  failed task in that service was "retrying" forever and never retried.
+
+Nothing was red. The container was up, the four named queues drained normally,
+the error rate was zero, and the depth of a fifth queue was the only witness.
+Renaming the default queue moved the leak rather than closing it, and a shell
+gate over one repo's compose file is a patch in one fleet.
+
+New worker-side guard, `django/celery_consumer_guard.py`, hung off Celery's
+`celeryd_after_setup` — the earliest point at which
+`app.amqp.queues.consume_from` is the real consumed set (`-Q` applied, no
+broker connection yet, nothing claimed). Installed by `stapel_core.django`'s
+`AppConfig.ready()` next to the observability hook, so **no service opts in**.
+
+* The default queue missing from the consumed set raises `PartialConsumerError`
+  and the worker refuses to boot. The message names the missing queue, the
+  consumed set, and both repairs (drop `-Q`, or include the default in it).
+  Fail-closed for E001's reason: a worker that leaves its own queue unconsumed
+  is a correct-looking process from every angle a monitor has, so a warning
+  would join the noise it exists to interrupt.
+* A queue named in `task_routes` that this worker does not consume is a
+  **warning**, one per queue — the same shape one level down, but a fleet may
+  legitimately run another worker for it and this guard sees one process.
+* `STAPEL_CELERY_ALLOW_PARTIAL_CONSUMER = True` (flat setting, the
+  `STAPEL_BLACKLIST_FAIL_OPEN` idiom) downgrades the refusal to a warning for a
+  deployment that deliberately splits work across workers on disjoint queues.
+  Such a deployment must itself ensure **some** worker consumes the default
+  queue; the guard checks only the process it runs in.
+
+**Raising a plain exception here would have done nothing.** Celery's
+`Signal.send` catches every `Exception` a receiver raises, logs it and carries
+on. `PartialConsumerError` derives from `SystemExit` — a `BaseException` —
+so it escapes that `except`, escapes `Worker.on_start`, and lands in
+`WorkController.start`'s `except SystemExit: self.stop(exitcode=exc.code)`.
+The message is the exit code, so it reaches stderr even where logging was never
+configured.
+
+Reads nothing when `task_routes` is a callable or a dotted path to a router:
+asking a router where a task goes means running host code at worker startup.
+A failure to read the worker's own configuration is logged and the boot
+continues — a guard must not be what stops a worker for its own reasons.
+
 ## [0.63.0] — 2026-09-10
 
 ### Fixed — `/api/metrics/` carries each series once, whoever registered a collector twice

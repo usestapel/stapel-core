@@ -2802,6 +2802,62 @@ signal rather than an action subscriber; an app that holds per-user rows and
 subscribes to *neither* event — nothing in the registry makes that app
 discoverable, and inventing one would mean guessing which FK is "a user".
 
+### A worker must consume its own default queue — `django/celery_consumer_guard.py`
+
+`django/celery_checks.py` (`stapel_celery` E001/W002) closes the half of the
+queue-ownership class a Django system check can see. This closes the half it
+cannot see **by construction**: `manage.py check` runs in a process with no
+worker in it and no command line to read, so nothing ever compared the queues a
+worker consumes with the queue its own beat publishes to.
+
+Measured on a client stand, 2026-09-09. A worker was started as
+`celery -A core worker -Q cdn,thumbnails,previews,celery` while its settings
+said `CELERY_TASK_DEFAULT_QUEUE = "stapel_cdn"`. **`-Q` replaces the consumed
+set, it does not extend it** (`WorkController.setup_queues()` →
+`app.amqp.queues.select()`, which overwrites `_consume_from`), so the default
+queue was consumed by nobody: every beat entry and every unrouted task —
+including this library's own `taskstore.sweep_tasks` — piled up unread,
+**27,234 messages over months**, and because the sweep is what wakes a retry
+held on `not_before`, every failed task in that service was "retrying" forever
+and never retried. Nothing was red: the container was up, the four named queues
+drained, the error rate was zero. Renaming the default queue moved the leak.
+
+The guard hangs off Celery's `celeryd_after_setup` — the earliest point at
+which `app.amqp.queues.consume_from` is the real consumed set (`-Q` has been
+applied, no broker connection yet); Celery's own comment at that `send()` says
+so. Installed by `stapel_core.django`'s `ready()` next to the observability
+hook, so **no service opts in**; a project without that app installed writes
+`from stapel_core.django.celery_consumer_guard import install; install(force=True)`
+in `config/celery.py`.
+
+| Consumed set | Result |
+|---|---|
+| contains `task_default_queue` | silent |
+| does not | `PartialConsumerError` — the worker refuses to start |
+| does not, and `STAPEL_CELERY_ALLOW_PARTIAL_CONSUMER = True` | warning, the worker starts |
+| misses a queue named in `task_routes` | warning, per queue |
+
+Fail-closed for E001's reason: a worker that leaves its own queue unconsumed is
+a correct-looking process from every angle a monitor has, so a warning would
+join the noise it exists to interrupt. The refusal names the missing queue, the
+consumed set and both repairs (drop `-Q`, or include the default in it).
+
+**Raising takes care, and this is the part to copy.** Celery's `Signal.send`
+catches every `Exception` a receiver raises, logs it and carries on — a plain
+`raise RuntimeError` in a Celery signal handler is *logged and ignored*.
+`PartialConsumerError` derives from `SystemExit`, a `BaseException`, so it
+escapes that `except`, escapes `Worker.on_start` and lands in
+`WorkController.start`'s `except SystemExit: self.stop(exitcode=exc.code)`. The
+message is the exit code, so it reaches stderr even where logging is not set up.
+
+**Does not catch:** whether some *other* worker in the fleet consumes the queue
+— this guard sees one process, which is why the routed-queue finding is a
+warning and why a split-worker deployment that sets
+`STAPEL_CELERY_ALLOW_PARTIAL_CONSUMER` must itself ensure some worker consumes
+the default queue. `task_routes` given as a callable or a dotted path to a
+router is not read at all: asking a router where a task goes means running host
+code at worker startup.
+
 ## Anti-patterns
 
 - **Do not sync an account-lifecycle flag from a token claim.** A token asserts the state of the moment it was minted for the rest of its life, so a claim that can write `is_active` can reactivate a row and then satisfy the gate that reads it. Lifecycle travels in the revocation namespace; the local column is a local decision.

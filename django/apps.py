@@ -255,6 +255,21 @@ class CommonDjangoConfig(AppConfig):
 
         install_celery_exporter()
 
+        # Worker-side queue guard (django/celery_consumer_guard.py): a worker
+        # started with -Q that does not name its own task_default_queue
+        # refuses to boot. `-Q` REPLACES the consumed set, so the default
+        # queue — every beat entry, every unrouted task, this library's own
+        # taskstore sweep — is consumed by nobody, and nothing is red: 27,234
+        # messages piled up on a client stand while held retries were never
+        # woken. celery_checks.E001 cannot see this by construction (a system
+        # check has no worker and no command line). Installed here so no
+        # service opts in.
+        from stapel_core.django.celery_consumer_guard import (
+            install as install_celery_consumer_guard,
+        )
+
+        install_celery_consumer_guard()
+
         # Verification factors declared by the host in
         # STAPEL_VERIFICATION["EXTRA_FACTORS"] (#145). MODULE.md documents the
         # setting as THE way a host substitutes or adds a factor, but until
