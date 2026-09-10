@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.63.2] — 2026-09-10
+
+### The guest question, asked of the gate instead of its spelling — `stapel_core.adoption.W003`
+
+`stapel_adoption` E001/W002 read a view as having taken a position on guests as
+soon as **any** second permission class stands beside `IsAuthenticated`. That
+is an inference from a name in a list, and it is wrong whenever the companion
+class asks an *orthogonal* question.
+
+Measured in stapel-gdpr, 2026-09-10: five user-facing views gated on
+`[IsAuthenticated, AccountNotClosed]`. `AccountNotClosed` asks whether an
+account is being erased — a guest passes it, and it says nothing whatever about
+identity. All five admitted anonymous-session guests while the check stayed
+silent, and the only two views it *did* report were the ones without a
+companion class. Static inspection cannot tell an identity gate from a business
+gate: both are bare names in a list.
+
+W003 is the runtime sibling. For every DRF view in the URL conf it builds the
+whole permission stack and calls `has_permission` twice — once with Django's
+`AnonymousUser`, once with a duck shaped like the stapel-auth guest row
+(`is_authenticated=True` **and** `is_anonymous=True`, `auth_type="anonymous"`)
+— and reports only the genuinely ambiguous combination:
+
+* **refused unauthenticated, admitted guest, no `stapel_anonymous_access`
+  anywhere in the MRO.** A view that admits both is public and the guest axis
+  says nothing about it; a view that refuses both already keeps guests out.
+* `stapel_anonymous_access` stays the sanctioned escape, own or inherited —
+  the finding is "say which you meant", never "close the view".
+* Views the static check already covers are left to it: a bare
+  `IsAuthenticated` is E001/W002's, the DRF project default is W001's. One
+  view never draws two findings.
+
+Warning-level for a reason of its own, not W002's: this verdict is *derived by
+running code against a synthetic principal*, not read off the source. And a
+gate that **raises** while being probed — it queries the database, calls a
+seam, reads a request attribute the probe does not fake — yields no verdict at
+all: that view is skipped in silence, never reported. A guess dressed as a
+finding is worse than no finding.
+
+Also caught by construction: `IsAuthenticated | X`, whose `OperandHolder` is a
+name E001 reads as a position taken while the left operand admits every guest.
+
 ## [0.63.1] — 2026-09-10
 
 ### A Celery worker that does not consume its own default queue refuses to start

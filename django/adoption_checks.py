@@ -51,6 +51,41 @@ W001  ``REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"]`` is itself a bare
       instead of once per view (see "What this does not catch").
 W002  the same silence as E001, but in a view that came from an installed
       ``stapel_*`` library rather than from this project's own source.
+W003  the same silence again, in the views E001 cannot see: a gate that
+      **runs** admits a guest session and refuses an unauthenticated one,
+      while static inspection read the view as having taken a position. See
+      "Why W003 exists" below.
+
+Why W003 exists (a second class beside ``IsAuthenticated`` proves nothing)
+-------------------------------------------------------------------------
+E001's second green route — "any other permission class alongside
+``IsAuthenticated`` means the view has taken a position" — is an inference
+from a name in a list, and the inference is wrong whenever that class asks an
+**orthogonal** question. Measured in stapel-gdpr, 2026-09-10: five
+user-facing views gated on ``[IsAuthenticated, AccountNotClosed]``.
+``AccountNotClosed`` asks whether an account is being erased. A guest passes
+it, and it says nothing whatever about identity — so all five admitted guest
+sessions while E001/W002 stayed silent, and the only two views that check DID
+report were the ones without a companion class. Static inspection cannot tell
+an identity gate from a business gate: both are bare names in a list.
+
+W003 asks the same question of the gate instead of its spelling. It builds
+the view's whole permission stack and calls ``has_permission`` twice — once
+for Django's ``AnonymousUser``, once for a duck shaped like the stapel-auth
+guest row (``is_authenticated=True`` **and** ``is_anonymous=True``) — and
+reports only the combination that is genuinely ambiguous: **refused
+unauthenticated, admitted guest, no stance declared**. A view that admits
+both is simply public and the guest axis says nothing about it; a view that
+refuses both keeps guests out already.
+
+W-level for a different reason than W002, and the reason matters: this
+verdict is *derived by running code against a synthetic principal*, not read
+off the source. A gate that consults something the probe cannot fake could in
+principle answer differently for a real request. So the finding argues, it
+does not adjudicate — and a gate that **raises** while being probed (it
+queries the database, calls a seam, reads a request attribute the probe did
+not fake) yields no verdict at all: that view is skipped in silence, never
+reported. A guess dressed as a finding is worse than no finding.
 
 Why W002 exists (level follows who can act)
 -------------------------------------------
@@ -84,6 +119,11 @@ What this does not catch
   ``permission_classes`` and their gate is a decorator this check does not
   read. ``login_required`` has exactly the same guest ambiguity, and it is
   invisible here.
+* **A gate W003 cannot run.** Every view whose stack raises while being
+  probed is skipped silently — see above. That is a deliberate hole: the
+  alternative is a check that reports whatever it failed to evaluate.
+* **A gate that answers per object.** ``has_object_permission`` is not
+  probed; W003 asks only the question DRF asks before dispatch.
 """
 from __future__ import annotations
 
@@ -95,6 +135,7 @@ E001_ANONYMOUS_STANCE_UNDECLARED = "stapel_core.adoption.E001"
 E002_BAD_ANONYMOUS_DECLARATION = "stapel_core.adoption.E002"
 W001_DEFAULT_GATE_IS_BARE = "stapel_core.adoption.W001"
 W002_LIBRARY_STANCE_UNDECLARED = "stapel_core.adoption.W002"
+W003_GUEST_ADMITTED_BY_THE_GATE = "stapel_core.adoption.W003"
 
 _MISSING = object()
 
@@ -315,6 +356,189 @@ def check_anonymous_stance_declared(app_configs=None, **kwargs):
     return findings
 
 
+# ─── W003: the same question, asked of the gate instead of its spelling ──
+
+
+class GuestPrincipal:
+    """A duck shaped like the stapel-auth guest row, for probing a gate.
+
+    Not ``AnonymousUser``, and that is the whole point: a guest is a *user
+    row* (``AbstractStapelUser.create_anonymous_user``) that is
+    ``is_authenticated`` and also ``is_anonymous``, so it passes
+    ``IsAuthenticated`` and fails :class:`
+    ~stapel_core.django.api.permissions.IsNotAnonymousUser`.
+
+    The attributes are the guest row's own, so a gate that reads one gets the
+    value a real guest would carry. Everything a gate could ask for that
+    needs a database — ``groups``, ``user_permissions``, related managers —
+    is deliberately absent: such a gate raises, and a raising gate is no
+    verdict, which is the behaviour W003 wants.
+    """
+
+    is_authenticated = True
+    is_anonymous = True
+    is_active = True
+    is_staff = False
+    is_superuser = False
+    auth_type = "anonymous"
+    staff_roles: list = []
+    username = "anon_probe"
+    email = None
+    phone = None
+    is_email_verified = False
+    is_phone_verified = False
+    onboarding_completed = False
+    profile_completed = False
+
+    def __init__(self):
+        import uuid
+
+        self.pk = self.id = uuid.UUID(int=0)
+
+    def __str__(self):  # pragma: no cover - a gate that logs the principal
+        return f"Anonymous User {self.pk}"
+
+    def get_username(self):
+        return self.username
+
+    def has_perm(self, perm, obj=None):
+        return False
+
+    def has_perms(self, perms, obj=None):
+        return False
+
+    def has_module_perms(self, app_label):
+        return False
+
+
+def _probe_request():
+    """The smallest request a DRF permission class can be asked about.
+
+    Hand-built rather than borrowed from ``django.test``: a system check runs
+    in production processes, and the probe needs nothing the test client
+    provides. A gate that wants more than this raises, and raising is a
+    supported answer here.
+    """
+    from django.http import HttpRequest
+
+    request = HttpRequest()
+    request.method = "GET"
+    request.path = "/"
+    request.META = {
+        "REQUEST_METHOD": "GET",
+        "SERVER_NAME": "probe",
+        "SERVER_PORT": "80",
+    }
+    request.auth = None
+    request.successful_authenticator = None
+    return request
+
+
+def gate_admits(view: type, principal) -> bool:
+    """Run *view*'s whole permission stack against *principal*.
+
+    Raises whatever the gates raise — the caller turns that into "no verdict".
+    """
+    request = _probe_request()
+    request.user = principal
+    instance = view()
+    return all(
+        gate().has_permission(request, instance)
+        for gate in (getattr(view, "permission_classes", ()) or ())
+    )
+
+
+@checks.register("stapel_adoption")
+def check_guest_admitted_by_the_gate(app_configs=None, **kwargs):
+    """W003 — the gate runs, and a guest walks through it undeclared.
+
+    E001's blind spot, by construction: it reads a second permission class
+    beside ``IsAuthenticated`` as a position taken, and a business gate is
+    not a position on identity. See the module docstring.
+    """
+    from stapel_core.django.api.permissions import ANONYMOUS_DECLARATIONS
+    from stapel_core.django.urlsurvey import iter_surface
+
+    if not anonymous_axis_enabled():
+        return []
+    if _is_authenticated_class() is None:
+        return []
+    try:
+        from django.contrib.auth.models import AnonymousUser
+    except Exception:  # pragma: no cover - django.contrib.auth not installed
+        return []
+
+    findings = []
+    seen: set = set()
+    guest = GuestPrincipal()
+    for entry in iter_surface():
+        view = entry.view
+        if not _is_api_view(view):
+            continue
+
+        owner = _declaring_class(view, "permission_classes")
+        if owner is None or _is_drf_owned(owner):
+            continue  # the project-wide default — W001 says it once
+
+        gates = getattr(view, "permission_classes", ()) or ()
+        if _gate_is_bare_is_authenticated(gates):
+            continue  # E001/W002 already reports this view; do not say it twice
+
+        key = f"{view.__module__}.{view.__qualname__}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if _anonymous_declaration(view) in ANONYMOUS_DECLARATIONS:
+            continue
+
+        try:
+            if gate_admits(view, AnonymousUser()):
+                continue  # public: the guest axis says nothing about it
+            if not gate_admits(view, guest):
+                continue  # guests are already kept out
+        except Exception:
+            # No verdict. A gate that needs a database, a seam or a request
+            # attribute this probe cannot fake has not said "yes" — and
+            # reporting what could not be evaluated is how a check earns its
+            # place in SILENCED_SYSTEM_CHECKS.
+            continue
+
+        where = f"{key} (at /{entry.full_path.lstrip('/')})"
+        named = ", ".join(getattr(g, "__name__", repr(g)) for g in gates)
+        library = library_package(view)
+        message = (
+            f"{where} refuses an unauthenticated caller and admits a guest "
+            f"session, and nothing in its MRO says whether that was meant. "
+            f"Its gate is [{named}] — more than a bare IsAuthenticated, which "
+            f"is why {E001_ANONYMOUS_STANCE_UNDECLARED} is silent about it — "
+            f"but running that stack against a guest principal "
+            f"(is_authenticated and is_anonymous, the stapel-auth guest row) "
+            f"shows the guest passes. A second permission class is only a "
+            f"position on identity if it asks about identity."
+        )
+        hint = (
+            "Choose, in the view's own source: add IsNotAnonymousUser to "
+            "permission_classes to keep guests out, or declare that guests "
+            "belong here with `stapel_anonymous_access = ANONYMOUS_ALLOWED` "
+            "(from stapel_core.django.api.permissions). Warning rather than "
+            "Error for a reason of its own: this verdict comes from running "
+            "the gate against a synthetic principal, not from reading the "
+            "source, so a gate that consults something the probe cannot fake "
+            "could answer differently for a real request."
+        )
+        if library is not None:
+            hint = (
+                f"{hint} The view ships in the installed '{library}' package "
+                f"— the declaration belongs in that module's own source, so "
+                f"report it there rather than working around it here."
+            )
+        findings.append(checks.Warning(
+            message, hint=hint, id=W003_GUEST_ADMITTED_BY_THE_GATE,
+        ))
+    return findings
+
+
 @checks.register("stapel_adoption")
 def check_default_permission_gate(app_configs=None, **kwargs):
     """W001 — the project-wide DRF default is itself a bare ``IsAuthenticated``.
@@ -359,8 +583,12 @@ __all__ = [
     "E002_BAD_ANONYMOUS_DECLARATION",
     "W001_DEFAULT_GATE_IS_BARE",
     "W002_LIBRARY_STANCE_UNDECLARED",
+    "W003_GUEST_ADMITTED_BY_THE_GATE",
+    "GuestPrincipal",
     "anonymous_axis_enabled",
+    "gate_admits",
     "library_package",
     "check_anonymous_stance_declared",
     "check_default_permission_gate",
+    "check_guest_admitted_by_the_gate",
 ]

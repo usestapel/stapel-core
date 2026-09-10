@@ -2719,6 +2719,35 @@ Django or DRF carries (it cannot appear by accident) with a closed vocabulary
 | `stapel_core.adoption.E002` | Error | `stapel_anonymous_access` is set to something that is not a stance |
 | `stapel_core.adoption.W001` | Warning | `DEFAULT_PERMISSION_CLASSES` is *itself* bare `IsAuthenticated` — reported once, at the setting, not once per view |
 | `stapel_core.adoption.W002` | Warning | the same silence, but in a view that arrived in an installed `stapel_*` wheel |
+| `stapel_core.adoption.W003` | Warning | the gate, **run**, refuses an unauthenticated caller and admits a guest — in a view the four above read as having taken a position |
+
+**W003 — why route 2 above proves nothing.** "Any other permission class
+alongside `IsAuthenticated` means the view took a position" is an inference
+from a name in a list, and it is wrong whenever that class asks an *orthogonal*
+question. Measured in stapel-gdpr, 2026-09-10: five user-facing views gated on
+`[IsAuthenticated, AccountNotClosed]`. `AccountNotClosed` asks whether an
+account is being erased — a guest passes it, and it says nothing about
+identity. All five admitted guest sessions with E001/W002 silent, and the only
+two views the check *did* report were the ones without a companion class.
+Static inspection cannot tell an identity gate from a business gate: both are
+bare names in a list.
+
+So W003 asks the same question of the gate instead of its spelling. It builds
+the view's whole permission stack and calls `has_permission` twice — once with
+Django's `AnonymousUser`, once with a duck shaped like the stapel-auth guest
+row (`is_authenticated=True` **and** `is_anonymous=True`) — and reports only
+the genuinely ambiguous combination: **refused unauthenticated, admitted guest,
+no stance declared.** A view that admits both is public and the axis says
+nothing about it; a view that refuses both already keeps guests out. Views the
+static check covers are left to it (bare `IsAuthenticated` → E001/W002; the DRF
+project default → W001), so one view never draws two findings.
+
+W-level for a reason of its own, not W002's: the verdict is *derived by running
+code against a synthetic principal*, not read off the source. And a gate that
+**raises** while being probed — it queries the database, calls a seam, reads a
+request attribute the probe did not fake — yields no verdict at all: that view
+is skipped in silence, never reported. A guess dressed as a finding is worse
+than no finding.
 
 Two deliberate asymmetries, both about keeping the check un-mutable:
 
@@ -2735,7 +2764,10 @@ Does **not** catch: authorization done inside the view body (report it with
 `ANONYMOUS_DENIED`, which also makes it discoverable from the class header);
 whether an `ANONYMOUS_ALLOWED` view is *correct* (it is a declaration of
 intent, not a proof); non-DRF views gated by `login_required`, which has the
-same guest ambiguity and is invisible here.
+same guest ambiguity and is invisible here; a gate W003 cannot run (a
+deliberate hole — the alternative is a check that reports whatever it failed to
+evaluate); `has_object_permission`, since W003 asks only the question DRF asks
+before dispatch.
 
 **Shared surface survey (`django/urlsurvey.py`).** Every check that reasons
 about the *actual HTTP surface* — §37 mount containment and this one — walks
