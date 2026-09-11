@@ -2,8 +2,8 @@
 
 ## [0.65.0] — 2026-09-11
 
-Four asks from the MEETTODAY + LiveKit security audit of 2026-09-11
-(`docs/security/2026-09-11-audit-meettoday-livekit.md` §7 items 5a-c and 3c).
+Four asks from a consumer fleet's security audit of 2026-09-11 (§7 items
+5a-c and 3c of that report; the report lives in the consumer's own repo).
 
 ### `X-API-KEY` with one non-ASCII byte was a 500, not a refusal (L-9)
 
