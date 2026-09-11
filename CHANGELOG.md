@@ -1,5 +1,100 @@
 # Changelog
 
+## [0.65.0] — 2026-09-11
+
+Four asks from the MEETTODAY + LiveKit security audit of 2026-09-11
+(`docs/security/2026-09-11-audit-meettoday-livekit.md` §7 items 5a-c and 3c).
+
+### `X-API-KEY` with one non-ASCII byte was a 500, not a refusal (L-9)
+
+`ServiceAPIKeyMiddleware` compared the header with `hmac.compare_digest(str,
+str)`, which raises `TypeError` for any string that is not ASCII-only. The
+header is written by the caller, so an unauthenticated request carrying a
+single non-ASCII byte left a middleware with a 500 wherever `SERVICE_API_KEY`
+or `SERVICE_API_KEYS` is configured. Both sides are `.encode()`d now: the
+compare stays constant-time and a non-ASCII header is what it always was — a
+key that does not match. Fix `ServiceAPIKeyMiddleware._matches`.
+
+### The WebSocket `?token=` channel is deprecated, and off under a posture (I-3)
+
+A bearer in a URL is a bearer in every access log — nginx's, daphne's, and
+every proxy in between. The handshake extractor keeps the two log-safe
+channels (`Authorization` for clients that can set headers, the
+`Sec-WebSocket-Protocol` subprotocol for browsers) and now asks before reading
+the query string:
+
+* **`STAPEL_WS_ALLOW_QUERY_TOKEN`** answers explicitly, in both directions.
+* **Unset is not a value**: it means "ask the deployment's posture". A service
+  that declares `STAPEL_POSTURE` — i.e. one that has said out loud that it is
+  a real installation — has the channel off; a service that never adopted a
+  posture keeps it, so no deployment loses a working client to a library
+  upgrade alone.
+
+When the channel is off the parameter is not read at all: no token validation
+is spent on it, and the handshake falls through to the cookie or closes 4401.
+`stapel_core.django.jwt.channels.query_token_channel_enabled()` is the public
+predicate.
+
+### A CSRF guard for the cookie-first DRF authenticators
+
+`CsrfExemptAPIMiddleware` has described the right rule since 0.40.0 — a
+request whose only credential is a cookie must prove same-origin — and it
+never reached a single DRF view: DRF's `APIView` is `csrf_exempt`, so
+`CsrfViewMiddleware` skips it and the flag the middleware sets decides
+nothing. The JWT cookie is ambient authority exactly like a session cookie,
+and the only thing between it and a cross-site POST was `SameSite=Lax`.
+
+`JWTCookieAuthentication.authenticate()` now calls the guard when — and only
+when — the credential came from the cookie. Two proofs are accepted, either
+one enough:
+
+* `X-Requested-With: XMLHttpRequest`, the custom header the middleware's own
+  docstring names (cross-origin it needs a CORS preflight this deployment
+  does not answer with a foreign echo);
+* an `Origin` — or, absent one, a `Referer` — that this deployment serves:
+  the request's own scheme+host, or an entry of `CSRF_TRUSTED_ORIGINS`,
+  wildcards included. The same two headers Django's CSRF machinery reads.
+
+Safe methods are never asked. A bearer in the `Authorization` header is never
+asked: it is not ambient, an attacker's page cannot produce one, and gating it
+would refuse every service-to-service client. A failure is DRF's
+`PermissionDenied` — **403**, the status and shape `SessionAuthentication`
+raises for the same reason, distinguishable in a log from "no credential".
+
+**For a host with its own cookie authenticator** (the
+`accounts.auth.JWTAuthentication` pattern): call
+`stapel_core.django.jwt.authentication.enforce_cookie_csrf(request)` rather
+than re-deriving the rule; `cookie_csrf_proof_ok(request)` is the predicate
+without the exception.
+
+Nothing an ordinary browser client does changes: a same-origin `fetch` POST
+sends `Origin`. A client that sends neither header is the shape a cross-site
+form POST has.
+
+### `JWT_REFRESH_COOKIE_PATH` — the refresh token need not ride every request
+
+At `Path=/` the refresh cookie — the days-long credential the whole session
+hangs on — is attached to every request the browser makes to the origin: every
+page load, every poll, every same-origin asset. Its one legitimate destination
+is the refresh endpoint. `JWT_REFRESH_COOKIE_PATH` is now honoured by the one
+place that writes it (`set_jwt_cookies`) and by all three that clear it (the
+middleware's stale-cookie branch, `JWTCookieLoginView._clear_jwt_cookies`, the
+admin logout redirect) — a cookie is only cleared by a `Set-Cookie` with the
+same `Path`, so those had to move together. The access cookie's path is not
+configurable and stays `/`: it authenticates every call.
+
+**The default stays `/`.** Narrowing it also stops the cookie reaching the two
+places core reads it from other paths: `JWTAuthMiddleware`'s proactive refresh
+(any path on the auth service) and the Channels handshake's cookie refresh
+(`channels._authenticate_cookie` — the 0.44.1 fix for the tab left open past
+the access cookie's expiry, which reconnects on `/ws/…`). That is a trade a
+deployment makes out loud, in one setting, not one a library makes for it.
+`stapel_core.django.jwt.utils.jwt_refresh_cookie_path()` is the one
+resolution, and its docstring carries the migration note: a browser already
+holding the cookie at `/` keeps it until it expires and sends both, so narrow
+the path alongside a rotation (a new `JWT_REFRESH_COOKIE_NAME`, or a logout),
+not silently mid-session.
+
 ## [0.64.0] — 2026-09-10
 
 ### A deployment can be production and not yet launched — the posture `stage`

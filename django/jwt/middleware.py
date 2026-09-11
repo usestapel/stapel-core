@@ -22,6 +22,7 @@ from .utils import (
     get_or_create_user_from_jwt,
     extract_jwt_from_request,
     jwt_cookie_names,
+    jwt_refresh_cookie_path,
     load_user_by_uid,
     set_jwt_cookies,
 )
@@ -249,7 +250,8 @@ class JWTAuthMiddleware(MiddlewareMixin):
             config = jwt_provider.config
             logger.debug(f"Clearing JWT cookies for {request.path}")
             response.delete_cookie(config.cookie_name, path='/', domain=config.cookie_domain, samesite=config.cookie_samesite)
-            response.delete_cookie(config.refresh_cookie_name, path='/', domain=config.cookie_domain, samesite=config.cookie_samesite)
+            # A cookie is only cleared by a Set-Cookie with the SAME Path.
+            response.delete_cookie(config.refresh_cookie_name, path=jwt_refresh_cookie_path(), domain=config.cookie_domain, samesite=config.cookie_samesite)
             return response
 
         # Check if logout requested skipping cookie updates
@@ -330,23 +332,42 @@ class ServiceAPIKeyMiddleware(MiddlewareMixin):
 
     header_name = "HTTP_X_API_KEY"
 
-    def process_request(self, request):
+    @staticmethod
+    def _matches(presented, configured) -> bool:
+        """Constant-time equality over BYTES, for an attacker-written header.
+
+        ``hmac.compare_digest`` refuses ``str`` arguments that are not
+        ASCII-only and raises ``TypeError``, so a single non-ASCII byte in
+        ``X-API-KEY`` used to leave a middleware — i.e. a 500 on every request
+        that carried one, from an unauthenticated caller. Encoding both sides
+        keeps the compare constant-time and makes a non-ASCII header what it
+        always was: a key that does not match.
+        """
         import hmac
 
+        presented_bytes = (
+            presented if isinstance(presented, bytes) else str(presented).encode()
+        )
+        configured_bytes = (
+            configured if isinstance(configured, bytes) else str(configured).encode()
+        )
+        return hmac.compare_digest(presented_bytes, configured_bytes)
+
+    def process_request(self, request):
         api_key = request.META.get(self.header_name)
         if not api_key:
             return None
 
         # Prefer single shared key (constant-time compare)
         shared_key = getattr(settings, "SERVICE_API_KEY", None)
-        if shared_key and hmac.compare_digest(api_key, shared_key):
+        if shared_key and self._matches(api_key, shared_key):
             request.is_service_request = True
             request.service_name = "internal"
             return None
 
         service_keys = getattr(settings, "SERVICE_API_KEYS", {})
         for service_name, key in service_keys.items():
-            if key and hmac.compare_digest(api_key, key):
+            if key and self._matches(api_key, key):
                 request.is_service_request = True
                 request.service_name = service_name
                 return None

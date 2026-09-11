@@ -38,8 +38,14 @@ Token transmission — four channels, tried in this order
        ["bearer", token])``.
    Recognized schemes: ``authorization``, ``bearer``, ``access_token``,
    ``jwt``, ``token``.
-3. ``?token=<jwt>`` query parameter — the simplest explicit fallback. Query
-   strings routinely land in proxy/server access logs.
+3. ``?token=<jwt>`` query parameter — the simplest explicit fallback, and a
+   bearer written into a URL, i.e. into nginx's and daphne's access logs and
+   every proxy log in between. **Deprecated since 0.65.0 and off wherever a
+   deployment declares a named posture** (``STAPEL_POSTURE``); a deployment
+   with no posture keeps it, and ``STAPEL_WS_ALLOW_QUERY_TOKEN`` answers
+   explicitly in either direction. See :func:`query_token_channel_enabled`.
+   When the channel is off the parameter is not read at all — the handshake
+   falls through to the cookie and, failing that, closes 4401.
 4. The **JWT cookie** (0.44.1) — ``JWT_COOKIE_NAME``, and
    ``JWT_REFRESH_COOKIE_NAME`` where the deployment allows refresh. Names
    resolve through :func:`stapel_core.django.jwt.utils.jwt_cookie_names`, the
@@ -192,6 +198,48 @@ def _token_from_subprotocols(protocols) -> str | None:
     return None
 
 
+#: The setting that decides whether ``?token=`` is a credential channel at all.
+#: Unset means "ask the posture": see :func:`query_token_channel_enabled`.
+QUERY_TOKEN_SETTING = "STAPEL_WS_ALLOW_QUERY_TOKEN"
+
+
+def query_token_channel_enabled() -> bool:
+    """May this deployment read a credential out of the handshake query string?
+
+    A bearer in a URL is a bearer in every access log — nginx, daphne, any
+    proxy in between — so the answer for a production installation is no, and
+    the two log-safe channels (``Authorization`` for non-browser clients, the
+    ``Sec-WebSocket-Protocol`` subprotocol for browsers) cover every client
+    that has one.
+
+    Resolution, in order:
+
+    1. ``STAPEL_WS_ALLOW_QUERY_TOKEN`` when it is set — an explicit answer
+       wins in BOTH directions, because a deployment whose one native client
+       can send nothing else must be able to say so out loud rather than
+       discover the channel gone.
+    2. Otherwise the deployment's declared posture
+       (:func:`stapel_core.django.presets.declared_posture`): a named posture
+       IS the statement "this is a real installation", and the channel is off
+       there. A deployment that never adopted a posture keeps the channel,
+       so nothing breaks under a library upgrade alone.
+    """
+    try:
+        from django.conf import settings
+
+        explicit = getattr(settings, QUERY_TOKEN_SETTING, None)
+    except Exception:  # pragma: no cover - settings not configured
+        return True
+    if explicit is not None:
+        return bool(explicit)
+    try:
+        from ..presets import declared_posture
+
+        return declared_posture() is None
+    except Exception:  # pragma: no cover - settings not configured
+        return True
+
+
 def _header(scope, name: bytes) -> str | None:
     """The first value of a raw ASGI header, decoded, or ``None``."""
     for key, value in scope.get("headers") or ():
@@ -266,13 +314,26 @@ def _extract_credential(scope) -> tuple[str | None, str | None, str | None]:
     if token:
         return token, None, SOURCE_SUBPROTOCOL
 
-    # 3. ?token=<jwt> query parameter
+    # 3. ?token=<jwt> query parameter — only where the deployment still allows
+    #    a bearer to be written into a URL. See query_token_channel_enabled().
     query_string = scope.get("query_string") or b""
     if query_string:
         params = parse_qs(query_string.decode("latin-1"))
         values = params.get("token")
         if values and values[0]:
-            return values[0], None, SOURCE_QUERY
+            if query_token_channel_enabled():
+                logger.debug(
+                    "Channels JWT: credential taken from the query string; "
+                    "prefer the Sec-WebSocket-Protocol subprotocol (%s)",
+                    QUERY_TOKEN_SETTING,
+                )
+                return values[0], None, SOURCE_QUERY
+            logger.info(
+                "Channels JWT: ignoring a ?token= credential — the query "
+                "channel is off for this deployment (%s). Send the token as "
+                "a Sec-WebSocket-Protocol subprotocol instead.",
+                QUERY_TOKEN_SETTING,
+            )
 
     # 4. The JWT cookie — the only channel a browser gets for free, and the
     #    only ambient one. A refresh cookie alone is still a credential: the

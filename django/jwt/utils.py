@@ -124,6 +124,38 @@ def jwt_cookie_names() -> tuple[str, str]:
     )
 
 
+def jwt_refresh_cookie_path() -> str:
+    """The ``Path`` the refresh cookie is written and cleared at — ONE
+    resolution, the way :func:`jwt_cookie_names` is for the names.
+
+    ``JWT_REFRESH_COOKIE_PATH``, default ``"/"``.
+
+    Why a deployment narrows it (security audit 2026-09-11, §7 item 3c): at
+    ``Path=/`` the refresh token — the credential the whole session hangs on,
+    and the one with a lifetime measured in days — rides every request the
+    browser makes to this origin. Its one legitimate destination is the
+    refresh endpoint, typically ``/auth/api/v1/token/refresh/``, and a client
+    whose refresh handoff already targets that path loses nothing by saying so.
+
+    Why the default is still ``"/"``: narrowing also stops the cookie reaching
+    the two places core reads it from OTHER paths —
+    :class:`~stapel_core.django.jwt.middleware.JWTAuthMiddleware`'s proactive
+    refresh (any path on the auth service) and the Channels handshake's cookie
+    refresh (``channels._authenticate_cookie``, the 0.44.1 fix for the tab left
+    open past the access cookie's expiry, which reconnects on ``/ws/…``). Those
+    are features a deployment may well be relying on, so the trade is the
+    deployment's to make, out loud, in one setting.
+
+    Migration note: a browser that already holds the cookie at ``/`` keeps it
+    until it expires, and will send BOTH to the refresh endpoint. Narrow the
+    path together with a rotation the deployment was going to do anyway (a new
+    ``JWT_REFRESH_COOKIE_NAME``, or a logout), not silently mid-session.
+    """
+    from django.conf import settings
+
+    return getattr(settings, "JWT_REFRESH_COOKIE_PATH", None) or "/"
+
+
 def _get_user_model():
     """
     Lazy import of User model to avoid ImproperlyConfigured errors.
@@ -744,14 +776,16 @@ def set_jwt_cookies(response, access_token: str, refresh_token: Optional[str] = 
         samesite=cookie_samesite,
     )
 
-    # Set refresh token cookie if provided
+    # Set refresh token cookie if provided. Its Path is the deployment's
+    # decision (jwt_refresh_cookie_path); the access cookie's never is —
+    # it authenticates every call and must reach every path.
     if refresh_token:
         response.set_cookie(
             refresh_cookie_name,
             refresh_token,
             max_age=refresh_token_lifetime,
             domain=cookie_domain,
-            path="/",
+            path=jwt_refresh_cookie_path(),
             secure=cookie_secure,
             httponly=cookie_httponly,
             samesite=cookie_samesite,
@@ -857,7 +891,7 @@ def get_admin_logout_urlpattern(
             )
             redirect_response.delete_cookie(
                 refresh_cookie_name,
-                path="/",
+                path=jwt_refresh_cookie_path(),
                 domain=cookie_domain,
                 samesite=cookie_samesite,
             )

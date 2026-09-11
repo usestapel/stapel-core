@@ -113,6 +113,127 @@ def is_user_blacklisted(user_id: str) -> bool:
         return not _blacklist_fail_open()
 
 
+#: HTTP methods that carry no side effect, so no proof is asked for them.
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+#: The custom header ``CsrfExemptAPIMiddleware`` already names as the
+#: same-origin proof: a cross-origin page cannot set it without a CORS
+#: preflight this deployment never answers with an allow-list echo.
+CSRF_PROOF_HEADER = "HTTP_X_REQUESTED_WITH"
+CSRF_PROOF_HEADER_VALUE = "XMLHttpRequest"
+
+
+def _origin_is_ours(request, origin: str) -> bool:
+    """Django's own CSRF origin rule, applied to one header value.
+
+    Same scheme+host+port as the request, or an entry of
+    ``CSRF_TRUSTED_ORIGINS`` (wildcards included — ``is_same_domain`` is the
+    function Django's ``CsrfViewMiddleware`` uses for them).
+    """
+    from urllib.parse import urlsplit
+
+    from django.conf import settings
+    from django.utils.http import is_same_domain
+
+    try:
+        parts = urlsplit(origin)
+    except ValueError:
+        return False
+    if not parts.scheme or not parts.netloc:
+        return False
+
+    good_scheme = "https" if request.is_secure() else "http"
+    try:
+        host = request.get_host()
+    except Exception:  # DisallowedHost — the request is refused elsewhere
+        return False
+    if parts.scheme == good_scheme and parts.netloc == host:
+        return True
+
+    for entry in getattr(settings, "CSRF_TRUSTED_ORIGINS", None) or []:
+        try:
+            trusted = urlsplit(entry)
+        except ValueError:
+            continue
+        if not trusted.scheme or not trusted.netloc:
+            continue
+        if parts.scheme != trusted.scheme:
+            continue
+        # "*.example.com" -> ".example.com", the shape is_same_domain reads as
+        # "this host or any subdomain of it" — Django's own conversion.
+        if is_same_domain(parts.netloc, trusted.netloc.lstrip("*")):
+            return True
+    return False
+
+
+def cookie_csrf_proof_ok(request) -> bool:
+    """Has this cookie-authenticated request proved it is not cross-site?
+
+    Two proofs, either of which is enough:
+
+    * ``X-Requested-With: XMLHttpRequest`` — a custom header, so a cross-origin
+      page needs a CORS preflight to send it, and this deployment's CORS does
+      not echo a foreign origin. This is the proof
+      :class:`~stapel_core.django.jwt.middleware.CsrfExemptAPIMiddleware`
+      already describes; it simply never reached a DRF view, because DRF views
+      are ``csrf_exempt`` and ``CsrfViewMiddleware`` skips them.
+    * an ``Origin`` (or, absent one, a ``Referer``) this deployment serves —
+      the same two headers Django's CSRF machinery reads, so a browser that
+      sends neither the custom header nor an origin is the shape a cross-site
+      form POST has.
+
+    Safe methods always pass: the guard is about side effects.
+    """
+    if request.method in _SAFE_METHODS:
+        return True
+    if request.META.get(CSRF_PROOF_HEADER) == CSRF_PROOF_HEADER_VALUE:
+        return True
+    origin = request.META.get("HTTP_ORIGIN")
+    if origin:
+        return _origin_is_ours(request, origin)
+    referer = request.META.get("HTTP_REFERER")
+    if referer:
+        return _origin_is_ours(request, referer)
+    return False
+
+
+def enforce_cookie_csrf(request) -> None:
+    """Refuse a cookie-only mutation that cannot prove it is same-origin.
+
+    The guard for every cookie-first DRF authenticator — this package's
+    :class:`JWTCookieAuthentication` calls it, and a host that ships its own
+    cookie authenticator should call it too rather than re-deriving the rule.
+
+    Raises DRF's :class:`~rest_framework.exceptions.PermissionDenied` (HTTP
+    **403**, the same status and the same shape DRF's own
+    ``SessionAuthentication`` raises for a failed CSRF check), so the answer is
+    distinguishable from "no credential" (401) in a log.
+
+    A request whose credential arrived in the ``Authorization`` header never
+    gets here: a bearer is not ambient, an attacker's page cannot produce one,
+    and asking a service-to-service client for a browser proof would refuse
+    every legitimate one.
+    """
+    if cookie_csrf_proof_ok(request):
+        return
+    from rest_framework import exceptions
+
+    logger.warning(
+        "JWT cookie CSRF guard - refused a cookie-only %s to %s with no "
+        "same-origin proof (origin=%r, referer=%r)",
+        request.method,
+        request.path,
+        request.META.get("HTTP_ORIGIN"),
+        request.META.get("HTTP_REFERER"),
+    )
+    raise exceptions.PermissionDenied(
+        "CSRF Failed: a cookie-authenticated request must prove it is "
+        "same-origin. Send X-Requested-With: XMLHttpRequest, or an Origin "
+        "this deployment serves, or authenticate with the Authorization "
+        "header instead."
+    )
+
+
 class JWTCookieAuthentication(authentication.BaseAuthentication):
     """
     DRF authentication class that uses JWT from cookies.
@@ -138,7 +259,7 @@ class JWTCookieAuthentication(authentication.BaseAuthentication):
         Returns:
             tuple: (user, None) if authenticated, None otherwise
         """
-        from .utils import extract_jwt_from_request, get_or_create_user_from_jwt
+        from .utils import extract_jwt_from_request, get_or_create_user_from_jwt, jwt_cookie_names
         from .provider import jwt_provider
 
         # Extract JWT from cookies
@@ -146,6 +267,14 @@ class JWTCookieAuthentication(authentication.BaseAuthentication):
 
         if not access_token:
             return None
+
+        # The credential is ambient exactly when it came from the cookie: the
+        # browser attached it without the page asking. Ask that request — and
+        # only that request — for the same-origin proof before spending a
+        # token validation on it. A bearer in the Authorization header is a
+        # credential the caller chose to send and is never gated.
+        if request.COOKIES.get(jwt_cookie_names()[0]) == access_token:
+            enforce_cookie_csrf(request)
 
         # Extract metadata for debugging
         user_agent = request.headers.get('user-agent', 'unknown')

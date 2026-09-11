@@ -125,13 +125,14 @@ class JWTCookieLoginView(LoginView):
     @staticmethod
     def _clear_jwt_cookies(response):
         """Delete both auth cookies with the deployment's cookie attributes."""
-        from .utils import jwt_cookie_names
+        from .utils import jwt_cookie_names, jwt_refresh_cookie_path
 
         cookie_name, refresh_cookie_name = jwt_cookie_names()
         cookie_domain = getattr(settings, 'JWT_COOKIE_DOMAIN', None)
         cookie_samesite = getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax')
         response.delete_cookie(cookie_name, path='/', domain=cookie_domain, samesite=cookie_samesite)
-        response.delete_cookie(refresh_cookie_name, path='/', domain=cookie_domain, samesite=cookie_samesite)
+        # A cookie is only cleared by a Set-Cookie with the SAME Path.
+        response.delete_cookie(refresh_cookie_name, path=jwt_refresh_cookie_path(), domain=cookie_domain, samesite=cookie_samesite)
         return response
 
     def form_valid(self, form):

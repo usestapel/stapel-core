@@ -46,8 +46,8 @@ VIEWS_PROVIDER = "stapel_core.django.jwt.views.jwt_provider"
 PASSWORD = "correct-horse-battery-staple"
 
 
-def _request(method="post", path="/auth/admin/login/", cookies=None):
-    req = getattr(factory, method)(path, {})
+def _request(method="post", path="/auth/admin/login/", cookies=None, **extra):
+    req = getattr(factory, method)(path, {}, **extra)
     req.COOKIES = cookies or {}
     req.session = MagicMock()
     return req
@@ -373,7 +373,13 @@ class TestInactiveUserAuthenticatesNobody:
 
         user = self._closed_account("closed-drf")
         access, _ = provider.create_tokens_from_data(self._claims(user))
-        req = _request(cookies={"stapel_jwt": access})
+        # The same-origin proof the cookie CSRF guard asks of every
+        # cookie-authenticated mutation; this test is about the account being
+        # closed, not about where the POST came from.
+        req = _request(
+            cookies={"stapel_jwt": access},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
         assert JWTCookieAuthentication().authenticate(req) is None
 
     def test_session_backend_stops_resolving_a_deactivated_session(self):

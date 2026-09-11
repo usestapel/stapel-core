@@ -705,3 +705,69 @@ class TestOptionalDependency:
             if saved_submod is not None:
                 # Restore the freshly re-imported module for any later tests.
                 importlib.import_module("stapel_core.django.jwt.channels")
+
+
+# ---------------------------------------------------------------------------
+# The ?token= channel is a bearer in a URL (security audit 2026-09-11, I-3/§7)
+#
+# Query strings land in proxy and server access logs, so a deployment that
+# declares a named production posture must not accept a credential there. The
+# posture answers by default; STAPEL_WS_ALLOW_QUERY_TOKEN overrides in either
+# direction, because a deployment whose native client has no other channel
+# must be able to say so out loud.
+# ---------------------------------------------------------------------------
+
+_POSTURE = {"PRESET": "private_space", "OPTIONS": {"door": "invite_only"}}
+
+
+class TestQueryTokenChannelSwitch:
+
+    def test_read_when_no_posture_is_declared(self):
+        scope = _ws_scope(query_string=b"token=aaa.bbb.ccc")
+        assert ch._extract_token(scope) == "aaa.bbb.ccc"
+
+    @override_settings(STAPEL_POSTURE=_POSTURE)
+    def test_refused_under_a_declared_posture(self):
+        scope = _ws_scope(query_string=b"token=aaa.bbb.ccc")
+        assert ch._extract_token(scope) is None
+
+    @override_settings(STAPEL_POSTURE=_POSTURE)
+    def test_cookie_still_read_under_a_posture_when_the_query_is_refused(self):
+        scope = _browser_scope(extra=((b"x", b"y"),))
+        scope["query_string"] = b"token=aaa.bbb.ccc"
+        token, _refresh, source = ch._extract_credential(scope)
+        assert source == ch.SOURCE_COOKIE
+        assert token == "cookie.tok.en"
+
+    @override_settings(STAPEL_POSTURE=_POSTURE, STAPEL_WS_ALLOW_QUERY_TOKEN=True)
+    def test_explicitly_re_enabled_under_a_posture(self):
+        scope = _ws_scope(query_string=b"token=aaa.bbb.ccc")
+        assert ch._extract_token(scope) == "aaa.bbb.ccc"
+
+    @override_settings(STAPEL_WS_ALLOW_QUERY_TOKEN=False)
+    def test_explicitly_refused_without_a_posture(self):
+        scope = _ws_scope(query_string=b"token=aaa.bbb.ccc")
+        assert ch._extract_token(scope) is None
+
+    @override_settings(STAPEL_POSTURE=_POSTURE)
+    def test_the_handshake_is_closed_when_the_query_is_the_only_credential(
+        self, monkeypatch,
+    ):
+        """Even a token that WOULD authenticate does not open the socket."""
+        attempted = []
+
+        def _auth(token):
+            attempted.append(token)
+            return (object(), {"user_id": "u-1"})
+
+        monkeypatch.setattr(ch, "_authenticate_token", _auth)
+        inner = _RecordingInner()
+        mw = ch.JWTAuthMiddleware(inner)
+        send = _Sender()
+        _run(mw(_ws_scope(query_string=b"token=aaa.bbb.ccc"),
+                _connect_receiver(), send))
+        assert attempted == []
+        assert not inner.called
+        assert send.sent == [
+            {"type": "websocket.close", "code": ch.CLOSE_CODE_UNAUTHORIZED}
+        ]

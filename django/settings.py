@@ -61,6 +61,7 @@ __all__ = [
     "JWT_REFRESH_TOKEN_LIFETIME",
     "JWT_COOKIE_NAME",
     "JWT_REFRESH_COOKIE_NAME",
+    "JWT_REFRESH_COOKIE_PATH",
     "JWT_COOKIE_DOMAIN",
     "JWT_COOKIE_SECURE",
     "JWT_COOKIE_HTTPONLY",
@@ -76,6 +77,7 @@ __all__ = [
     "JWT_AUDIENCE",
     # WebSocket
     "STAPEL_WS_ALLOWED_ORIGINS",
+    "STAPEL_WS_ALLOW_QUERY_TOKEN",
     # Service API
     "SERVICE_API_KEY",
     "SERVICE_API_KEYS",
@@ -212,6 +214,14 @@ JWT_ACCESS_TOKEN_LIFETIME = int(os.getenv('JWT_ACCESS_TOKEN_LIFETIME', '3600')) 
 JWT_REFRESH_TOKEN_LIFETIME = int(os.getenv('JWT_REFRESH_TOKEN_LIFETIME', '604800'))  # 7 days default
 JWT_COOKIE_NAME = os.getenv('JWT_COOKIE_NAME', 'stapel_jwt')
 JWT_REFRESH_COOKIE_NAME = os.getenv('JWT_REFRESH_COOKIE_NAME', 'stapel_refresh_jwt')
+# Path of the refresh cookie. "/" (the default) means the refresh token — the
+# days-long credential the whole session hangs on — rides every request the
+# browser makes to this origin. Narrow it to the refresh endpoint
+# (JWT_REFRESH_COOKIE_PATH=/auth/api/v1/token/refresh/) and the browser sends
+# it nowhere else; read stapel_core.django.jwt.utils.jwt_refresh_cookie_path
+# first, because narrowing also disables the middleware's proactive refresh on
+# other paths and the Channels handshake's cookie refresh.
+JWT_REFRESH_COOKIE_PATH = os.getenv('JWT_REFRESH_COOKIE_PATH', '/')
 JWT_COOKIE_DOMAIN = os.getenv('JWT_COOKIE_DOMAIN', None)  # None = host-only, set to ".domain.com" for subdomains
 # TLS-only by default. This used to default to False, so a deployment that
 # never set the variable shipped its session cookie in cleartext on any
@@ -234,6 +244,15 @@ STAPEL_WS_ALLOWED_ORIGINS = [
     for o in os.getenv('STAPEL_WS_ALLOWED_ORIGINS', '').split(',')
     if o.strip()
 ]
+# ?token=<jwt> on the WebSocket handshake: a bearer written into a URL, and so
+# into nginx's and daphne's access logs. UNSET (the default) is not a value —
+# it means "ask the deployment's posture": a service that declares
+# STAPEL_POSTURE has the channel off, one that never adopted a posture keeps
+# it. Set it to true/false to answer explicitly.
+_ws_query_token = os.getenv('STAPEL_WS_ALLOW_QUERY_TOKEN')
+STAPEL_WS_ALLOW_QUERY_TOKEN = (
+    None if _ws_query_token is None else _ws_query_token.strip().lower() == 'true'
+)
 JWT_AUTO_REFRESH_ENABLED = os.getenv('JWT_AUTO_REFRESH_ENABLED', 'False').lower() == 'true'
 JWT_REFRESH_THRESHOLD = int(os.getenv('JWT_REFRESH_THRESHOLD', '300'))  # 5 minutes default
 # Only auth service should be allowed to refresh tokens (set True in auth service settings)

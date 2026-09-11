@@ -423,3 +423,28 @@ class TestServiceAPIKeyMiddleware:
         req = _req(HTTP_X_API_KEY='some-key')
         result = self.middleware.process_request(req)
         assert result is None
+
+    # L-9 (security audit 2026-09-11): hmac.compare_digest refuses str
+    # arguments that are not ASCII-only. The header is attacker-controlled, so
+    # a single non-ASCII byte in X-API-KEY raised TypeError out of a
+    # middleware — a 500 on every request carrying one.
+    @override_settings(SERVICE_API_KEY='shared-secret-key')
+    def test_non_ascii_key_is_refused_against_the_shared_key(self):
+        req = _req(HTTP_X_API_KEY='ключ')
+        result = self.middleware.process_request(req)
+        assert result is None
+        assert not getattr(req, 'is_service_request', False)
+
+    @override_settings(SERVICE_API_KEYS={'billing': 'billing-key'})
+    def test_non_ascii_key_is_refused_against_the_mapping(self):
+        req = _req(HTTP_X_API_KEY='ключ')
+        result = self.middleware.process_request(req)
+        assert result is None
+        assert not getattr(req, 'is_service_request', False)
+
+    @override_settings(SERVICE_API_KEY='пароль')
+    def test_non_ascii_key_still_matches_a_non_ascii_configured_key(self):
+        req = _req(HTTP_X_API_KEY='пароль')
+        self.middleware.process_request(req)
+        assert req.is_service_request is True
+        assert req.service_name == 'internal'
