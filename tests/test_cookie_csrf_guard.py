@@ -96,10 +96,15 @@ class TestEnforceCookieCsrf:
 
 
 class TestJWTCookieAuthenticationAsksForTheProof:
-    """The guard runs inside authenticate(), so every view using the class
-    inherits it without a permission class or a mixin of its own."""
+    """With STAPEL_JWT_COOKIE_CSRF on, the guard runs inside authenticate(),
+    so every view using the class inherits it without a permission class or a
+    mixin of its own."""
 
     auth = JWTCookieAuthentication()
+
+    @pytest.fixture(autouse=True)
+    def _switch_on(self, settings):
+        settings.STAPEL_JWT_COOKIE_CSRF = True
 
     @staticmethod
     def _mocked(fn):
@@ -131,5 +136,17 @@ class TestJWTCookieAuthenticationAsksForTheProof:
     def test_a_cookie_get_needs_no_proof(self):
         result, user = self._mocked(
             lambda: self.auth.authenticate(_get(cookies=COOKIE))
+        )
+        assert result == (user, None)
+
+
+class TestTheSwitchIsOffByDefault:
+    """Nothing an existing deployment sends stops working on the upgrade."""
+
+    auth = JWTCookieAuthentication()
+
+    def test_a_cookie_only_post_still_authenticates_with_the_switch_unset(self):
+        result, user = TestJWTCookieAuthenticationAsksForTheProof._mocked(
+            lambda: self.auth.authenticate(_post(cookies=COOKIE))
         )
         assert result == (user, None)

@@ -166,6 +166,35 @@ def _origin_is_ours(request, origin: str) -> bool:
     return False
 
 
+#: The switch that turns the guard below into an automatic one.
+COOKIE_CSRF_SETTING = "STAPEL_JWT_COOKIE_CSRF"
+
+
+def cookie_csrf_enforced() -> bool:
+    """Does :class:`JWTCookieAuthentication` run the guard by itself?
+
+    ``STAPEL_JWT_COOKIE_CSRF``, **default False**, and the default is the
+    honest one rather than the brave one: requiring a same-origin proof is a
+    change to what every existing client must send, and a client that sends
+    neither ``X-Requested-With`` nor an ``Origin`` — every Django test client
+    in the fleet, and any non-browser caller that authenticates with the
+    cookie — starts getting 403 the moment the library is upgraded. That is a
+    deployment's cutover to schedule, not a library's to impose on a patch
+    release. ``SameSite=Lax`` is what stands in the meantime, which is what
+    stood before.
+
+    Turning it on is one line, and a deployment whose browser client uses
+    ``fetch``/``XMLHttpRequest`` needs nothing else: a same-origin ``fetch``
+    POST sends ``Origin``.
+
+    :func:`enforce_cookie_csrf` itself is NOT gated by this — a host that
+    calls it from its own authenticator has already decided.
+    """
+    from django.conf import settings
+
+    return bool(getattr(settings, COOKIE_CSRF_SETTING, False))
+
+
 def cookie_csrf_proof_ok(request) -> bool:
     """Has this cookie-authenticated request proved it is not cross-site?
 
@@ -273,7 +302,9 @@ class JWTCookieAuthentication(authentication.BaseAuthentication):
         # only that request — for the same-origin proof before spending a
         # token validation on it. A bearer in the Authorization header is a
         # credential the caller chose to send and is never gated.
-        if request.COOKIES.get(jwt_cookie_names()[0]) == access_token:
+        if cookie_csrf_enforced() and (
+            request.COOKIES.get(jwt_cookie_names()[0]) == access_token
+        ):
             enforce_cookie_csrf(request)
 
         # Extract metadata for debugging

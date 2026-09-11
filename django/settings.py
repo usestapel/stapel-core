@@ -78,6 +78,7 @@ __all__ = [
     # WebSocket
     "STAPEL_WS_ALLOWED_ORIGINS",
     "STAPEL_WS_ALLOW_QUERY_TOKEN",
+    "STAPEL_JWT_COOKIE_CSRF",
     # Service API
     "SERVICE_API_KEY",
     "SERVICE_API_KEYS",
@@ -257,6 +258,13 @@ JWT_AUTO_REFRESH_ENABLED = os.getenv('JWT_AUTO_REFRESH_ENABLED', 'False').lower(
 JWT_REFRESH_THRESHOLD = int(os.getenv('JWT_REFRESH_THRESHOLD', '300'))  # 5 minutes default
 # Only auth service should be allowed to refresh tokens (set True in auth service settings)
 JWT_REFRESH_ALLOWED = os.getenv('JWT_REFRESH_ALLOWED', 'False').lower() == 'true'
+# Make JWTCookieAuthentication refuse a cookie-only mutation that cannot prove
+# it is same-origin (X-Requested-With, or an Origin/Referer this deployment
+# serves) — the rule CsrfExemptAPIMiddleware describes and can never apply to
+# a DRF view, which is csrf_exempt by construction. Off by default: it is a
+# change to what every existing client must send. See
+# stapel_core.django.jwt.authentication.cookie_csrf_enforced.
+STAPEL_JWT_COOKIE_CSRF = os.getenv('STAPEL_JWT_COOKIE_CSRF', 'False').lower() == 'true'
 
 # CORS Configuration for all services
 # For production, set CORS_ALLOWED_ORIGINS environment variable with comma-separated origins

@@ -67,9 +67,19 @@ raises for the same reason, distinguishable in a log from "no credential".
 than re-deriving the rule; `cookie_csrf_proof_ok(request)` is the predicate
 without the exception.
 
-Nothing an ordinary browser client does changes: a same-origin `fetch` POST
-sends `Origin`. A client that sends neither header is the shape a cross-site
-form POST has.
+**The automatic call is behind `STAPEL_JWT_COOKIE_CSRF`, default False.** Not
+timidity — measurement: turned on unconditionally it broke 17 tests in
+stapel-auth alone, every one of them a Django test client POST that carries
+the cookie and sends no `Origin`. That is the shape of every non-browser
+cookie caller in the fleet, and asking all of them for a new header is a
+deployment's cutover to schedule, not a library's to impose on an upgrade.
+`SameSite=Lax` stands in the meantime, which is what stood before.
+`enforce_cookie_csrf()` itself is never gated: a host that calls it has
+already decided.
+
+Nothing an ordinary browser client does changes even with the switch on: a
+same-origin `fetch` POST sends `Origin`. A client that sends neither header is
+the shape a cross-site form POST has.
 
 ### `JWT_REFRESH_COOKIE_PATH` — the refresh token need not ride every request
 
