@@ -26,11 +26,13 @@ import logging
 import threading
 from typing import Any
 
+from . import overflow
 from .config import comm_setting
 from .exceptions import (
     FunctionCallError,
     FunctionNotRegistered,
     FunctionPayloadTooLarge,
+    FunctionReferenceError,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,8 +142,28 @@ def nats_function_transport(name: str, payload: dict, *, timeout: float | None =
         limit = bridge.max_payload(effective_timeout)
     except Exception:  # connection problems are the request()'s to report
         limit = 0
-    if limit and len(data) > limit:
-        raise FunctionPayloadTooLarge(name, len(data), limit, direction="request")
+    threshold = overflow.threshold_bytes(limit)
+    if threshold and len(data) > threshold:
+        # By reference, in this direction too. Symmetric on purpose: a
+        # Function whose ARGUMENT is bulk (a document to summarize, a batch
+        # to screen) hits the same wall as one whose answer is, and a seam
+        # that solved only the direction that happened to break first would
+        # be waiting for the other half of the same bug report.
+        try:
+            ref = overflow.store_frame(data, function=name, direction="request")
+        except FunctionReferenceError as exc:
+            # No store: the old refusal, which at least names the sizes and
+            # the setting. Never the wire — nats-py's MaxPayloadError says
+            # nothing about what to do.
+            logger.error("comm: %s", exc)
+            raise FunctionPayloadTooLarge(
+                name, len(data), limit or threshold, direction="request"
+            ) from exc
+        logger.info(
+            "function %s: request of %d bytes travels by reference (%s)",
+            name, len(data), ref["key"],
+        )
+        data = overflow.encode_reference(ref)
 
     try:
         raw = bridge.request(subject_for(name), data, effective_timeout)
@@ -158,6 +180,15 @@ def nats_function_transport(name: str, payload: dict, *, timeout: float | None =
         raise FunctionCallError(f"function '{name}' failed over NATS: {exc!r}") from exc
 
     reply = json.loads(raw.decode() or "{}")
+
+    # THE ANSWER MAY BE A REFERENCE. Resolved here, so no caller ever learns
+    # that its result took a different road: call() returns the same object
+    # it would have returned on a smaller input. See comm/overflow.py.
+    ref = overflow.reference_in(reply)
+    if ref is not None:
+        raw = overflow.dereference(ref, function=name)
+        reply = json.loads(raw.decode() or "{}")
+
     if isinstance(reply, dict) and reply.get("error"):
         # The server ran the function fine but its answer did not fit the wire.
         # It sends this small marker INSTEAD of the result so the caller gets a

@@ -24,6 +24,7 @@ from django.core import checks
 E001_VALIDATOR_MISSING = "stapel_core.comm.E001"
 W002_VALIDATION_DISABLED = "stapel_core.comm.W002"
 E003_SIGNAL_TRANSPORT_UNRESOLVABLE = "stapel_core.comm.E003"
+E004_LARGE_REPLY_STORE_UNRESOLVABLE = "stapel_core.comm.E004"
 
 
 @checks.register("stapel_comm")
@@ -115,10 +116,60 @@ def check_signal_transport(app_configs=None, **kwargs):
     )]
 
 
+@checks.register("stapel_comm")
+def check_large_reply_store(app_configs=None, **kwargs):
+    """A configured overflow store must resolve at boot.
+
+    ``STAPEL_COMM["LARGE_REPLY"]["STORE"]`` is read for the first time when a
+    Function's answer does not fit one broker message — which, by the nature
+    of the thing, is the worst possible moment to discover a typo in it: the
+    work is already done and paid for. Resolve it here instead, where the
+    cost of being wrong is a failed boot smoke.
+
+    Leaving it unset is the DEFAULT and never reported: a deployment with no
+    shared object store keeps the old behaviour, a loud refusal.
+    """
+    from . import overflow
+
+    try:
+        settings_ = overflow.overflow_settings()
+    except Exception as exc:
+        return [checks.Error(
+            f'STAPEL_COMM["LARGE_REPLY"] is malformed: {exc}',
+            hint='Expected a dict: {"STORE": ..., "THRESHOLD_BYTES": ..., '
+                 '"TTL_SECONDS": ..., "PREFIX": ...}.',
+            id=E004_LARGE_REPLY_STORE_UNRESOLVABLE,
+        )]
+    if not settings_["STORE"]:
+        return []
+    try:
+        store = overflow.get_store()
+    except Exception as exc:
+        return [checks.Error(
+            f'STAPEL_COMM["LARGE_REPLY"]["STORE"] does not resolve: {exc}',
+            hint='Use "django" (the configured default_storage) or a dotted '
+                 "path to an OverflowStore (put/get/delete). A Function reply "
+                 "too large for the broker cannot be delivered without it.",
+            id=E004_LARGE_REPLY_STORE_UNRESOLVABLE,
+        )]
+    missing = [m for m in ("put", "get", "delete") if not callable(getattr(store, m, None))]
+    if missing:
+        return [checks.Error(
+            f'STAPEL_COMM["LARGE_REPLY"]["STORE"] resolves to '
+            f"{type(store).__name__}, which has no {', '.join(missing)}.",
+            hint="The store contract is put(key, data, *, ttl_seconds) / "
+                 "get(key) / delete(key) — see stapel_core.comm.overflow.",
+            id=E004_LARGE_REPLY_STORE_UNRESOLVABLE,
+        )]
+    return []
+
+
 __all__ = [
     "E001_VALIDATOR_MISSING",
     "W002_VALIDATION_DISABLED",
     "E003_SIGNAL_TRANSPORT_UNRESOLVABLE",
+    "E004_LARGE_REPLY_STORE_UNRESOLVABLE",
     "check_schema_validation",
     "check_signal_transport",
+    "check_large_reply_store",
 ]

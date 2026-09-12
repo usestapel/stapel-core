@@ -1,5 +1,81 @@
 # Changelog
 
+## [0.66.0] — 2026-09-12
+
+### A reply too large for the broker travels by reference
+
+The transport cap stays — a broker message is not a file. What changes is
+what happens above it. When a Function's reply (or request) does not fit one
+message, the sender writes the bytes to the object store both services share
+and sends a small envelope naming them; the receiving transport resolves it
+before `call()` returns, so **no call site changes**:
+
+```json
+{"$ref": {"store": "django", "key": "stapel/comm/overflow/reply/llm.transcribe/…",
+          "bytes": 8637982, "sha256": "…", "expires_at": "…"}}
+```
+
+New `stapel_core.comm.overflow` and one setting, the same on both ends:
+
+```python
+STAPEL_COMM = {"LARGE_REPLY": {
+    "STORE": "django",        # Django's default_storage — the fleet's shared bucket
+    "THRESHOLD_BYTES": None,  # default: the broker's max_payload
+    "TTL_SECONDS": 86400,
+    "PREFIX": "stapel/comm/overflow",
+}}
+```
+
+* **Verified, not trusted.** Every field of a reference comes from another
+  service: the store name must match this process's, the key must sit under
+  this deployment's `PREFIX` and may not climb out of it, and the bytes must
+  match both the length and the sha256 the sender recorded. A short read is
+  refused rather than delivered — a truncated transcript reads as a meeting
+  that ended early. `FunctionReferenceError` (a `FunctionCallError`) carries
+  every one of those, naming the setting.
+* **A postbox, not an artifact.** The object is deleted as soon as it is
+  read: a second verbatim copy of a private payload under no row of any table
+  is a copy no erasure sweep would find. `TTL_SECONDS` is the backstop for
+  the read that never comes (the `django` store has no native expiry — put a
+  lifecycle rule on the prefix).
+* **Unset is the default and nothing changes.** A deployment with no shared
+  store keeps the loud refusal (`FunctionPayloadTooLarge`), which now names
+  this setting. A store that is down never turns a reply that *would* fit
+  into a failure.
+* `THRESHOLD_BYTES` can move the line below the broker's cap; it can never
+  raise it above `max_payload`, where the message does not go out at all.
+* New counter `comm_function_reply_by_reference_total`, boot check
+  `stapel_core.comm.E004` (a configured store must resolve), and the store
+  write happens off the event loop in `serve_functions`.
+
+### A retry is bound to a step, not to the handler
+
+The ladder re-runs the whole handler, so a handler that transcribes and then
+persists paid the provider again for the transcription on every attempt.
+Owner's ruling, 2026-09-12: *"a retry must be bound to each significant
+stage."*
+
+```python
+@task_handler("llm.transcribe")
+def transcribe(payload):
+    transcript = resume("transcript")
+    if transcript is None:
+        transcript = call("stt.run", payload)   # the expensive step
+        checkpoint("transcript", transcript)
+    return persist(transcript)                  # the step that may fail
+```
+
+* `comm.checkpoint(name, value)` / `comm.resume(name, default=None)` /
+  `comm.current_task()` — ambient, so no handler signature changes.
+* Persisted on `TaskRecord.checkpoints` the moment the checkpoint is taken
+  (migration `stapel_taskstore.0003`, additive), so it survives a crash, a
+  redeploy and a redelivery. A value over
+  `STAPEL_COMM["CHECKPOINT_INLINE_MAX_BYTES"]` (64 KiB) rides the overflow
+  store; with no store it stays inline — a fat row beats re-running a priced
+  step.
+* Cleared when the task succeeds (and the objects it referenced deleted);
+  kept on a parked task, where it is the record of how far the work got.
+
 ## [0.65.1] — 2026-09-12
 
 ### A reply that does not fit the transport is parked, not retried

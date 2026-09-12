@@ -68,6 +68,16 @@ class TaskRecord(models.Model):
     # in a sleeping worker, so it survives a crash, a redeploy, and a
     # redelivery of the announcement.
     not_before = models.DateTimeField(null=True, blank=True)
+    # Steps this task has already completed, and what they produced —
+    # written by the handler through comm.checkpoint() and read back by
+    # comm.resume() on the next attempt (comm/tasks.py).
+    #
+    # The retry ladder re-runs the HANDLER, not the step that failed, so a
+    # handler whose first step calls a paid provider paid for it again on
+    # every attempt. "A retry must be bound to each significant stage"
+    # (owner, 2026-09-12). A value too large for this column travels by
+    # reference through the overflow store; cleared when the task succeeds.
+    checkpoints = models.JSONField(default=dict, blank=True)
     # Caller-supplied idempotency key. A second start() with a key that is
     # already live returns the FIRST task's id instead of creating a second
     # one — the difference between a retried publish costing one provider

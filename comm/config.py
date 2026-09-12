@@ -40,6 +40,29 @@ _DEFAULTS: dict[str, Any] = {
     # has no way to tell a stranger that it is slow. The one thing a caller
     # always has is the name it is about to call.
     "FUNCTION_TIMEOUTS": {},
+    # A Function request or reply that does not fit ONE broker message
+    # travels by reference instead: the sender writes the bytes to the
+    # object store both services share and sends a small envelope naming
+    # them, which the receiving transport resolves before its caller ever
+    # sees a result (comm/overflow.py). Empty by default — a deployment with
+    # no shared store keeps the old behaviour, a loud refusal naming this
+    # setting, rather than silently depending on infrastructure it does not
+    # have.
+    #
+    #   "STORE"           "django" (Django's default_storage — in the fleet
+    #                     that is the shared S3/MinIO bucket), a dotted path
+    #                     to an OverflowStore, or None (off). The SAME store
+    #                     on both ends of the seam.
+    #   "THRESHOLD_BYTES" send by reference above this, even when the broker
+    #                     would still carry it. None = the broker's
+    #                     max_payload. Never raises the effective threshold
+    #                     above max_payload.
+    #   "TTL_SECONDS"     how long the object is expected to live (86400).
+    #                     It is read once and deleted; this is the backstop
+    #                     for the read that never comes.
+    #   "PREFIX"          key prefix, and the boundary a reference from
+    #                     another service is not allowed to climb out of.
+    "LARGE_REPLY": {},
     # For the nats transport
     "NATS_URL": "nats://nats:4222",
     "NATS_SUBJECT_PREFIX": "stapel.fn",
@@ -76,6 +99,11 @@ _DEFAULTS: dict[str, Any] = {
     # what a single-process test wants, and nothing else.
     "TASK_RETRY_BACKOFF_BASE": 2.0,
     "TASK_RETRY_BACKOFF_CAP": 300.0,
+    # Largest checkpoint value kept inline in the task row's JSON column.
+    # Above it the value travels by reference through LARGE_REPLY["STORE"]
+    # (and is stored inline anyway if there is no store — a fat row beats
+    # re-running a step at a provider's price). 0 disables the split.
+    "CHECKPOINT_INLINE_MAX_BYTES": 65536,
     # Signal delivery backend: "none" (default — signal() is a silent no-op,
     # the correct configuration for every HTTP-only host), a name registered
     # via comm.register_signal_transport() ("channels", registered by

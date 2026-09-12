@@ -26,6 +26,11 @@ REPLY_BYTES_METRIC = "comm_function_reply_bytes"
 #: Replies the broker refused. The number that should be alerted on: every
 #: one of them is work this system did and then threw away.
 REPLY_TOO_LARGE_METRIC = "comm_function_reply_too_large_total"
+#: Replies that did not fit the broker and were delivered through the
+#: overflow store instead (comm/overflow.py). Not an error — but a rising
+#: line here is a Function whose answers have outgrown the wire, and the
+#: object store is now on its critical path.
+REPLY_BY_REFERENCE_METRIC = "comm_function_reply_by_reference_total"
 
 #: Powers of two from 1 KiB to 64 MiB. Sizes here span six orders of
 #: magnitude — a boolean answer and a meeting transcript — and the default
@@ -55,8 +60,24 @@ def _observe_reply_size(name: str, size: int, max_payload: int) -> None:
         logger.debug("comm: reply size not recorded for %s", name, exc_info=True)
 
 
+def _count_by_reference(name: str) -> None:
+    """Count a reply that went to the store instead of the wire."""
+    try:
+        from stapel_core.observability import metrics
+
+        metrics.counter(
+            REPLY_BY_REFERENCE_METRIC, 1.0, {"function": name},
+            description=(
+                "Comm Function replies too large for one broker message that "
+                "were delivered through the overflow store instead."
+            ),
+        )
+    except Exception:  # pragma: no cover — the facade already guards itself
+        logger.debug("comm: by-reference reply not counted for %s", name, exc_info=True)
+
+
 def fit_reply(data: bytes, max_payload: int, name: str) -> bytes:
-    """*data*, or a small marker explaining why the real answer cannot be sent.
+    """*data*, a reference to it, or a marker saying why neither could be sent.
 
     Split out of the handler so it is testable: this is the half that actually
     broke on a client stand, and a closure inside an asyncio callback is not
@@ -74,15 +95,53 @@ def fit_reply(data: bytes, max_payload: int, name: str) -> bytes:
     dashboard can say BEFORE a user loses work, and the fleet has other
     Functions whose answers grow with their input the same way.
     """
+    from stapel_core.comm import overflow
+    from stapel_core.comm.exceptions import FunctionReferenceError
+
     _observe_reply_size(name, len(data), max_payload)
-    if not max_payload or len(data) <= max_payload:
+    threshold = overflow.threshold_bytes(max_payload)
+    if not threshold or len(data) <= threshold:
         return data
+
+    # BY REFERENCE, when this deployment has a store to put it in: the bytes
+    # go to the object store both services share and the wire carries the
+    # envelope naming them (comm/overflow.py). The caller's transport
+    # resolves it, so the function's answer arrives unchanged and no call
+    # site knows the difference.
+    try:
+        ref = overflow.store_frame(data, function=name, direction="reply")
+    except FunctionReferenceError as exc:
+        logger.error("function %s: %s", name, exc)
+    except Exception:
+        logger.exception(
+            "function %s: the overflow store refused a %d-byte reply; "
+            "falling back to the too-large marker so the caller hears "
+            "something", name, len(data),
+        )
+    else:
+        _count_by_reference(name)
+        logger.info(
+            "function %s: reply of %d bytes travels by reference (%s), over "
+            "the broker's max_payload of %d",
+            name, len(data), ref["key"], max_payload,
+        )
+        return overflow.encode_reference(ref)
+
+    if not max_payload or len(data) <= max_payload:
+        # The store was unavailable, but this reply never needed it: the
+        # deployment set a THRESHOLD_BYTES below the broker's cap and the
+        # answer still fits one message. Send it. A configured preference
+        # must not turn a working reply into a failure.
+        return data
+
     logger.error(
         "function %s: reply is %d bytes, over the broker's max_payload of %d "
         "— sending a too-large marker instead. A function is a "
-        "request/response seam, not a file transfer: return a reference "
-        "(object key / URL) the caller resolves, or raise the broker's "
-        "max_payload if this size is genuinely expected.",
+        "request/response seam, not a file transfer: configure "
+        'STAPEL_COMM["LARGE_REPLY"]["STORE"] so comm can send it by '
+        "reference, return a reference of your own (object key / URL) the "
+        "caller resolves, or raise the broker's max_payload if this size is "
+        "genuinely expected.",
         name, len(data), max_payload,
     )
     return json.dumps({
@@ -94,6 +153,25 @@ def fit_reply(data: bytes, max_payload: int, name: str) -> bytes:
         "size": len(data),
         "limit": max_payload,
     }).encode()
+
+
+def decode_request(data: bytes, name: str) -> dict:
+    """The payload carried by one request frame.
+
+    A caller whose ARGUMENT outgrew the broker sends the same reference
+    envelope the reply path uses, in the other direction (comm/nats.py), so
+    resolving it belongs here rather than in every handler. Blocking I/O —
+    run it off the event loop. Raises FunctionReferenceError if the
+    reference cannot be resolved; the caller is told rather than left to
+    time out.
+    """
+    from stapel_core.comm import overflow
+
+    body = json.loads(data.decode() or "{}")
+    ref = overflow.reference_in(body)
+    if ref is not None:
+        body = json.loads(overflow.dereference(ref, function=name).decode() or "{}")
+    return body.get("payload") or {}
 
 
 class Command(BaseCommand):
@@ -168,7 +246,12 @@ class Command(BaseCommand):
             coroutine raise — an exception here is, again, a caller that hears
             nothing at all.
             """
-            data = fit_reply(data, max_payload, full_name)
+            # fit_reply can WRITE to the object store (an oversized answer
+            # travels by reference), which is blocking I/O — never on the
+            # event loop that also has to answer everyone else.
+            data = await loop.run_in_executor(
+                None, fit_reply, data, max_payload, full_name
+            )
             try:
                 await msg.respond(data)
             except Exception:
@@ -182,9 +265,19 @@ class Command(BaseCommand):
             # Recover the full function name from the subject prefix
             prefix = subject_for("")
             full_name = msg.subject[len(prefix):] if msg.subject.startswith(prefix) else name
+            from stapel_core.comm.exceptions import FunctionReferenceError
+
             try:
-                body = json.loads(msg.data.decode() or "{}")
-                payload = body.get("payload") or {}
+                payload = await loop.run_in_executor(
+                    None, decode_request, msg.data, full_name
+                )
+            except FunctionReferenceError as exc:
+                # The request travelled by reference and we could not fetch
+                # it. Say so — a caller that hears nothing waits out its
+                # timeout and reports something vaguer than the truth.
+                logger.error("function %s: %s", full_name, exc)
+                await _reply(msg, json.dumps({"error": repr(exc)}).encode(), full_name)
+                return
             except Exception:
                 await _reply(
                     msg, json.dumps({"error": "invalid request body"}).encode(), full_name

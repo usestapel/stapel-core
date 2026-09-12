@@ -24,6 +24,26 @@ committed. Execution claims the record atomically (a redelivered
 ``max_attempts`` and then parks it FAILED with a ``task.failed`` Action.
 ``manage.py sweep_tasks`` fails tasks past their deadline.
 
+**A retry is bound to a STEP, not to the handler.** The ladder re-runs the
+whole handler, so a handler with more than one significant step re-does the
+ones that had already succeeded — and if one of them calls a paid provider,
+it pays again. Any handler with a priced step records it::
+
+    @task_handler("llm.transcribe")
+    def transcribe(payload):
+        transcript = resume("transcript")
+        if transcript is None:
+            transcript = call("stt.run", payload)   # the expensive step
+            checkpoint("transcript", transcript)
+        return persist(transcript)                  # the step that fails
+
+``checkpoint(name, value)`` writes to the task row immediately (a value too
+large for the column travels by reference through the overflow store);
+``resume(name)`` reads back what an earlier attempt recorded, or None.
+Cleared when the task succeeds. This is the rule for every priced step, not
+an optimization: the 2026-09-09 incident billed six transcriptions of one
+148-minute meeting because the step AFTER transcription was the one failing.
+
 Two orthogonal settings control the pipeline:
 
 Dispatch (STAPEL_COMM["TASK_DISPATCH"]) — how ``task.requested`` REACHES
@@ -43,6 +63,7 @@ anything else.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
 from dataclasses import dataclass
@@ -99,6 +120,198 @@ def _park_in_dlq(kind: str, reason: str) -> None:
         logger.debug("comm: task DLQ not recorded", exc_info=True)
 
 _handlers: dict[str, Callable[[dict], Any]] = {}
+
+# ─── Checkpoints ──────────────────────────────────────────────────────
+#
+# "A retry must be bound to each significant stage" (owner, 2026-09-12).
+#
+# A task's retry ladder re-runs the HANDLER, not the step that failed, and a
+# handler that transcribes, then summarizes, then writes rows pays the
+# provider again for the two steps that had already succeeded. That is not a
+# hypothetical: the 2026-09-09 incident billed six transcriptions of one
+# meeting, and only the step after transcription was ever failing.
+#
+# A checkpoint is the handler's own statement that a step is DONE and what it
+# produced. It is persisted on the task row the moment it is taken, so it
+# survives the crash, the redeploy and the redelivery — the same reason the
+# backoff lives in a column rather than in a sleeping worker. The next
+# attempt reads it back and skips the step.
+#
+#     def transcribe(payload):
+#         transcript = resume("transcript")
+#         if transcript is None:                 # the expensive, priced step
+#             transcript = call("llm.transcribe", payload)
+#             checkpoint("transcript", transcript)
+#         return persist(transcript)             # the step that may fail
+#
+# Ambient rather than an extra handler argument: every handler in the fleet
+# is already ``handler(payload)``, and a primitive nobody can adopt without
+# changing a signature is a primitive nobody adopts.
+_current_task: "contextvars.ContextVar[TaskContext | None]" = contextvars.ContextVar(
+    "stapel_comm_current_task", default=None
+)
+
+_MISSING = object()
+
+
+class NoCurrentTask(CommError):
+    """checkpoint()/resume() called outside a running task handler."""
+
+
+@dataclass
+class TaskContext:
+    """The task a handler is running inside, and its checkpoint ledger."""
+
+    id: str
+    kind: str
+    attempts: int
+    checkpoints: dict
+
+    def checkpoint(self, name: str, value: Any = True) -> None:
+        """Record that step *name* is done, and what it produced.
+
+        Written to the row immediately — a checkpoint that lived only in
+        memory would be worth nothing on the crash it exists for. A value
+        too large to sit in the JSON column travels by reference through the
+        overflow store (comm/overflow.py) exactly like an oversized reply.
+
+        Never raises out of a working handler: if the ledger cannot be
+        written, the task simply repeats the step next time, which is what
+        it did before checkpoints existed.
+        """
+        entry = _encode_checkpoint(self.kind, name, value)
+        self.checkpoints[name] = entry
+        try:
+            from ..django.taskstore.models import TaskRecord
+
+            TaskRecord.objects.filter(pk=self.id).update(checkpoints=self.checkpoints)
+        except Exception:  # pragma: no cover — belt and braces
+            logger.warning(
+                "task %s (%s): checkpoint %r not persisted; the step will be "
+                "repeated on the next attempt", self.id, self.kind, name,
+                exc_info=True,
+            )
+
+    def resume(self, name: str, default: Any = None) -> Any:
+        """What step *name* produced on an earlier attempt, or *default*."""
+        entry = self.checkpoints.get(name, _MISSING)
+        if entry is _MISSING:
+            return default
+        return _decode_checkpoint(entry, self.kind, name, default)
+
+
+def current_task() -> "TaskContext | None":
+    """The task this thread is executing, or None outside a handler."""
+    return _current_task.get()
+
+
+def checkpoint(name: str, value: Any = True) -> None:
+    """Record a completed step of the running task. See :class:`TaskContext`."""
+    task = _current_task.get()
+    if task is None:
+        raise NoCurrentTask(
+            f"checkpoint({name!r}) was called outside a task handler. "
+            "Checkpoints live on a task row; there is nothing to write to "
+            "here. Call it from the handler registered with @task_handler."
+        )
+    task.checkpoint(name, value)
+
+
+def resume(name: str, default: Any = None) -> Any:
+    """What an earlier attempt of the running task recorded for *name*."""
+    task = _current_task.get()
+    if task is None:
+        raise NoCurrentTask(
+            f"resume({name!r}) was called outside a task handler."
+        )
+    return task.resume(name, default)
+
+
+def _checkpoint_inline_max() -> int:
+    return int(comm_setting("CHECKPOINT_INLINE_MAX_BYTES", 65536) or 0)
+
+
+def _encode_checkpoint(kind: str, name: str, value: Any) -> Any:
+    """*value* as it is stored: inline JSON, or a reference to it."""
+    import json
+
+    blob = json.dumps(value, default=str)
+    inline_max = _checkpoint_inline_max()
+    if not inline_max or len(blob.encode()) <= inline_max:
+        return json.loads(blob)
+
+    from . import overflow
+
+    try:
+        ref = overflow.store_frame(
+            blob.encode(), function=f"task.{kind}.{name}", direction="checkpoint"
+        )
+    except Exception:
+        # No store, or the store refused. The row carries it anyway: a
+        # JSONField holds it, it is merely large. Better a fat row than a
+        # step re-run at a provider's price.
+        logger.warning(
+            "task %s: checkpoint %r is %d bytes and no overflow store took "
+            "it — storing it inline on the row",
+            kind, name, len(blob), exc_info=True,
+        )
+        return json.loads(blob)
+    return {overflow.REFERENCE_FIELD: ref}
+
+
+def _decode_checkpoint(entry: Any, kind: str, name: str, default: Any) -> Any:
+    import json
+
+    from . import overflow
+
+    ref = overflow.reference_in(entry)
+    if ref is None:
+        return entry
+    try:
+        # consume=False: every attempt must be able to read it again. This
+        # object is the one thing in the overflow store that is not a
+        # postbox — it is cleared when the task succeeds instead.
+        raw = overflow.dereference(ref, function=f"task.{kind}.{name}", consume=False)
+        return json.loads(raw.decode())
+    except Exception:
+        logger.warning(
+            "task %s: checkpoint %r could not be read back; the step will be "
+            "repeated", kind, name, exc_info=True,
+        )
+        return default
+
+
+def _clear_checkpoints(record) -> None:
+    """Drop a finished task's ledger, and the objects it referenced.
+
+    Kept until success on purpose: a parked task's checkpoints are the
+    record of how far it got, and an operator re-running it by hand wants
+    them. They are dropped the moment the task is DONE, because a completed
+    task's intermediate values are a second copy of data that already has a
+    permanent home.
+    """
+    checkpoints = record.checkpoints or {}
+    if not checkpoints:
+        return
+    from . import overflow
+
+    store = None
+    try:
+        store = overflow.get_store()
+    except Exception:  # pragma: no cover
+        pass
+    if store is not None:
+        for entry in checkpoints.values():
+            ref = overflow.reference_in(entry)
+            if ref:
+                try:
+                    store.delete(str(ref.get("key") or ""))
+                except Exception:
+                    logger.debug(
+                        "comm: checkpoint object %s not discarded",
+                        ref.get("key"), exc_info=True,
+                    )
+    record.checkpoints = {}
 
 
 class TaskNotRegistered(CommError):
@@ -368,6 +581,13 @@ def execute(task_id: str) -> None:
         return
 
     started = time.monotonic()
+    context = TaskContext(
+        id=str(record.pk),
+        kind=record.kind,
+        attempts=record.attempts,
+        checkpoints=dict(record.checkpoints or {}),
+    )
+    token = _current_task.set(context)
     try:
         result = handler(record.payload)
     except ValidationError as exc:
@@ -416,6 +636,11 @@ def execute(task_id: str) -> None:
         else:
             _park(record, repr(exc)[:2000], reason=TaskRecord.REASON_HANDLER)
         return
+    finally:
+        # Every exit above returns; the ambient task must not outlive any of
+        # them, or the next handler on this thread would write into the
+        # previous task's ledger.
+        _current_task.reset(token)
 
     _observe_duration(record.kind, started)
     _metric("counter", TASK_COMPLETED_METRIC, labels={"kind": record.kind})
@@ -429,7 +654,13 @@ def execute(task_id: str) -> None:
         record.result = result
         record.error = ""
         record.finished_at = timezone.now()
-        record.save(update_fields=["state", "result", "error", "finished_at"])
+        # The ledger's whole purpose was to get here without paying twice;
+        # past here it is a second copy of values that now have a permanent
+        # home (see _clear_checkpoints).
+        _clear_checkpoints(record)
+        record.save(update_fields=[
+            "state", "result", "error", "finished_at", "checkpoints",
+        ])
         emit_event(
             TASK_COMPLETED,
             {

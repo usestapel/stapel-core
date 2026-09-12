@@ -68,10 +68,10 @@ def test_adopts_a_table_left_by_the_pre_rename_app(at_zero):
         cursor.execute(
             f"INSERT INTO {TABLE} (id, kind, payload, state, error, attempts, "
             f"max_attempts, correlation_id, callback, created_at, "
-            f"failure_reason, dedupe_key) "
+            f"failure_reason, dedupe_key, checkpoints) "
             f"VALUES ('11111111-1111-1111-1111-111111111111', 'legacy.kind', "
             f"'{{}}', 'pending', '', 0, 3, '', '', '2026-01-01 00:00:00', "
-            f"'', '')"
+            f"'', '', '{{}}')"
         )
 
     _migrate([(APP, "0001_initial")])  # must not raise

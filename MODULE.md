@@ -187,6 +187,8 @@ class. A key reached through a namespace's own alias route (media's
 | `FUNCTION_TRANSPORT` | `"inprocess"` | Function RPC: `inprocess` \| `nats` \| `http` \| dotted path to `transport(name, payload, timeout=None)` (e.g. gRPC) |
 | `FUNCTION_ROUTES` | `{}` | http transport: longest-prefix map of function name → base URL, e.g. `{"cdn.": "http://svc-cdn:8000/cdn"}` |
 | `FUNCTION_TIMEOUT` | `5.0` | Default Function call timeout (seconds) |
+| `LARGE_REPLY` | `{}` | A request/reply too large for one broker message travels by REFERENCE through a shared object store instead (`comm/overflow.py`): `{"STORE": "django" \| dotted path \| None, "THRESHOLD_BYTES": None (= the broker's `max_payload`), "TTL_SECONDS": 86400, "PREFIX": "stapel/comm/overflow"}`. The same store on both ends; the caller's transport resolves it, so no call site changes. Unset (default) = the old loud refusal. Boot-gated by `stapel_core.comm.E004` |
+| `CHECKPOINT_INLINE_MAX_BYTES` | `65536` | Largest task checkpoint value kept inline in the row's JSON column; above it the value rides `LARGE_REPLY["STORE"]` |
 | `NATS_URL` | `"nats://nats:4222"` | NATS transport broker address |
 | `NATS_SUBJECT_PREFIX` | `"stapel.fn"` | NATS Function subject prefix |
 | `VALIDATE_SCHEMAS` | `True` | Validate payloads against schemas from `@function` / `@on_action`. On everywhere, `DEBUG` included and excluded; set `False` to opt out explicitly |
@@ -197,6 +199,29 @@ class. A key reached through a namespace's own alias route (media's
 
 `comm_setting()` also reads `HTTP_CONNECT_RETRIES` (2), `HTTP_POOL_CONNECTIONS`
 (10), `HTTP_POOL_MAXSIZE` (50) for the pooled http transport session.
+
+**Checkpoints — a retry is bound to a STEP, not to the handler.** The retry
+ladder re-runs the whole handler, so a handler whose first step calls a paid
+provider pays for it again on every attempt (2026-09-09: six transcriptions
+of one 148-minute meeting, because the step *after* transcription was the one
+failing). Any handler with a priced step records it:
+
+```python
+@task_handler("llm.transcribe")
+def transcribe(payload):
+    transcript = resume("transcript")
+    if transcript is None:
+        transcript = call("stt.run", payload)   # the expensive step
+        checkpoint("transcript", transcript)
+    return persist(transcript)                  # the step that may fail
+```
+
+`checkpoint(name, value)` writes to the task row immediately (a value over
+`CHECKPOINT_INLINE_MAX_BYTES` travels by reference through the overflow
+store); `resume(name)` reads back what an earlier attempt recorded, or
+`None`; `current_task()` gives the `TaskContext` (id, kind, attempts) for
+code that prefers an explicit object. Cleared when the task succeeds, kept on
+a parked one.
 
 Registration seams: `@on_action(name, schema=...)` / `subscribe_action()`
 (0..N subscribers per Action), `@function(name, schema=...)` /

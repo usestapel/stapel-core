@@ -49,11 +49,29 @@ class FunctionPayloadTooLarge(FunctionCallError):
             f"so the call cannot complete, and RETRYING CANNOT HELP: the same "
             f"input produces the same oversized answer, at the provider's "
             f"price (comm/tasks.py parks this instead of spending the retry "
-            f"ladder). Return a REFERENCE instead of the bulk — an object key "
-            f"or a presigned URL the other end resolves, the shape "
-            f"stapel-recordings uses for transcripts — or raise the broker's "
-            f"max_payload if this size is genuinely expected."
+            f"ladder). Set "
+            f'STAPEL_COMM["LARGE_REPLY"]["STORE"] (the same store on both '
+            f"ends) and comm sends a REFERENCE the other end resolves, which "
+            f"no caller has to know about; or return a reference of your own "
+            f"(an object key or a presigned URL, the shape stapel-recordings "
+            f"uses for transcripts); or raise the broker's max_payload if "
+            f"this size is genuinely expected."
         )
+
+
+class FunctionReferenceError(FunctionCallError):
+    """A payload that travelled by reference could not be resolved.
+
+    The overflow seam (``comm/overflow.py``) is only an improvement if its
+    failures are louder than the one it replaced. Raised when this process
+    has no store configured to fetch a reference the other end wrote, when
+    the reference names a different store or a key outside this deployment's
+    prefix, when the object is gone (expired, swept), and — the one that
+    would otherwise be invisible — when the bytes read back do not match the
+    length or the sha256 the producer recorded. Delivering a payload short is
+    worse than not delivering it at all: a truncated transcript reads as a
+    meeting that ended early.
+    """
 
 
 class ActionDeliveryError(CommError):
