@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.65.1] — 2026-09-12
+
+### A reply that does not fit the transport is parked, not retried
+
+`FunctionPayloadTooLarge` says the work is **already done** and the answer
+does not fit one broker message. `comm/tasks.py` classified it as an
+ordinary handler failure and requeued it up to `max_attempts` — which re-ran
+the work, at the provider's price, to produce an answer of exactly the same
+size.
+
+Measured on the owner's stand (2026-09-09): one 148-minute recording was
+transcribed **six times** at the STT provider — three task attempts inside
+each of two pipeline stage retries — for a reply that was 8 637 982 bytes
+against an 8 388 608-byte cap every time. 75% of a 23 736-credit quota went
+to retries that delivered nothing.
+
+* `execute()` now parks it on the FIRST occurrence with
+  `failure_reason = unprocessable`, the same rule the `ValidationError`
+  branch has followed since 0.53 ("retrying reproduces the refusal exactly,
+  and on a priced surface bills for all three"), applied to the failure that
+  bills the most. Both directions — request and reply.
+* The parked row carries the numbers: the size, the cap, and what to do
+  about it. An operator opening the failed task no longer needs a log line
+  from another host.
+* `call()` in-process no longer launders the class away. Every provider
+  exception was wrapped in a plain `FunctionCallError`, so a task runner saw
+  an anonymous failure where the transport had said something precise —
+  which is how the retry happened at all. `FunctionCallError` subclasses now
+  propagate unchanged; everything else is wrapped as before.
+* A transient `FunctionCallError` (a provider that was merely down) still
+  retries. The rule is narrow on purpose.
+
+`FunctionPayloadTooLarge`'s message no longer names an
+`STAPEL_COMM["OVERFLOW_STORE"]` setting that does not exist; it names the
+shape that does work today (a reference — an object key or presigned URL,
+as `stapel-recordings` 0.23 does for transcripts) and says that retrying
+cannot help.
+
 ## [0.65.0] — 2026-09-11
 
 Four asks from a consumer fleet's security audit of 2026-09-11 (§7 items

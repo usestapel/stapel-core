@@ -50,7 +50,7 @@ from typing import Any, Callable
 
 from .backoff import DEFAULT_BASE_SECONDS, DEFAULT_CAP_SECONDS, retry_delay
 from .config import comm_setting
-from .exceptions import CommError
+from .exceptions import CommError, FunctionPayloadTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -380,6 +380,30 @@ def execute(task_id: str) -> None:
         logger.warning(
             "task %s (%s) refused its payload — parking unprocessable, not retrying",
             task_id, record.kind,
+        )
+        _observe_duration(record.kind, started)
+        _park(record, repr(exc)[:2000], reason=TaskRecord.REASON_UNPROCESSABLE)
+        return
+    except FunctionPayloadTooLarge as exc:
+        # The handler's work is DONE and PAID FOR, and the answer does not
+        # fit one broker message. Retrying re-runs the paid work and
+        # produces a reply of the same size — the ValidationError rule three
+        # lines above, on the failure that bills the most.
+        #
+        # Measured, on the owner's stand (2026-09-09): one 148-minute
+        # recording transcribed SIX times at the STT provider — three task
+        # attempts inside each of two stage retries — for a reply that was
+        # 8 637 982 bytes against a cap of 8 388 608 every single time. 75%
+        # of a 23 736-credit quota went to retries that delivered nothing.
+        #
+        # The size belongs in the parked record, not only in a log line on
+        # another host: it is the number that says which knob to turn.
+        logger.error(
+            "task %s (%s): the reply does not fit the transport (%d bytes "
+            "over a %d-byte cap) — parking unprocessable, not retrying. "
+            "Retrying would repeat the work that has already been done and "
+            "paid for, with the same result.",
+            task_id, record.kind, exc.size, exc.limit,
         )
         _observe_duration(record.kind, started)
         _park(record, repr(exc)[:2000], reason=TaskRecord.REASON_UNPROCESSABLE)

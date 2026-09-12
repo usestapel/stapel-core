@@ -415,3 +415,118 @@ def test_task_completed_subscriber_pattern():
         task_id = start("llm.summarize", {"doc": 1}, correlation_id="doc-1")
 
     assert got == [task_id]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_reply_that_does_not_fit_the_transport_is_parked_not_retried(settings):
+    """Work that is already done and paid for is never re-done for free.
+
+    The owner's stand, 2026-09-09: ``llm.transcribe`` over a 148-minute
+    meeting answered 8 637 982 bytes against an 8 388 608-byte cap. The
+    handler raised FunctionPayloadTooLarge AFTER the STT provider had
+    transcribed (and billed) the whole recording, and the task runner
+    retried it — three attempts inside each of two stage retries, six
+    transcriptions of one meeting, 75% of the quota spent on answers nobody
+    ever received. The size is not a transient condition: the same input
+    produces the same oversized reply every time.
+    """
+    from stapel_core.comm.exceptions import FunctionPayloadTooLarge
+
+    settings.STAPEL_COMM = {
+        **getattr(settings, "STAPEL_COMM", {}), "TASK_RETRY_BACKOFF_BASE": 0,
+    }
+    calls = {"n": 0}
+
+    def transcribes_then_cannot_answer(payload):
+        calls["n"] += 1
+        raise FunctionPayloadTooLarge(
+            "llm.transcribe", 8_637_982, 8_388_608, direction="reply"
+        )
+
+    register_task("llm.transcribe", transcribes_then_cannot_answer)
+    with transaction.atomic():
+        task_id = start("llm.transcribe", {"audio_url": "https://s3/a.opus"},
+                        max_attempts=3)
+
+    st = status(task_id)
+    assert calls["n"] == 1, "the provider must be paid exactly once"
+    assert st.state == TaskRecord.FAILED
+    assert st.attempts == 1, "an oversized reply must not spend the ladder"
+    record = TaskRecord.objects.get(pk=task_id)
+    assert record.failure_reason == TaskRecord.REASON_UNPROCESSABLE
+    # The numbers land on the ROW: the operator who opens the failed task
+    # must see which cap was hit without reading another host's log.
+    assert "8637982" in record.error and "8388608" in record.error
+    assert "max_payload" in record.error and "REFERENCE" in record.error
+    assert _emitted[-1].event_type == TASK_FAILED
+    assert _emitted[-1].payload["reason"] == TaskRecord.REASON_UNPROCESSABLE
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_ordinary_transport_failure_still_retries(settings):
+    """The narrow rule stays narrow: only the size refusal is unprocessable.
+
+    A FunctionCallError from a provider that was merely down is exactly the
+    failure retries exist for.
+    """
+    from stapel_core.comm.exceptions import FunctionCallError
+
+    settings.STAPEL_COMM = {
+        **getattr(settings, "STAPEL_COMM", {}), "TASK_RETRY_BACKOFF_BASE": 0,
+    }
+    calls = {"n": 0}
+
+    def flaky(payload):
+        calls["n"] += 1
+        raise FunctionCallError("function 'llm.transcribe' unreachable")
+
+    register_task("llm.flaky", flaky)
+    with transaction.atomic():
+        task_id = start("llm.flaky", max_attempts=2)
+    # The first attempt requeued; run the ladder out.
+    TaskRecord.objects.filter(pk=task_id).update(not_before=None)
+    execute(task_id)
+
+    assert calls["n"] == 2
+    st = status(task_id)
+    assert st.state == TaskRecord.FAILED
+    assert TaskRecord.objects.get(pk=task_id).failure_reason == (
+        TaskRecord.REASON_HANDLER
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_size_refusal_survives_the_inprocess_call_seam(settings):
+    """call() must not launder the class away.
+
+    The task handler above does not raise this by hand in production — it
+    calls a Function, and the transport raises. In-process, ``call()`` used
+    to wrap EVERY provider exception in a plain FunctionCallError, so the
+    task runner saw an anonymous failure and retried the paid work.
+    """
+    from stapel_core.comm import call, register_function
+    from stapel_core.comm.exceptions import FunctionPayloadTooLarge
+
+    settings.STAPEL_COMM = {
+        **getattr(settings, "STAPEL_COMM", {}), "TASK_RETRY_BACKOFF_BASE": 0,
+    }
+    calls = {"n": 0}
+
+    def provider(payload):
+        calls["n"] += 1
+        raise FunctionPayloadTooLarge(
+            "llm.transcribe", 9_000_000, 8_388_608, direction="reply"
+        )
+
+    register_function("llm.transcribe", provider)
+    register_task("recordings.transcribe", lambda p: call("llm.transcribe", p))
+
+    with transaction.atomic():
+        task_id = start("recordings.transcribe", {"audio_url": "x"},
+                        max_attempts=3)
+
+    assert calls["n"] == 1
+    assert status(task_id).attempts == 1
+    assert TaskRecord.objects.get(pk=task_id).failure_reason == (
+        TaskRecord.REASON_UNPROCESSABLE
+    )

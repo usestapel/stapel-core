@@ -46,11 +46,12 @@ class FunctionPayloadTooLarge(FunctionCallError):
         super().__init__(
             f"function '{name}': {direction} is {size} bytes, over the "
             f"transport limit of {limit} bytes. The broker refuses to send it, "
-            f"so the call cannot complete. Set "
-            f'STAPEL_COMM["OVERFLOW_STORE"] (the same store on both ends) and '
-            f"comm sends a REFERENCE the other end resolves, which no caller "
-            f"has to know about; or return a reference of your own (object key "
-            f"/ URL) instead of the bulk itself; or raise the broker's "
+            f"so the call cannot complete, and RETRYING CANNOT HELP: the same "
+            f"input produces the same oversized answer, at the provider's "
+            f"price (comm/tasks.py parks this instead of spending the retry "
+            f"ladder). Return a REFERENCE instead of the bulk — an object key "
+            f"or a presigned URL the other end resolves, the shape "
+            f"stapel-recordings uses for transcripts — or raise the broker's "
             f"max_payload if this size is genuinely expected."
         )
 

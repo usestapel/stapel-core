@@ -77,6 +77,16 @@ def call(name: str, payload: dict | None = None, *, timeout: float | None = None
         handler = function_registry.get(name)
         try:
             return handler(payload)
+        except FunctionCallError:
+            # A comm-level failure keeps its CLASS. Wrapping it in a plain
+            # FunctionCallError erased exactly the distinctions callers act
+            # on: FunctionPayloadTooLarge (the work is done, the answer does
+            # not fit — never worth retrying, see comm/tasks.py) reached a
+            # task runner as an anonymous failure and was retried until the
+            # attempts ran out, at the provider's price. The message already
+            # carries the sizes and the setting to change; only the type was
+            # being thrown away.
+            raise
         except Exception as exc:
             raise FunctionCallError(f"function '{name}' failed: {exc!r}") from exc
 
