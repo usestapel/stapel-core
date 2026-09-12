@@ -204,9 +204,21 @@ def get_store() -> OverflowStore | None:
     return store
 
 
+def implements_store(obj: Any) -> bool:
+    """Does *obj* answer the store contract — put / get / delete?
+
+    The contract is the three methods, NOT a base class. ``OverflowStore``
+    is there to document them and to give a host something to inherit; a
+    deployment that already has an object which can put, get and delete
+    bytes must not have to wrap it in a subclass to say so. (Found by
+    stapel-agent's transparency test on the first outside call site, which
+    is exactly the kind of place an isinstance() gate refuses a store that
+    would have worked.)
+    """
+    return all(callable(getattr(obj, m, None)) for m in ("put", "get", "delete"))
+
+
 def _resolve_store(spec: Any) -> OverflowStore:
-    if isinstance(spec, OverflowStore):
-        return spec
     if spec == "django":
         return DjangoStorageOverflowStore()
     if isinstance(spec, str):
@@ -218,14 +230,18 @@ def _resolve_store(spec: Any) -> OverflowStore:
             raise FunctionReferenceError(
                 f'STAPEL_COMM["LARGE_REPLY"]["STORE"] = {spec!r} cannot be '
                 f"imported ({exc}). Expected \"django\" (Django's "
-                "default_storage) or a dotted path to an OverflowStore."
+                "default_storage) or a dotted path to a store with "
+                "put/get/delete."
             ) from exc
         if isinstance(obj, type):
             obj = obj()
-        return obj
+        spec = obj
+    if implements_store(spec):
+        return spec
     raise FunctionReferenceError(
-        'STAPEL_COMM["LARGE_REPLY"]["STORE"] must be "django", a dotted path '
-        f"or an OverflowStore instance, got {type(spec).__name__}"
+        'STAPEL_COMM["LARGE_REPLY"]["STORE"] must be "django", a dotted path, '
+        "or an object with put(key, data, *, ttl_seconds) / get(key) / "
+        f"delete(key) — got {type(spec).__name__}, which has none of them."
     )
 
 

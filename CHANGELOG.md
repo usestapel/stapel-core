@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.66.1] — 2026-09-12
+
+### An overflow store is three methods, not a base class
+
+`LARGE_REPLY["STORE"]` accepted only a `str` or an `OverflowStore`
+subclass, so a host object that could already put, get and delete bytes was
+refused with "must be an OverflowStore instance" — and, because the refusal
+happens on the reply path, the reply fell back to the too-large marker: a
+configured store that silently did nothing. Found by stapel-agent's
+transparency test on the very first call site outside this repo.
+
+The contract is now the three methods (`implements_store`), checked wherever
+the store is resolved; `OverflowStore` stays as documentation and as
+something a host may inherit. A dotted path to a class is still
+instantiated, and an object with none of the methods is still refused, now
+naming the signature it is missing.
+
 ## [0.66.0] — 2026-09-12
 
 ### A reply too large for the broker travels by reference

@@ -359,3 +359,49 @@ class TestTheStoreIsCheckedAtBoot:
         }
         overflow.reset_store()
         assert check_large_reply_store() == []
+
+
+class TestAStoreNeedNotInheritAnything:
+    """The contract is put/get/delete, not a base class.
+
+    stapel-agent's transparency test configured a plain object with the
+    three methods — the natural thing for a host to write — and an
+    isinstance() gate refused a store that would have worked perfectly.
+    """
+
+    def test_a_duck_typed_store_is_accepted(self, settings):
+        class PlainBucket:  # no base class at all
+            name = "django"
+
+            def __init__(self):
+                self.objects = {}
+
+            def put(self, key, data, *, ttl_seconds):
+                self.objects[key] = data
+                return key
+
+            def get(self, key):
+                return self.objects[key]
+
+            def delete(self, key):
+                self.objects.pop(key, None)
+
+        bucket = PlainBucket()
+        settings.STAPEL_COMM = {
+            **(getattr(settings, "STAPEL_COMM", {}) or {}),
+            "LARGE_REPLY": {"STORE": bucket},
+        }
+        overflow.reset_store()
+        data = transcript_frame(9.0)
+        ref = json.loads(fit_reply(data, CAP, "llm.transcribe"))["$ref"]
+        assert overflow.dereference(ref, function="llm.transcribe") == data
+
+    def test_an_object_that_cannot_store_is_refused_by_name(self, settings):
+        settings.STAPEL_COMM = {
+            **(getattr(settings, "STAPEL_COMM", {}) or {}),
+            "LARGE_REPLY": {"STORE": object()},
+        }
+        overflow.reset_store()
+        with pytest.raises(FunctionReferenceError) as exc:
+            overflow.get_store()
+        assert "put(key, data" in str(exc.value)
