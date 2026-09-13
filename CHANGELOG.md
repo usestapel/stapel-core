@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.68.0] — 2026-09-13
+
+### The Django ceiling moves to the major, and the constraint moves to where the fix lives
+
+`Django>=5.1,<6.1` becomes **`Django>=5.2,<7.0`**, and
+`djangorestframework>=3.14` becomes **`djangorestframework>=3.18`**.
+
+The `<6.1` bound was real when it was written and is not any more. Django 6.1
+removed the private `django.utils.cache.cc_delim_re`, which
+`rest_framework/views.py` imported up to DRF 3.17.2 — so on Django 6.1 *any*
+DRF import died at collection time, which is what broke the stapel-tools
+0.29.1 publish. **DRF 3.18.0 dropped that import.** Verified here on Python
+3.14.6, 2026-09-13:
+
+* DRF 3.17.2 + Django 6.1.1 → `ImportError: cannot import name 'cc_delim_re'`
+* DRF 3.18.1 + Django 6.1.1 → imports clean
+* this suite: **3725 passed, 3 skipped** on Django 6.0.8 *and* on 6.1.1
+
+Capping the framework was the wrong place to hold that constraint: it pinned
+every consumer to a Django major to work around a DRF bug. The floor on DRF
+says the same thing and costs nobody a Django version.
+
+**The Django floor moves 5.1 → 5.2** because DRF 3.18 itself requires
+`django>=5.2`. Declaring `>=5.1` alongside `djangorestframework>=3.18` would
+be a floor that cannot resolve. Django 5.1 is EOL; 5.2 is the LTS line.
+
+Consumers pinned below Django 6 are unaffected — the range still contains
+5.2.x. Consumers that were held at 6.0 *by this cap* can now move.
+
 ## [0.67.0] — 2026-09-13
 
 ### A shadow row an EVENT can create, and a refusal that says which gate refused
