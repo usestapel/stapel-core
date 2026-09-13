@@ -37,6 +37,18 @@ profile_updated = django.dispatch.Signal()
 # (kwargs: workspace, user, role, action: "added"|"updated"|"removed")
 workspace_member_changed = django.dispatch.Signal()
 
+# stapel_core.bus.dlq: an event or a task was given up on and parked
+# (kwargs: topic, event, reason, exc_info). The counter
+# ``bus_dlq_total`` says HOW MUCH work is being dropped; a deployment that
+# wants to know WHAT was dropped — an alert store, an on-call bot — has had
+# to scrape log lines for it. This is the same fact, in process, with the
+# traceback still attached: ``exc_info`` is ``sys.exc_info()`` when the park
+# happened inside an exception handler (every handler failure), else None.
+#
+# Receivers must not raise: the sender is already on a failure path and
+# swallows everything, so an exception here is silently lost, not surfaced.
+bus_event_parked = django.dispatch.Signal()
+
 __all__ = [
     "user_registered",
     "user_logged_in",
@@ -45,4 +57,5 @@ __all__ = [
     "media_processed",
     "profile_updated",
     "workspace_member_changed",
+    "bus_event_parked",
 ]

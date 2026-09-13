@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.68.1] — 2026-09-13
+
+### A park that can be heard, not only counted
+
+`stapel_core.signals.bus_event_parked` — a Django signal sent by
+`stapel_core.bus.dlq.record_parked` on every park, carrying
+`topic`, `event`, `reason` and `exc_info`.
+
+`bus_dlq_total` answers "how much work is being dropped", which is what an
+operator alarms on. It cannot answer "what was dropped": an event id and a
+traceback are unbounded as label values, so both live only in the log line —
+and reading them back out of container logs is literally how the 2026-09-13
+client-fleet investigation was conducted. An in-process listener can hold what a
+label cannot.
+
+Sent with `send_robust` inside a `try`, so a listener that is broken, slow to
+import, or itself on fire cannot turn a park into a crash — the sender is
+already on a failure path. `exc_info` is `sys.exc_info()` when the park
+happened inside an exception handler (every handler failure), else `None`.
+
+Nothing changes for a deployment that connects no receiver.
+
 ## [0.68.0] — 2026-09-13
 
 ### The Django ceiling moves to the major, and the constraint moves to where the fix lives

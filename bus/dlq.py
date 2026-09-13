@@ -103,3 +103,32 @@ def record_parked(topic: str, event: "Event | None" = None, *, reason: str = "ha
         topic, event_type, getattr(event, "event_id", None), reason, DLQ_METRIC,
         exc_info=sys.exc_info()[0] is not None,
     )
+    _announce(topic, event, reason)
+
+
+def _announce(topic: str, event: "Event | None", reason: str) -> None:
+    """Tell in-process listeners WHAT was dropped, not only how much.
+
+    The counter is what an operator alarms on; it cannot carry a traceback or
+    an event id, because both are unbounded as label values. A listener in the
+    same process can have them, and an alert store is the listener this exists
+    for (``stapel_core.signals.bus_event_parked``).
+
+    Never raises, for the same reason the metric call above does not: the
+    caller is on a failure path, and a park that crashed because something was
+    *watching* it would be worse than the park.
+    """
+    try:
+        from ..signals import bus_event_parked
+
+        # send_robust, not send: one broken listener must not stop the
+        # others from hearing that work was dropped.
+        bus_event_parked.send_robust(
+            sender=None,
+            topic=topic,
+            event=event,
+            reason=reason,
+            exc_info=sys.exc_info() if sys.exc_info()[0] is not None else None,
+        )
+    except Exception:  # pragma: no cover - a listener's failure is not ours
+        logger.debug("bus: DLQ park not announced", exc_info=True)
