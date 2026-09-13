@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.67.0] — 2026-09-13
+
+### A shadow row an EVENT can create, and a refusal that says which gate refused
+
+**`stapel_core.django.users.ensure_shadow_user(user_id, payload=None)`.** In a
+fleet every service holds a shadow copy of the `users` rows it needs a foreign
+key to, and the only writer of that copy was the JWT seam on the account's
+first authenticated request *to that service*. A bus consumer has no token and
+usually runs FIRST — the publisher emits inside the registration request; the
+account's first call to this particular service comes later, if ever. So every
+handler that inserts a row keyed on `users.id` in reaction to an event races a
+writer it does not control, and loses as the common case:
+
+* iron-recordings, 2026-09-13 — `workspace.personal.created` arrived before the
+  shadow row and `ZoomIngestSettings.objects.get_or_create(user_id=…)` died on
+  `ForeignKeyViolation … Key (user_id)=(13484e5c-…) is not present in table
+  "users"`. 3 events, 22 failed attempts, all three parked in the DLQ; the
+  users' Zoom ingest default was never written and never retried.
+* `stapel_workspaces` 0.30.3 — same race, other outcome: "user not found,
+  skipping", offset committed, no personal workspace for the life of the
+  account.
+* `billing_ext` (audit minor #11) — a charge for somebody who had never opened
+  the billing screen was dropped with a warning, so what they consumed in that
+  window was free.
+
+Three services, three privately written work-arounds, one seam. This is that
+seam, and it delegates to `get_or_create_user_from_jwt` rather than growing a
+second answer to "who is this user".
+
+What it does NOT do is as load-bearing as what it does. **An existing row is
+returned untouched** — `get_or_create_user_from_jwt` is a sync as well as a
+get-or-create and REPLACES `is_staff`/`is_superuser` from the claims in
+consumer mode; an event payload carries no privileges, so passing one through
+reads as `False` and demotes a staff shadow row, from a handler whose only
+business was a foreign key. Privileges (`is_staff`, `is_superuser`,
+`staff_roles`, `is_active`) are stripped from the payload: an event is not a
+token. The deletion and deactivation gates run first, so a handler cannot
+revive a tombstoned account by the back door. A guest's `email` becomes `NULL`
+rather than `""` (the column is unique — two guests would collide), and the
+username defaults to a deterministic `anon_<id>` so a replayed event proposes
+the same name twice. `JWT_CREATE_USERS_FROM_TOKEN=False` still creates nothing.
+
+### The refusal reason reaches the caller that logs it
+
+`JWT Auth Failed - User creation failed` was printed for every `None`
+`get_or_create_user_from_jwt` returns — deleted at the issuer, deactivated,
+stale token in authoritative mode, or an actual creation error. On
+2026-09-13 a guest signed up, `merge_anonymous_into` deleted the guest row and
+its `post_delete` wrote the fleet-wide tombstone, and 111 ms later the
+browser's in-flight request arrived with the stale guest cookie. The tombstone
+gate refused it exactly as designed, and the ERROR line said a shadow-row
+writer had failed — which is where the on-call then went. Nothing was being
+created and nothing had failed.
+
+The reason was already in this module's own WARNING one line above; it just
+never reached the caller that writes the ERROR, so the ERROR guessed.
+`get_or_create_user_from_jwt` now takes an optional `reasons` list it appends
+the refusal to, and `resolve_jwt_user(user_data) -> (user, reason)` is the
+tuple-returning entry point. Every existing caller passes nothing and is
+unchanged; `JWTCookieAuthentication` passes the list and logs what it gets
+(`deleted at the issuer`, `deactivated at the issuer`, `account is not
+active`, `unknown user and JWT_CREATE_USERS_FROM_TOKEN is off (stale token)`,
+`shadow row creation failed (…)`, `the token carries no user_id`).
+
 ## [0.66.1] — 2026-09-12
 
 ### An overflow store is three methods, not a base class

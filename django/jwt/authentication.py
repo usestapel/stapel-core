@@ -349,12 +349,21 @@ class JWTCookieAuthentication(authentication.BaseAuthentication):
                 )
                 return None
 
-            # Get or create user from JWT data
-            user = get_or_create_user_from_jwt(user_data)
+            # Get or create user from JWT data. The seam is asked for the
+            # REASON as well: "User creation failed" used to be printed for
+            # every None it returns — a deleted account, a deactivated one, a
+            # stale token in authoritative mode — and a merged guest's stale
+            # cookie (iron-billing, 2026-09-13) therefore read as a broken
+            # shadow-row writer. Nothing was being created and nothing had
+            # failed. An error line that names a cause it did not check sends
+            # the on-call to the wrong module.
+            refusal: list = []
+            user = get_or_create_user_from_jwt(user_data, refusal)
 
             if not user:
                 logger.error(
-                    f"JWT Auth Failed - User creation failed - "
+                    f"JWT Auth Failed - "
+                    f"{refusal[0] if refusal else 'user could not be resolved'} - "
                     f"user_id={user_data.get('user_id', 'unknown')}, "
                     f"token_suffix={token_suffix}, "
                     f"client_ip={client_ip}, "

@@ -363,7 +363,7 @@ def shadow_rekey(uid):
         yield
 
 
-def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
+def get_or_create_user_from_jwt(user_data: Dict[str, Any], reasons: list = None):
     """
     Get or create the Django user a validated token speaks for.
 
@@ -398,7 +398,46 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     Returns:
         Django User instance, or None if the user could not be resolved or
         is not active
+
+    *reasons*, when given, is a list this function APPENDS the refusal to —
+    see :func:`resolve_jwt_user`. Every existing caller passes nothing and is
+    unaffected, which is the point: the four authentication paths that share
+    this seam did not move.
     """
+    if reasons is None:
+        reasons = []
+    return _resolve_jwt_user(user_data, reasons)
+
+
+def resolve_jwt_user(user_data: Dict[str, Any]):
+    """:func:`get_or_create_user_from_jwt`, plus the reason for a ``None``.
+
+    Returns ``(user, None)`` or ``(None, reason)`` where *reason* is a short
+    phrase naming WHICH gate answered.
+
+    This exists because of a production hour spent on the wrong bug
+    (iron-billing, 2026-09-13). The DRF authentication class logged
+    ``JWT Auth Failed - User creation failed`` for every ``None`` this seam
+    returns — and the ``None`` in question was a guest whose account had been
+    merged into the one they had just proved they owned 111 ms earlier, so
+    the tombstone gate was refusing their stale cookie exactly as designed.
+    Nothing had failed and nothing was being created. The reason was already
+    in this module's own WARNING one line above in the log; it just never
+    reached the caller that writes the ERROR, so the ERROR guessed, and the
+    guess is what the on-call reads first.
+
+    One implementation, two entry points: callers that only need the user
+    keep calling :func:`get_or_create_user_from_jwt`.
+    """
+    reasons: list[str] = []
+    user = get_or_create_user_from_jwt(user_data, reasons)
+    if user is not None:
+        return user, None
+    return None, (reasons[0] if reasons else "user could not be resolved")
+
+
+def _resolve_jwt_user(user_data: Dict[str, Any], reasons: list):
+    """The body of the two functions above. *reasons* collects the refusal."""
     # Deletion tombstone, consumer mode only (0.40.0). This is the one gate
     # that has to run BEFORE the row is consulted at all: in consumer mode a
     # missing row is not evidence of anything — it is the normal first-contact
@@ -413,6 +452,7 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
                 "JWT authentication refused: user %s was deleted at the issuer",
                 uid,
             )
+            reasons.append("deleted at the issuer")
             return None
         # Deactivation, same shape and the same reason it cannot be inferred
         # locally: the shadow row says whatever the last token wrote, and the
@@ -423,15 +463,17 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
                 "JWT authentication refused: user %s is deactivated at the issuer",
                 uid,
             )
+            reasons.append("deactivated at the issuer")
             return None
 
-    user = _get_or_create_user_from_jwt(user_data)
+    user = _get_or_create_user_from_jwt(user_data, reasons)
 
     if user is not None and not getattr(user, "is_active", True):
         logger.warning(
             "JWT authentication refused: user %s is not active",
             user_data.get("user_id"),
         )
+        reasons.append("account is not active")
         return None
 
     # Bridge to stapel_core.access (AS-1): stamp the validated claim onto the
@@ -447,16 +489,22 @@ def get_or_create_user_from_jwt(user_data: Dict[str, Any]):
     return user
 
 
-def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
+def _get_or_create_user_from_jwt(user_data: Dict[str, Any], reasons: list = None):
     """Core get-or-create logic for :func:`get_or_create_user_from_jwt`.
 
     The public wrapper stamps the transient ``staff_roles`` claim
-    (CLAIM_ATTR) onto whatever user this returns.
+    (CLAIM_ATTR) onto whatever user this returns. *reasons* is the refusal
+    collector threaded down from :func:`resolve_jwt_user`; it is optional so
+    that this function keeps its old one-argument signature for any caller
+    that already had it.
     """
+    if reasons is None:
+        reasons = []
     User = _get_user_model()
     pk = user_data.get("user_id")
     if not pk:
         logger.error("No id in JWT data")
+        reasons.append("the token carries no user_id")
         return None
 
     try:
@@ -548,6 +596,9 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
             # Auth service mode: reject stale JWT, user must re-login
             logger.warning(
                 f"User {pk} not found and JWT_CREATE_USERS_FROM_TOKEN=False. JWT is stale."
+            )
+            reasons.append(
+                "unknown user and JWT_CREATE_USERS_FROM_TOKEN is off (stale token)"
             )
             return None
 
@@ -710,9 +761,11 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any]):
             return user
         except Exception as e:
             logger.error(f"Error creating user: {e}", exc_info=True)
+            reasons.append(f"shadow row creation failed ({type(e).__name__})")
             return None
     except Exception as e:
         logger.error(f"Error getting/creating user: {e}", exc_info=True)
+        reasons.append(f"user store unreadable ({type(e).__name__})")
         return None
 
 
