@@ -174,6 +174,15 @@ class CommonDjangoConfig(AppConfig):
             register_checks as _register_prodguard_checks,
         )
         _register_prodguard_checks()
+        # Storage-root writability (stapel_core.django.storage_checks):
+        # E-level when MEDIA_ROOT / STATIC_ROOT / a file log handler's
+        # directory cannot be written by the uid this process runs as. A
+        # shared docker volume keeps the ownership of whoever created it, so
+        # a service that moved onto the unprivileged base images inherits a
+        # tree it can only read — every upload fails at runtime, the API
+        # still answers 2xx, and the only trace is a DEGRADED line in a boot
+        # summary. That ran for weeks in a client fleet before anyone looked.
+        from stapel_core.django import storage_checks as _storage_checks  # noqa: F401
         # Mandate seam (stapel_core.django.mandate): E-level when a view gates
         # on HasWorkspaceMandate and this deployment can ask nobody whether a
         # user holds one — such a view answers 503 for every request, and the

@@ -158,6 +158,7 @@ def test_boot_gate_tag_roster_is_pinned():
         "stapel_captcha",
         "stapel_check_guard",
         "stapel_prodguard",
+        "stapel_storage",
     )
 
 

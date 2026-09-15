@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.69.0] — 2026-09-16
+
+### A storage root nobody can write refuses the start
+
+`stapel_core.django.storage_checks` — a system check (tag `stapel_storage`,
+on the `BOOT_GATE_TAGS` roster) that creates and removes one probe file in
+every storage root this service configures: `MEDIA_ROOT`, `STATIC_ROOT`, the
+directory of every `LOGGING` handler that writes to a file, and anything a
+host adds through `STAPEL_STORAGE_ROOTS`. A root that cannot be created is
+`stapel_core.storage.E002`; a root that cannot be written is
+`stapel_core.storage.E001`. Both name the path, the uid of the process, the
+owner and mode of the directory, and what the kernel said.
+
+**Why an Error.** A shared docker named volume keeps the ownership of
+whoever wrote into it first. Every fleet in this workspace created those
+volumes while its containers ran as root and then moved onto base images that
+end `USER stapel` (uid 10001); the trees are mode 755, so the new uid reads
+everything and writes nothing. In a client fleet that shape ran in production
+for **weeks**: `import_from_url` raised
+`PermissionError: [Errno 13] … '/app/media/cdn/avatar/<hash>'` on every
+avatar import while the API answered 2xx, and every service start logged one
+`collectstatic` PermissionError and continued as DEGRADED. Nothing refused,
+so nothing was found. A service whose media root is unwritable is not
+degraded — it is broken for every write path it has.
+
+**Where it runs.** `manage.py` refuses on the finding (which is what a
+bootstrap's `migrate --check` already runs), and the tag is on the boot-gate
+roster, so a gunicorn worker refuses too — the worker is the process that
+does the writing, and under gunicorn nothing else runs checks.
+
+**Modes.** `STAPEL_STORAGE_GATE` is `auto` by default: enforce in a
+deployment, warn under `DEBUG`, silent under a test runner. A suite's
+throwaway roots and a laptop's container paths are not deployments, and a
+gate that fires there is a gate that gets silenced fleet-wide within a week.
+`enforce` / `warn` / `off` say it outright; an explicit `off` reports
+`stapel_core.storage.W001`, so a disabled gate is a stated choice.
+
+A missing root is created (`exist_ok`) — a service that cannot create its own
+root is exactly the failure being hunted, and `collectstatic` and
+`FileSystemStorage` do the same thing on the write path a minute later.
+Nothing changes for a deployment whose roots are already writable: two
+syscalls per root, once per worker.
+
 ## [0.68.1] — 2026-09-13
 
 ### A park that can be heard, not only counted

@@ -96,6 +96,14 @@ BOOT_GATE_TAGS: tuple[str, ...] = (
     # adoption gap — under gunicorn nothing else runs the guards, which is
     # exactly where a settings module that forgot to call them is deployed.
     "stapel_prodguard",
+    # E: a configured storage root (MEDIA_ROOT / STATIC_ROOT / a file log
+    # handler's directory) that this uid cannot write. Settings-only and
+    # DB-free — it reads settings and makes two syscalls against the local
+    # filesystem, once per worker. It belongs here more than most: the
+    # failure it names is a WRITE failure, and the process that does the
+    # writing is the gunicorn worker, not the management command that
+    # happened to run at deploy time.
+    "stapel_storage",
 )
 
 # Deliberately NOT on the roster, with the reason: `stapel_mandate` resolves
