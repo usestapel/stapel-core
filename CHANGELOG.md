@@ -1,8 +1,13 @@
 # Changelog
 
-## [0.69.0] — 2026-09-16
+## [0.69.1] — 2026-09-16
 
 ### A storage root nobody can write refuses the start
+
+*(0.69.0 was tagged and never published: two of the new tests overrode
+`LOGGING` with a dict `dictConfig` refuses — "dictionary doesn't specify a
+version" — which CI caught and the release gate honoured. Same release, plus
+the fixed tests.)*
 
 `stapel_core.django.storage_checks` — a system check (tag `stapel_storage`,
 on the `BOOT_GATE_TAGS` roster) that creates and removes one probe file in

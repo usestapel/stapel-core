@@ -112,12 +112,31 @@ def test_a_root_that_is_a_file_is_reported_not_crashed(tmp_path):
 # Which roots
 # ---------------------------------------------------------------------------
 
+def file_logging(path):
+    """A LOGGING config Django's dictConfig actually accepts.
+
+    ``delay`` matters: without it dictConfig opens the file at override time,
+    in a directory this check has not been asked about yet.
+    """
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "handlers": {
+            "file": {
+                "class": "logging.FileHandler",
+                "filename": str(path),
+                "delay": True,
+            }
+        },
+    }
+
+
 def test_static_media_log_and_extra_roots_are_all_asked(tmp_path):
     logfile = tmp_path / "logs" / "app.log"
     with override_settings(
         MEDIA_ROOT=str(tmp_path / "media"),
         STATIC_ROOT=str(tmp_path / "static"),
-        LOGGING={"handlers": {"file": {"filename": str(logfile)}}},
+        LOGGING=file_logging(logfile),
         STAPEL_STORAGE_ROOTS={"EXPORTS": str(tmp_path / "exports")},
     ):
         roots = dict((path, label) for label, path in configured_roots())
@@ -134,15 +153,22 @@ def test_one_path_under_two_names_is_probed_once(tmp_path):
     assert roots == [("MEDIA_ROOT / STATIC_ROOT", str(tmp_path))]
 
 
+CONSOLE_LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+}
+
+
 def test_an_unset_root_is_not_invented():
     """Django ships MEDIA_ROOT='' and STATIC_ROOT=None; neither is a directory."""
-    with override_settings(MEDIA_ROOT="", STATIC_ROOT=None, LOGGING={}):
+    with override_settings(MEDIA_ROOT="", STATIC_ROOT=None, LOGGING=CONSOLE_LOGGING):
         assert configured_roots() == []
 
 
 def test_a_console_only_logging_config_contributes_nothing():
-    logging = {"handlers": {"console": {"class": "logging.StreamHandler"}}}
-    with override_settings(MEDIA_ROOT="", STATIC_ROOT=None, LOGGING=logging):
+    """The fleet logs to stdout; nothing must be invented from that."""
+    with override_settings(MEDIA_ROOT="", STATIC_ROOT=None, LOGGING=CONSOLE_LOGGING):
         assert configured_roots() == []
 
 
