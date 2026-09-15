@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.70.0] — 2026-09-16
+
+### `env_enum` — the environment may pick among the names a library ships
+
+`import_strings` keys are implicitly env-closed, which is right about the
+threat and wrong about the need. The threat is real: whatever can set a
+variable in the pod would otherwise choose the class on the privileged path.
+The need is equally real: picking a mail backend per environment is exactly
+what an environment variable is for.
+
+With only `env_overridable` — all-or-nothing — libraries documented the
+variable anyway and hosts re-implemented `os.getenv` in their own settings
+modules to make it work. A fleet's notifications service was found doing
+precisely that on 2026-09-16: `EMAIL_PROVIDER` was documented, `W001`
+truthfully reported it ignored, and it nonetheless worked — but only there,
+because that one settings module read it by hand. A documented surface that
+lies is worse than either honest answer, and reading the warning as "so mail
+is going nowhere" was backwards: mail was going out, for real, to customers.
+
+`env_enum={"PROVIDER": ("resend", "smtp", "mock")}` splits the difference
+along the line of the actual threat. Choosing among implementations the
+LIBRARY ships is a deployment decision and belongs in the environment;
+naming new code to import is a trust decision and stays in the settings
+module, which only the project can write. So a short name from the
+environment is accepted, and a dotted path from the environment is refused
+with a message saying where it belongs.
+
+Refused, never ignored. Ignoring is what the blanket closure already did,
+and it is what produced the documented-variable-that-does-nothing; once an
+operator has been told the variable works, a value it will not take is a
+live misconfiguration and deserves an answer. `stapel_core.conf.E003`
+reports it at `manage.py check` — Error, not Warning, because unlike W001
+the process is not quietly running a safe value: `_raw` raises at first
+read, and on a notifications service that moment is the first passcode
+after a green-looking deploy.
+
+W001 correctly stops reporting a key once `env_enum` makes its variable
+real, so the two findings never contradict each other.
+
+The vocabulary may be an iterable, a zero-arg callable, or a dotted path to
+one. Callable and dotted forms resolve lazily and are asked per read — a
+registry filled after boot counts, and a package's `conf.py` never imports
+its provider modules at declaration time. `env_enum` alongside
+`env_overridable` or `no_env`, or naming a key the namespace has no default
+for, raises at construction rather than silently never applying.
+
+
 ## [0.69.1] — 2026-09-16
 
 ### A storage root nobody can write refuses the start

@@ -2,6 +2,7 @@
 
 W001 — an environment variable that is set and silently ignored.
 E002 — an environment variable supplying a container-shaped setting.
+E003 — an environment variable outside its key's declared vocabulary.
 
 
 A key in ``import_strings`` names the class the process imports and runs, so
@@ -24,6 +25,7 @@ from django.core import checks
 
 W001_ENV_VAR_IGNORED = "stapel_core.conf.W001"
 E002_STRUCTURED_ENV_VAR = "stapel_core.conf.E002"
+E003_ENV_ENUM_REJECTED = "stapel_core.conf.E003"
 
 
 #: Why the key is closed, in the two vocabularies the rule actually has.
@@ -125,9 +127,61 @@ def check_structured_env_vars(app_configs=None, **kwargs):
     return errors
 
 
+@checks.register("stapel_conf")
+def check_env_enum_values(app_configs=None, **kwargs):
+    """E003 — an env var set to a value its key's vocabulary does not contain.
+
+    ``env_enum`` keys are the ones where the environment IS allowed to choose,
+    among the short names the library ships. That makes a wrong value a
+    different animal from W001's stray variable: the operator was told this
+    one works, so silence here would be the documented-surface-that-lies
+    defect all over again, one layer in.
+
+    Error, not warning, and for the reason W001 is not: the process will NOT
+    quietly run a safe value. ``_raw`` raises the moment the key is read — but
+    on a notifications service that moment is the first passcode after a
+    green-looking deploy, which is exactly the "found in production" shape
+    these checks exist to move to boot time.
+    """
+    from .conf import registered_settings
+
+    errors = []
+    seen: set[tuple[str, str]] = set()
+    for app_settings in registered_settings():
+        for key, env_name, raw, vocabulary in app_settings.rejected_env_enum_vars():
+            if (app_settings.namespace, env_name) in seen:
+                continue
+            seen.add((app_settings.namespace, env_name))
+            dotted = "." in raw
+            errors.append(checks.Error(
+                f"Environment variable {env_name}={raw!r} is not an accepted "
+                f"value for {app_settings.namespace}[{key!r}]. "
+                + (
+                    "A dotted import path may only be set in the settings "
+                    "module: naming new code to import is a trust decision, "
+                    "and anything able to set a variable in this process's "
+                    "environment would otherwise choose the class on the "
+                    "privileged path."
+                    if dotted else
+                    f"Accepted names: {', '.join(sorted(vocabulary))}."
+                ),
+                hint=(
+                    f"Set {env_name} to one of "
+                    f"{', '.join(sorted(vocabulary))}, or put the value in the "
+                    f"{app_settings.namespace} dict in your settings module "
+                    f"(the only place a dotted path is accepted), or unset "
+                    f"{env_name}."
+                ),
+                id=E003_ENV_ENUM_REJECTED,
+            ))
+    return errors
+
+
 __all__ = [
+    "check_env_enum_values",
     "check_ignored_env_vars",
     "check_structured_env_vars",
     "E002_STRUCTURED_ENV_VAR",
+    "E003_ENV_ENUM_REJECTED",
     "W001_ENV_VAR_IGNORED",
 ]

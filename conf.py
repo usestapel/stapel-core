@@ -105,6 +105,7 @@ class AppSettings:
         no_env: Iterable[str] = (),
         env_overridable: Iterable[str] = (),
         resolvers: dict[str, Any] | None = None,
+        env_enum: dict[str, Any] | None = None,
     ) -> None:
         self.namespace = namespace
         self.defaults = dict(defaults)
@@ -144,6 +145,58 @@ class AppSettings:
         # implementation per environment. It is opt-out on purpose: forgetting
         # a flag must leave the process safe, never open.
         self.env_overridable = frozenset(env_overridable)
+        # The NARROW way back out of the implicit closure: a key whose value
+        # is legally "a short name from a closed registry OR a dotted path"
+        # may be set from the environment, but only to a SHORT NAME.
+        #
+        # Why the third family exists at all. ``env_overridable`` is
+        # all-or-nothing, and for these keys neither end is right: closed, and
+        # the deployment cannot pick its mail backend per environment without
+        # every host re-implementing ``os.getenv`` in its settings module (one
+        # fleet did exactly that, and the documented variable then worked ONLY
+        # there, with W001 truthfully reporting it ignored — a documented
+        # surface that lies is worse than either honest answer). Open, and an
+        # environment variable can name an ARBITRARY DOTTED PATH — which is
+        # precisely the threat ``_names_a_class`` exists to block: whatever can
+        # set a variable in the pod chooses the class on the privileged path.
+        #
+        # The enumeration splits the difference exactly along the line of the
+        # threat. Picking among implementations the LIBRARY ships is a
+        # deployment choice and belongs in the environment; naming new code to
+        # import is a trust decision and stays in the settings module, which
+        # only the project can write. An out-of-vocabulary value is refused
+        # loudly rather than ignored — see ``_refuse_env_enum``.
+        #
+        # The vocabulary may be an iterable, a zero-arg callable, or a dotted
+        # path to one. Callable and dotted forms are resolved LAZILY, at the
+        # first read: a registry is usually a dict in a channel/provider
+        # module, and importing it from a package's ``conf.py`` at declaration
+        # time would drag that module into every import of the package.
+        self.env_enum: dict[str, Any] = dict(env_enum or {})
+        both_ways_out = set(self.env_enum) & self.env_overridable
+        if both_ways_out:
+            raise ValueError(
+                f"{namespace}: {sorted(both_ways_out)} declared both env_enum "
+                "and env_overridable — env_overridable already allows any "
+                "value including a dotted path, so the enumeration would be "
+                "decorative. Say which one you mean"
+            )
+        enum_closed = set(self.env_enum) & self.no_env
+        if enum_closed:
+            raise ValueError(
+                f"{namespace}: {sorted(enum_closed)} declared both env_enum "
+                "and no_env — one opens the environment step, the other "
+                "closes it. Say which one you mean"
+            )
+        unknown_enum = set(self.env_enum) - set(self.defaults)
+        if unknown_enum:
+            # An enumeration on a key this namespace does not have is a typo
+            # that would silently never apply — the exact silence this family
+            # was added to end.
+            raise ValueError(
+                f"{namespace}: env_enum names {sorted(unknown_enum)}, which "
+                f"{'is' if len(unknown_enum) == 1 else 'are'} not in defaults"
+            )
         contradictory = self.no_env & self.env_overridable
         if contradictory:
             # Silently picking a winner would hide an authoring mistake in the
@@ -189,13 +242,71 @@ class AppSettings:
         """May *key* be read from ``os.environ``?
 
         A key that names an implementation, not a value, is implicitly
-        no_env; ``env_overridable`` is the explicit way back out.
+        no_env; ``env_overridable`` is the explicit way back out, and
+        ``env_enum`` is the narrow one — the environment may choose among the
+        library's own short names, and the VALUE is then checked in ``_raw``.
         """
         if key in self.no_env:
             return False
         if self._names_a_class(key):
-            return key in self.env_overridable
+            return key in self.env_overridable or key in self.env_enum
         return True
+
+    def env_vocabulary(self, key: str) -> tuple[str, ...]:
+        """The short names ``key`` may be set to from the environment.
+
+        Resolved at first read and memoised in place, so a package's
+        ``conf.py`` never imports its provider modules at declaration time.
+        A vocabulary that cannot be resolved is an authoring error in the
+        declaration, not an operator error, so it propagates rather than
+        degrading to "nothing is allowed" — which would read to an operator
+        exactly like a rejected value.
+        """
+        vocabulary = self.env_enum[key]
+        if isinstance(vocabulary, str):
+            from django.utils.module_loading import import_string
+
+            vocabulary = import_string(vocabulary)
+            self.env_enum[key] = vocabulary
+        if callable(vocabulary):
+            vocabulary = vocabulary()
+        return tuple(str(name) for name in vocabulary)
+
+    def _refuse_env_enum(self, key: str, name: str, raw: str):
+        """An environment value outside the key's vocabulary. Always loud.
+
+        Refused rather than ignored, and that is the whole point of the
+        family. Ignoring would leave the process on a safe default — which is
+        what the blanket closure already did, and what produced a documented
+        variable that quietly did nothing. Once an operator has been TOLD the
+        variable works, a value it does not accept is a live misconfiguration
+        and deserves an answer, not a shrug.
+
+        The two failure modes get different sentences because they need
+        different fixes: a dotted path is a trust decision in the wrong file,
+        a bare name is usually a typo.
+        """
+        from django.core.exceptions import ImproperlyConfigured
+
+        known = ", ".join(sorted(self.env_vocabulary(key))) or "(none)"
+        if "." in raw:
+            detail = (
+                f"{raw!r} looks like a dotted import path. A path may only be "
+                f"set in the {self.namespace} dict in your settings module: "
+                "naming new code to import is a trust decision, and anything "
+                "able to set a variable in this process's environment would "
+                "otherwise choose the class on the privileged path."
+            )
+        else:
+            detail = (
+                f"{raw!r} is not one of the names this library ships. "
+                f"Known names: {known}."
+            )
+        raise ImproperlyConfigured(
+            f"Environment variable {name} cannot set "
+            f'{self.namespace}["{key}"]: {detail} '
+            f"Unset {name} to fall back to the settings value or the default."
+        )
 
     def env_closed_keys(self) -> list[str]:
         """Every key whose environment step this instance closes, sorted.
@@ -268,6 +379,34 @@ class AppSettings:
             if name in os.environ
         ]
 
+    def rejected_env_enum_vars(self) -> list[tuple[str, str, str, tuple[str, ...]]]:
+        """``(key, env var, value, vocabulary)`` for every enum key set wrong.
+
+        The boot-time half of :meth:`_refuse_env_enum`, for the same reason
+        ``structured_env_vars`` exists: "the moment the key is read" can be
+        the first time an OTP is sent, which on a notifications service is
+        after the deploy looked green. An operator who set the variable
+        deserves the answer at ``manage.py check``.
+
+        A vocabulary that cannot be resolved is skipped here rather than
+        raised: a system check that dies takes every OTHER finding with it,
+        and an unimportable registry is an authoring bug that ``_raw`` will
+        raise about with the full traceback at the point of use.
+        """
+        found = []
+        for key in self.env_enum:
+            if not self._env_allowed(key):
+                continue
+            try:
+                vocabulary = self.env_vocabulary(key)
+            except Exception:
+                continue
+            for name in self.env_var_names(key):
+                raw = os.environ.get(name)
+                if raw is not None and raw not in vocabulary:
+                    found.append((key, name, raw, vocabulary))
+        return found
+
     def _refuse_structured_env(self, key: str, name: str, raw: str):
         from django.core.exceptions import ImproperlyConfigured
 
@@ -314,6 +453,8 @@ class AppSettings:
                 if env is not None:
                     if isinstance(self.defaults.get(key), _STRUCTURED_TYPES):
                         self._refuse_structured_env(key, name, env)
+                    if key in self.env_enum and env not in self.env_vocabulary(key):
+                        self._refuse_env_enum(key, name, env)
                     return env
         if key in self.defaults:
             return self.defaults[key]

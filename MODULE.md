@@ -147,6 +147,37 @@ that genuinely selects an implementation per environment opts out by name:
 Declaring the same key in both `no_env` and `env_overridable` raises at
 construction rather than picking a winner.
 
+**`env_enum=` — the environment may choose among the names the library
+ships, and only those.** `env_overridable` is all-or-nothing, and for a
+provider-shaped key neither end is right. Closed, and a deployment cannot
+pick its mail backend per environment without every host re-implementing
+`os.getenv` in its own settings module — which one fleet did, so the
+documented variable worked there and nowhere else while W001 truthfully
+reported it ignored. Open, and an env var can name an **arbitrary dotted
+path**, which is precisely the threat the closure exists for.
+
+`AppSettings(..., import_strings=("PROVIDER",), env_enum={"PROVIDER":
+("resend", "smtp", "mock")})` splits the difference along the line of the
+threat: choosing among implementations the library ships is a deployment
+decision and belongs in the environment; naming new code to import is a
+trust decision and stays in the settings module, which only the project can
+write. A dotted path from the environment is refused with a message that
+says where it belongs; an unknown bare name is refused with the list of
+known ones. Refused, never ignored — ignoring is what the blanket closure
+already did, and it is what produced a documented variable that quietly did
+nothing.
+
+The vocabulary may be an iterable, a zero-arg callable, or a dotted path to
+one; callable and dotted forms resolve lazily at first read and are asked
+per read, so a registry filled after boot counts and a `conf.py` never
+imports its provider modules at declaration time. `env_enum` with
+`env_overridable` or with `no_env` raises at construction, as does an
+`env_enum` naming a key the namespace has no default for — a typo there
+would silently never apply. A rejected value is `stapel_core.conf.E003` at
+`manage.py check` (Error, not Warning: unlike W001 the process is not
+running a safe value, it raises at first read — which on a notifications
+service is the first passcode after a green-looking deploy).
+
 **`resolvers=` — the import_strings family with a custom string→object step.**
 A value that is legally "registry short name OR dotted path" cannot go through
 the base class's eager `import_string`, so packages used to subclass
