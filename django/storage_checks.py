@@ -9,7 +9,7 @@ base images, which end ``USER stapel`` (uid 10001). The trees are mode
 755/644, so the new uid keeps READING everything and can write nothing — and
 nothing about that is visible until a user-facing write path touches it.
 
-Lived example (ironmemo, found 2026-09-15 after weeks in production):
+Lived example (a client fleet, found 2026-09-15 after weeks in production):
 ``/app/media`` was root-owned, so ``stapel_cdn.import_from_url`` died with
 ``PermissionError: [Errno 13] ... '/app/media/cdn/avatar/<hash>'`` on every
 single avatar import, and every service start logged one ``collectstatic``
@@ -79,11 +79,11 @@ _HINT = (
     "This is ownership, not configuration: a shared docker volume keeps the "
     "uid that first wrote into it, so a service that moved onto the Stapel "
     "base images (USER stapel, uid 10001) inherits a tree it can only read. "
-    "Hand the service its own subtree BEFORE it starts — ironmemo: "
-    "scripts/chown-service-volumes.sh <service>, darom-fleet: "
-    "deploy/chown-service-volumes.sh <service> — rather than putting the "
-    "container back on root. If this root is genuinely meant to be "
-    "read-only for this process, stop configuring it as a storage root."
+    "Hand the service its own subtree BEFORE it starts — a deploy-time "
+    "chown-service-volumes step, run after the sync and before `up -d` — "
+    "rather than putting the container back on root. If this root is "
+    "genuinely meant to be read-only for this process, stop configuring it "
+    "as a storage root."
 )
 
 
