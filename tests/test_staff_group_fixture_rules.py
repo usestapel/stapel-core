@@ -25,6 +25,7 @@ from django.contrib.contenttypes.models import ContentType
 from stapel_core.django.groups import (
     STAFF_GROUP_NAME,
     OperatorOnlyPermissionInFixture,
+    export_staff_group_fixture,
     is_operator_only,
     register_operator_only_permission,
     setup_staff_group_from_fixture,
@@ -161,3 +162,53 @@ class TestTheImportIsAMirror:
         assert any("view_ghost" in m for m in report["missing"])
         # ...and the resolvable half still applied.
         assert Group.objects.get(name=STAFF_GROUP_NAME).permissions.count() == 1
+
+
+@pytest.mark.django_db
+class TestExportIsGuardedToo:
+    """The loop must not be closable the wrong way round.
+
+    Guarding only the import left one path open: a superuser puts the acting
+    permission on the group by hand, `export` writes it into the fixture, and
+    the next `import` accepts it as canon — because by then it IS the fixture.
+    """
+
+    def test_exporting_a_group_that_holds_an_acting_permission_is_refused(
+        self, tmp_path
+    ):
+        ct = ContentType.objects.get_for_model(Permission)
+        Permission.objects.get_or_create(
+            content_type=ct, codename="grant_credits",
+            defaults={"name": "Can grant credits by hand"},
+        )
+        group = Group.objects.create(name=STAFF_GROUP_NAME)
+        group.permissions.add(_perm("view_permission"), _perm("grant_credits"))
+
+        out = tmp_path / "staff_group.json"
+        with pytest.raises(OperatorOnlyPermissionInFixture) as exc:
+            export_staff_group_fixture(str(out))
+
+        # It blames the GROUP, not the file — the fixture is not wrong yet.
+        assert "group currently holds" in str(exc.value)
+        assert "grant_credits" in str(exc.value)
+        # And nothing was written: a half-written fixture is a fixture.
+        assert not out.exists()
+
+    def test_a_clean_group_still_exports(self, tmp_path):
+        group = Group.objects.create(name=STAFF_GROUP_NAME)
+        group.permissions.add(_perm("view_permission"))
+        out = tmp_path / "staff_group.json"
+        report = export_staff_group_fixture(str(out))
+        assert out.exists()
+        assert [p["codename"] for p in report["permissions"]] == ["view_permission"]
+
+    def test_export_then_import_round_trips(self, tmp_path):
+        group = Group.objects.create(name=STAFF_GROUP_NAME)
+        group.permissions.add(_perm("view_permission"), _perm("add_permission"))
+        out = tmp_path / "staff_group.json"
+        export_staff_group_fixture(str(out))
+        group.permissions.clear()
+        setup_staff_group_from_fixture(str(out))
+        assert {p.codename for p in group.permissions.all()} == {
+            "view_permission", "add_permission",
+        }

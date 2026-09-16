@@ -332,12 +332,22 @@ def setup_staff_group_from_fixture(fixture_path: str) -> dict:
     }
 
 
-def export_staff_group_fixture(output_path: str) -> None:
-    """
-    Export current Staff group permissions to a JSON fixture file.
+def export_staff_group_fixture(output_path: str) -> dict:
+    """Write the Staff group's current permissions out as a JSON fixture.
 
-    Args:
-        output_path: Path to write the JSON fixture file
+    REFUSES when the group currently holds a permission that ACTS, for the
+    same reason the import does — and this is the side that was missing until
+    0.77.0. Guarding only the read left the loop closable the wrong way round:
+    a superuser adds `grant_credits` to the group by hand, `export` dutifully
+    writes it into the fixture, and the next `import` accepts it as canon
+    because by then it IS the fixture. The mechanism would have been defeated
+    through the one path nobody checked.
+
+    So export refuses too, and its message points at the group rather than the
+    file: the fixture is not yet wrong, the GROUP is, and the fix is to take
+    the permission off the group and grant it to the operator who needs it.
+
+    Returns ``{"path", "permissions"}``.
     """
     import json
 
@@ -345,25 +355,45 @@ def export_staff_group_fixture(output_path: str) -> None:
         group = Group.objects.get(name=STAFF_GROUP_NAME)
     except Group.DoesNotExist:
         logger.warning(f"'{STAFF_GROUP_NAME}' group not found")
-        return
+        return {"path": None, "permissions": []}
 
-    permissions = []
-    for perm in group.permissions.all():
-        permissions.append({
-            'app_label': perm.content_type.app_label,
-            'model': perm.content_type.model,
-            'codename': perm.codename,
-        })
+    rows = list(group.permissions.select_related("content_type").all())
 
+    offenders = [
+        f"{p.content_type.app_label}.{p.codename}"
+        for p in rows
+        if is_operator_only(p.content_type.app_label, p.codename)
+    ]
+    if offenders:
+        raise OperatorOnlyPermissionInFixture(
+            f"the '{STAFF_GROUP_NAME}' group currently holds "
+            f"{', '.join(offenders)}, which act rather than reveal. Exporting "
+            f"would write them into the fixture and the next import would "
+            f"accept them as canon. The group is every staff member (the JWT "
+            f"mirror enrols them on sight), so REMOVE the permission from the "
+            f"group and grant it to the individual operator, then export."
+        )
+
+    permissions = [
+        {
+            'app_label': p.content_type.app_label,
+            'model': p.content_type.model,
+            'codename': p.codename,
+        }
+        for p in rows
+    ]
     data = {
         'group_name': STAFF_GROUP_NAME,
-        'permissions': sorted(permissions, key=lambda x: (x['app_label'], x['model'], x['codename']))
+        'permissions': sorted(
+            permissions, key=lambda x: (x['app_label'], x['model'], x['codename'])
+        ),
     }
 
     with open(output_path, 'w') as f:
         json.dump(data, f, indent=2)
 
     logger.info(f"Exported {len(permissions)} permissions to {output_path}")
+    return {"path": output_path, "permissions": data['permissions']}
 
 
 def load_staff_group_if_empty(fixture_path: str) -> bool:

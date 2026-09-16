@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.77.0] — 2026-09-17
+
+### Fixed — the export side is guarded too, so the loop cannot be closed the wrong way round
+
+0.76.0 made the importer refuse a group fixture naming a permission that ACTS.
+It guarded the read and left the write open, which is the whole mechanism
+defeated by the one path nobody checked: a superuser adds `grant_credits` to
+the Staff group by hand, `staff_group export` dutifully writes it into the
+fixture, and the next `import` accepts it — because by then it *is* the
+fixture. Hand-made mistake, laundered into canon, one release later.
+
+`export_staff_group_fixture` now refuses the same way, and its message blames
+the GROUP rather than the file: the fixture is not wrong yet, the group is,
+and the fix is to take the permission off the group and grant it to the
+operator who needs it. Nothing is written when it refuses — a half-written
+fixture is still a fixture. It also returns `{"path", "permissions"}` instead
+of `None`, so a caller can assert what it wrote.
+
+
 ## [0.76.0] — 2026-09-17
 
 ### Added — a group fixture may not carry a permission that ACTS

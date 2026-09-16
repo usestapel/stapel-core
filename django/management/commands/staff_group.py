@@ -87,7 +87,15 @@ class Command(BaseCommand):
         # Ensure directory exists
         os.makedirs(os.path.dirname(fixture_path), exist_ok=True)
 
-        export_staff_group_fixture(fixture_path)
+        from stapel_core.django.groups import OperatorOnlyPermissionInFixture
+
+        try:
+            export_staff_group_fixture(fixture_path)
+        except OperatorOnlyPermissionInFixture as exc:
+            # The group is wrong, not the file — so nothing is written. Writing
+            # it would launder a hand-made mistake into canon on the next
+            # import, which is the one path the refusal used to miss.
+            raise CommandError(str(exc)) from None
         self.stdout.write(self.style.SUCCESS(f'Exported Staff group to {fixture_path}'))
 
     def handle_import(self, options):
