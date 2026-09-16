@@ -49,8 +49,8 @@ import sys
 from django.core.management.base import BaseCommand, CommandError
 
 from stapel_core.gdpr.identity import (
-    IDENTIFYING_FIELDS,
     erase_subject,
+    is_tombstoned,
     mirrors_identities,
 )
 
@@ -92,13 +92,18 @@ class Command(BaseCommand):
                 stream.close()
 
         present = User.objects.filter(pk__in=ids)
-        # Only those still carrying something identifying: a row already
-        # tombstoned is not work, and counting it as work would overstate
-        # what the sweep found.
-        dirty = [
-            u for u in present
-            if any(getattr(u, f, None) for f in IDENTIFYING_FIELDS)
-        ]
+        # A row already tombstoned is not work. Decided by RECOGNISING the
+        # tombstone, not by testing whether the identity fields are empty:
+        # after an anonymisation they are not empty, they hold the tombstone,
+        # so an emptiness test counts every already-swept row as outstanding.
+        #
+        # That is exactly the bug `erase_subject` had and this command
+        # inherited — caught by running the sweep twice on a live fleet, where
+        # the second run reported one row still to do and would have claimed
+        # to anonymise it while `erase_subject` correctly did nothing. A
+        # command that reports work it did not do is worse than one that
+        # refuses, because the number is what somebody signs off against.
+        dirty = [u for u in present if not is_tombstoned(u)]
 
         self.stdout.write(
             f"erased ids supplied : {len(ids)}\n"

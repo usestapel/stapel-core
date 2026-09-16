@@ -170,3 +170,65 @@ class TestMerge:
         import uuid
 
         identity.reparent_on_merge(self._event(from_user_id=str(uuid.uuid4())))
+
+
+@pytest.mark.django_db
+class TestTheSweepIsHonestAboutWhatItDid:
+    """Caught by running the sweep twice on a live fleet: the second run
+    reported one row still to do, and would have claimed to anonymise it while
+    `erase_subject` correctly did nothing. A command that reports work it did
+    not do is worse than one that refuses — the number is what somebody signs
+    off against.
+
+    Same root cause as the guard in `erase_subject`: idempotency has to
+    RECOGNISE the tombstone, because after an anonymisation the identity
+    fields are not empty, they hold it.
+    """
+
+    def _run(self, tmp_path, ids, dry_run=False):
+        """The Command class directly, not call_command.
+
+        core's own test settings do not install `stapel_core.django` as an
+        app, so Django's command discovery cannot see it here — which says
+        nothing about the command and everything about the test harness.
+        """
+        from io import StringIO
+
+        from stapel_core.django.management.commands.gdpr_sweep_identity_mirror import (
+            Command,
+        )
+
+        path = tmp_path / "ids.txt"
+        path.write_text("\n".join(str(i) for i in ids) + "\n")
+        cmd = Command()
+        cmd.stdout = StringIO()
+        cmd.style = type("S", (), {
+            "SUCCESS": staticmethod(lambda s: s),
+            "WARNING": staticmethod(lambda s: s),
+        })()
+        cmd.handle(user_ids_file=str(path), dry_run=dry_run)
+        return cmd.stdout.getvalue()
+
+    def test_a_second_run_finds_nothing(self, tmp_path, settings):
+        settings.JWT_CREATE_USERS_FROM_TOKEN = True
+        user = _mirrored()
+
+        first = self._run(tmp_path, [user.pk])
+        assert "anonymised 1" in first
+
+        second = self._run(tmp_path, [user.pk], dry_run=True)
+        assert "still identifying   : 0" in second
+        assert "nothing to sweep" in second
+
+    def test_it_refuses_where_this_process_is_not_a_mirror(self, tmp_path, settings):
+        """There the user table is the authoritative identity, and
+        anonymising it from a list would erase accounts nobody asked about."""
+        from django.core.management.base import CommandError
+
+        settings.JWT_CREATE_USERS_FROM_TOKEN = False
+        user = _mirrored()
+        with pytest.raises(CommandError) as exc:
+            self._run(tmp_path, [user.pk])
+        assert "does not mirror identities" in str(exc.value)
+        user.refresh_from_db()
+        assert user.email == "person@example.com"

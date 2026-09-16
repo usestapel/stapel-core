@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.80.2] — 2026-09-17
+
+### Fixed — the mirror sweep reported work it had not done
+
+`gdpr_sweep_identity_mirror` decided what was outstanding by testing whether a
+row's identity fields were empty. After an anonymisation they are not empty —
+they hold the tombstone — so every already-swept row counted as outstanding
+again, and a second run would have reported anonymising rows that
+`erase_subject` correctly left alone.
+
+Caught by running the sweep twice on a live fleet. It is the same root cause
+as the guard in `erase_subject` (0.79.0), inherited by the command that calls
+it: idempotency has to RECOGNISE the tombstone rather than test for emptiness.
+`is_tombstoned` is now the test in both places.
+
+A command that reports work it did not do is worse than one that refuses: the
+number is what somebody signs a compliance sweep off against.
+
 ## [0.80.1] — 2026-09-17
 
 ### Fixed — the identity mirror knew deletion and not merge
