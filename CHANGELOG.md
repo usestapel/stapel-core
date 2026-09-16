@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.73.0] — 2026-09-17
+
+### Added — `staff_group sync`: membership follows the flag, so nobody keeps two lists
+
+A group with permissions and no members is the same defect as a fixture
+nobody imports: everything reads configured and nobody is granted anything.
+A fleet audited on 2026-09-16 had one service whose `Staff` group carried
+thirteen permissions and had **zero** members, and another whose group had
+four members and **no** permissions. Both were "set up", and both had been
+that way long enough that the state read as normal.
+
+`export` / `import` / `show` all described what the group GRANTS. Nothing
+described who is IN it, so that half was a habit — somebody remembering, per
+account, at creation time. `sync` makes it a command:
+
+    manage.py staff_group sync --dry-run
+    manage.py staff_group sync
+
+It is a MIRROR, not a top-up, and that is the part that matters. Every
+`is_staff` account is enrolled, and every member that is no longer `is_staff`
+is removed. A top-up that never removes anybody is exactly how two lists
+appear and then drift apart — an account that loses `is_staff` keeps whatever
+the group grants until something takes it away, and "something" was a person.
+
+Superusers are enrolled too, which is deliberately unlike the older
+`add_user_to_staff_group` helper (it skips them, reasoning they already hold
+every permission). That is true today and irrelevant tomorrow: the moment a
+superuser is demoted to plain staff — the usual way an account is wound down
+— they would silently hold nothing, and nobody would connect the two events.
+Enrolling them costs nothing, since a superuser bypasses permission checks
+anyway, and it makes demotion a non-event.
+
+`--dry-run` reports the same numbers a real run produces (asserted, not
+assumed), and the command says so out loud when it has just enrolled members
+into a group that grants nothing — which is the neighbouring defect, and the
+one worth noticing at exactly that moment.
+
+
 ## [0.72.0] — 2026-09-17
 
 ### Added — `stapel_core.testing.assert_declared_paths_resolve`: a contract nothing drives is a contract nothing checks

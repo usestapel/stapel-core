@@ -59,6 +59,78 @@ def add_user_to_staff_group(user) -> bool:
     return False
 
 
+def sync_staff_group(dry_run: bool = False) -> dict:
+    """Make Staff-group membership follow the ``is_staff`` flag. Idempotent.
+
+    THE SHAPE THIS CLOSES. A group with permissions and no members is the
+    same defect as a fixture nobody imports: everything reads configured and
+    nobody is actually granted anything. A fleet audited 2026-09-16 had a
+    service whose Staff group carried thirteen permissions and had zero
+    members, and another whose group had four members and no permissions.
+    Both were "set up".
+
+    Membership follows the flag, in BOTH directions, so that there is one
+    list and not two:
+
+    * every ``is_staff`` account is in the group;
+    * every member that is no longer ``is_staff`` is removed from it.
+
+    The removal half is the reason this is a mirror rather than a top-up. An
+    account that loses ``is_staff`` keeps whatever the group grants until
+    something takes it away, and "something" was a person remembering.
+
+    SUPERUSERS ARE ENROLLED TOO, which is where this deliberately differs
+    from :func:`add_user_to_staff_group` (that helper skips them, reasoning
+    that they already have every permission). True today and irrelevant
+    tomorrow: the moment a superuser is demoted to plain staff — the usual
+    way an account is wound down — they would silently hold nothing, and
+    nobody would connect the two events. Enrolling them costs nothing, since
+    a superuser bypasses permission checks anyway, and it makes demotion a
+    non-event.
+
+    Returns a report: counts before and after, and the accounts on each side
+    of the change, so a dry run is worth reading.
+    """
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    group = get_or_create_staff_group()
+
+    members_before = User.objects.filter(groups=group)
+    to_add = list(User.objects.filter(is_staff=True).exclude(groups=group))
+    to_remove = list(members_before.filter(is_staff=False))
+
+    report = {
+        "group": group.name,
+        "permissions": group.permissions.count(),
+        "members_before": members_before.count(),
+        "added": [str(u.pk) for u in to_add],
+        "removed": [str(u.pk) for u in to_remove],
+        "dry_run": dry_run,
+    }
+
+    if not dry_run:
+        for user in to_add:
+            user.groups.add(group)
+        for user in to_remove:
+            user.groups.remove(group)
+
+    report["members_after"] = (
+        User.objects.filter(groups=group).count()
+        if not dry_run
+        else report["members_before"] + len(to_add) - len(to_remove)
+    )
+    logger.info(
+        "staff group sync%s: %s member(s) -> %s, +%s -%s",
+        " (dry run)" if dry_run else "",
+        report["members_before"],
+        report["members_after"],
+        len(to_add),
+        len(to_remove),
+    )
+    return report
+
+
 def ensure_staff_group_permissions(
     app_label: str,
     model_permissions: Optional[dict] = None

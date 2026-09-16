@@ -13,6 +13,16 @@ Usage:
 
     # Show current Staff group permissions
     python manage.py staff_group show
+
+    # Make membership follow the is_staff flag (idempotent; --dry-run first)
+    python manage.py staff_group sync --dry-run
+    python manage.py staff_group sync
+
+MEMBERSHIP FOLLOWS THE FLAG. `sync` is the only thing that should decide who
+is in the Staff group: it enrols every is_staff account and removes every
+member that is no longer one. Do not also keep a hand-maintained list — two
+lists is how a group ends up with permissions and no members, which reads as
+configured and grants nobody anything.
 """
 
 import os
@@ -26,13 +36,18 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             'action',
-            choices=['export', 'import', 'show', 'setup'],
-            help='Action to perform: export, import, show, or setup'
+            choices=['export', 'import', 'show', 'setup', 'sync'],
+            help='Action to perform: export, import, show, setup, or sync'
         )
         parser.add_argument(
             '--force',
             action='store_true',
             help='Force import even if group has existing permissions'
+        )
+        parser.add_argument(
+            '--dry-run',
+            action='store_true',
+            help='sync: report what would change, write nothing',
         )
         parser.add_argument(
             '--file',
@@ -60,6 +75,8 @@ class Command(BaseCommand):
             self.handle_show(options)
         elif action == 'setup':
             self.handle_setup(options)
+        elif action == 'sync':
+            self.handle_sync(options)
 
     def handle_export(self, options):
         """Export Staff group permissions to fixture file."""
@@ -93,6 +110,37 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS(f'Imported Staff group from {fixture_path}'))
             else:
                 self.stdout.write(self.style.WARNING('Staff group already has permissions, skipping import'))
+
+    def handle_sync(self, options):
+        """Make Staff-group membership follow the is_staff flag."""
+        from stapel_core.django.groups import sync_staff_group
+
+        dry_run = bool(options.get('dry_run'))
+        report = sync_staff_group(dry_run=dry_run)
+
+        self.stdout.write(f"group        {report['group']}")
+        self.stdout.write(f"permissions  {report['permissions']}")
+        self.stdout.write(
+            f"members      {report['members_before']} -> {report['members_after']}"
+        )
+        for pk in report['added']:
+            self.stdout.write(self.style.SUCCESS(f"  + {pk[:8]}  (is_staff)"))
+        for pk in report['removed']:
+            self.stdout.write(self.style.WARNING(f"  - {pk[:8]}  (no longer is_staff)"))
+
+        if not report['added'] and not report['removed']:
+            self.stdout.write(self.style.SUCCESS('already in step — nothing to do'))
+        elif dry_run:
+            self.stdout.write(self.style.WARNING('dry run — nothing was written'))
+
+        if report['permissions'] == 0 and report['members_after']:
+            # Worth saying out loud: members of a group that grants nothing
+            # can log into the admin and act on nothing, which is the defect
+            # this command's neighbours exist to fix.
+            self.stdout.write(self.style.WARNING(
+                'NOTE: this group grants NO permissions, so its members can '
+                'reach the admin and act on nothing. Import a fixture.'
+            ))
 
     def handle_show(self, _options):
         """Show current Staff group permissions."""
