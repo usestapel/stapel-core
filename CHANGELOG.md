@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.75.0] — 2026-09-17
+
+### Fixed — a keyset anchor declared `string` while sending an integer
+
+`AnchorPagination.get_paginated_response_schema` hardcoded
+`next_anchor`/`prev_anchor` as `{"type": "string", "nullable": true}`. The wire
+sends the **raw value of `anchor_field`**, stringified only when it carries
+`.isoformat()` — so a datetime anchor really is a string and an integer anchor
+really is an integer.
+
+Two libraries found that independently in one sweep, both on a sequence
+column: `stapel-recordings`' transcript page (`sequence_num`) and
+`stapel-chat`'s message history (`seq`). Both send `"next_anchor": 3` against a
+declared string. **Each library's other paginators anchor on datetimes**, where
+the claim is true — which is exactly why the one integer anchor went unnoticed
+in both, and why this had to be fixed here rather than twice downstream.
+
+The anchor is now declared as **either a string or an integer** by default,
+with a description saying which you get and why. A paginator that knows its
+anchor narrows the claim by setting `anchor_type = "string"` or `"integer"`.
+
+**Correctness is what you get for free; precision is what you opt into.** The
+reverse of that is how this defect and the two before it in this release train
+came to exist — `data_json`'s missing `many=True` (0.71.0) and `_infer_type`'s
+unread `field.null` (0.74.0) were both cases where the default was confidently
+wrong and only a consumer who thought about it got the truth.
+
+Consuming libraries pick this up when their core pin moves and `make contract`
+is re-run; both wire tests record their findings as strict xfails that fail
+loudly the moment the claim becomes true.
+
+
 ## [0.74.0] — 2026-09-17
 
 ### Fixed — a presenter's `null=True` column no longer declares itself non-nullable

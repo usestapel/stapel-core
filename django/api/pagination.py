@@ -61,6 +61,30 @@ class AnchorPagination(BasePagination):
     page_size = 100
     max_page_size = 1000
     anchor_field = 'id'
+
+    #: The JSON type the anchor is DECLARED as, or ``None`` to declare it
+    #: honestly as either.
+    #:
+    #: The wire sends the raw value of ``anchor_field``, stringified only when
+    #: it carries ``.isoformat()`` — so a datetime anchor really is a string
+    #: and an integer anchor really is an integer. This schema used to say
+    #: ``type: string`` unconditionally, which is true for every datetime
+    #: anchor in the estate and false for every integer one.
+    #:
+    #: Two libraries found that independently in one sweep, both on a sequence
+    #: column: ``stapel-recordings``' transcript page (``sequence_num``) and
+    #: ``stapel-chat``' message history (``seq``). Both send an integer against
+    #: a declared string. Each library's OTHER paginators anchor on datetimes,
+    #: where the claim is true — which is exactly why the one integer anchor
+    #: went unnoticed in both.
+    #:
+    #: ``None`` — declare either — is the DEFAULT on purpose. A paginator that
+    #: says nothing is described truthfully rather than confidently wrong, and
+    #: a subclass that knows its anchor narrows the claim by setting this to
+    #: ``'string'`` or ``'integer'``. Correctness is what you get for free;
+    #: precision is what you opt into. The reverse of that is how this defect,
+    #: and two before it in this release train, came to exist.
+    anchor_type: Optional[str] = None
     anchor_param = 'anchor'
     limit_param = 'limit'
     direction_param = 'direction'
@@ -297,6 +321,25 @@ class AnchorPagination(BasePagination):
             },
         ]
 
+    def _anchor_schema(self, which: str) -> Dict:
+        """How this paginator's anchor is declared (see :attr:`anchor_type`)."""
+        description = f'Anchor value for {which} page'
+        if self.anchor_type:
+            return {
+                'type': self.anchor_type,
+                'nullable': True,
+                'description': description,
+            }
+        return {
+            'oneOf': [{'type': 'string'}, {'type': 'integer'}],
+            'nullable': True,
+            'description': (
+                f'{description}. The raw value of the ordering field: a string '
+                'for a datetime anchor, an integer for a sequence one. Set '
+                '`anchor_type` on the paginator to narrow this.'
+            ),
+        }
+
     def get_paginated_response_schema(self, schema: Dict) -> Dict:
         """
         Return OpenAPI schema for paginated response.
@@ -305,16 +348,8 @@ class AnchorPagination(BasePagination):
             'type': 'object',
             'properties': {
                 'items': schema,
-                'next_anchor': {
-                    'type': 'string',
-                    'nullable': True,
-                    'description': 'Anchor value for next page',
-                },
-                'prev_anchor': {
-                    'type': 'string',
-                    'nullable': True,
-                    'description': 'Anchor value for previous page',
-                },
+                'next_anchor': self._anchor_schema('next'),
+                'prev_anchor': self._anchor_schema('previous'),
                 'has_next': {
                     'type': 'boolean',
                     'description': 'Whether there are more items after this page',
