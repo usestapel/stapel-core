@@ -13,11 +13,11 @@ renders the admin, does the switcher come out?**
 
 It did not, twice, for different reasons:
 
-* **2026-07-06 → 2026-09-02, every ironmemo service.** The service list moved
+* **2026-07-06 → 2026-09-02, every a client fleet service.** The service list moved
   from a library hardcode to the ``STAPEL_SERVICES`` deploy-config; the
   deployment predated the generators that seed it, fell into the monolith
   fallback, and every admin listed only itself.
-* **2026-07-05 → 2026-09-17, ironmemo's ``iron-auth``.** It hand-wrote
+* **2026-07-05 → 2026-09-17, a client fleet's ``iron-auth``.** It hand-wrote
   ``TEMPLATES`` with the library's bind-mount path,
   ``/app/stapel_core/django/templates``. The library became a pip wheel, the
   bind mount was deleted, the string stayed. Django does not object to a

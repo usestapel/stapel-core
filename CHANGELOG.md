@@ -10,12 +10,12 @@ every one of them had the same cause: **the picker depended on a per-service
 settings line that nobody re-checked, and no test ever asserted that it
 rendered.** Two outages, measured:
 
-* **2026-07-06 → 2026-09-02, all eight ironmemo services.** The service list
+* **2026-07-06 → 2026-09-02, all eight a client fleet services.** The service list
   moved out of the library into the `STAPEL_SERVICES` deploy-config. The
   deployment predated the generators that seed it, so every admin fell into
   the monolith fallback and listed only itself. `stapel_core.nav.E004`
   (0.55.0) closed that half.
-* **2026-07-05 → today, ironmemo's `iron-auth`.** It hand-wrote its own
+* **2026-07-05 → today, a client fleet's `iron-auth`.** It hand-wrote its own
   `TEMPLATES` block instead of calling `get_common_templates()`, naming the
   library's template directory by its literal container path,
   `/app/stapel_core/django/templates` — correct only while stapel-core was

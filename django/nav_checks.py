@@ -158,7 +158,7 @@ def check_picker_renders(app_configs=None, **kwargs):
 
     ``django.contrib.admin`` ships its own ``admin/base_site.html`` and sits
     ahead of ``stapel_core.django`` in ``INSTALLED_APPS``, so under
-    ``APP_DIRS`` alone core's copy is always shadowed. On ironmemo that
+    ``APP_DIRS`` alone core's copy is always shadowed. On a client fleet that
     happened the day stapel-core stopped being bind-mounted at
     ``/app/stapel_core``: ``iron-auth``'s hand-written ``DIRS`` entry became
     a path that does not exist, Django said nothing about it, and the admin
