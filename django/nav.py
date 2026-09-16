@@ -216,10 +216,26 @@ def swagger_mounted() -> bool:
 def build_services(*, include_swagger: Optional[bool] = None) -> List[dict]:
     """Render-ready services list (admin/swagger URLs + active flag).
 
+    The list is the **topology**, not just the registry: every service
+    ``STAPEL_SERVICES`` declares, plus every sibling the deployment's own
+    mount registry claims exists (:func:`sibling_prefixes`) and the service
+    registry forgot. A sibling in the second group renders as
+    *present-but-undeclared* — ``declared: False``, a name derived from its
+    prefix, and a ``note`` saying so — instead of not rendering at all.
+
+    That asymmetry is the whole point. A silently missing entry is
+    indistinguishable from the bug this feature keeps regressing into: the
+    admin looks fine, the sibling is simply unreachable from it, and nobody
+    goes looking because nothing is visibly wrong. ``stapel_core.nav.E004``
+    reports the same inconsistency at check time; this one reports it to the
+    person actually looking at the screen, who is the one who will notice.
+
     URLs are built through the current script prefix (mounts convention) so
     navigation survives a sub-path deployment. ``swagger_url`` is ``None``
     when introspection is not mounted (``include_swagger`` overrides the
-    auto-detection, e.g. for tests).
+    auto-detection, e.g. for tests). No network call is made — reachability
+    here means "this deployment says the service is there", which is the only
+    question a template render may honestly ask.
     """
     from django.urls import get_script_prefix
 
@@ -227,21 +243,45 @@ def build_services(*, include_swagger: Optional[bool] = None) -> List[dict]:
     current = _current_prefix()
     show_swagger = swagger_mounted() if include_swagger is None else include_swagger
 
-    out: List[dict] = []
-    for svc in get_services():
-        p = svc.prefix
-        admin_url = f"{root}{p}/admin/" if p else f"{root}admin/"
+    def _entry(name: str, prefix: str, *, declared: bool, note: Optional[str]) -> dict:
+        admin_url = f"{root}{prefix}/admin/" if prefix else f"{root}admin/"
         swagger_url = None
         if show_swagger:
-            swagger_url = f"{root}{p}/swagger/" if p else f"{root}swagger/"
+            swagger_url = f"{root}{prefix}/swagger/" if prefix else f"{root}swagger/"
+        return {
+            "name": name,
+            "prefix": prefix,
+            "admin_url": admin_url,
+            "swagger_url": swagger_url,
+            "is_active": current == prefix or (not current and not prefix),
+            "declared": declared,
+            "note": note,
+        }
+
+    out: List[dict] = []
+    seen = set()
+    for svc in get_services():
+        out.append(_entry(svc.name, svc.prefix, declared=True, note=None))
+        seen.add(svc.prefix)
+
+    # Siblings the mount registry declares but STAPEL_SERVICES does not.
+    try:
+        siblings = sibling_prefixes()
+    except Exception:  # a URLconf/mount registry that will not load is not
+        siblings = []  # this renderer's verdict to give — E-checks own it.
+    for raw in siblings:
+        prefix = raw.strip("/")
+        if not prefix or prefix in seen:
+            continue
+        seen.add(prefix)
         out.append(
-            {
-                "name": svc.name,
-                "prefix": p,
-                "admin_url": admin_url,
-                "swagger_url": swagger_url,
-                "is_active": current == p or (not current and not p),
-            }
+            _entry(
+                prefix.replace("-", " ").replace("_", " ").title(),
+                prefix,
+                declared=False,
+                note="declared by the mount registry, missing from "
+                     "STAPEL_SERVICES (stapel_core.nav.E004)",
+            )
         )
     return out
 

@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.80.0] — 2026-09-17
+
+### Fixed — the admin's cross-service picker is installed, not configured
+
+The switcher in the admin header has been built, lost, rebuilt and lost again
+on live fleets since May. Every disappearance looked like a different bug and
+every one of them had the same cause: **the picker depended on a per-service
+settings line that nobody re-checked, and no test ever asserted that it
+rendered.** Two outages, measured:
+
+* **2026-07-06 → 2026-09-02, all eight ironmemo services.** The service list
+  moved out of the library into the `STAPEL_SERVICES` deploy-config. The
+  deployment predated the generators that seed it, so every admin fell into
+  the monolith fallback and listed only itself. `stapel_core.nav.E004`
+  (0.55.0) closed that half.
+* **2026-07-05 → today, ironmemo's `iron-auth`.** It hand-wrote its own
+  `TEMPLATES` block instead of calling `get_common_templates()`, naming the
+  library's template directory by its literal container path,
+  `/app/stapel_core/django/templates` — correct only while stapel-core was
+  bind-mounted there. The commit that turned stapel-core into a PyPI wheel
+  deleted the bind mount and left the string. Django does not complain about
+  a `DIRS` entry that does not exist.
+
+The second one is worth stating precisely, because the obvious reading is
+wrong. It is tempting to say `APP_DIRS: True` was on, so the template still
+resolved from site-packages. **It did not.** `APP_DIRS` searches app template
+directories in `INSTALLED_APPS` order, `django.contrib.admin` ships its own
+`admin/base_site.html`, and it is listed ahead of `stapel_core.django` in
+every Stapel settings module. Core's copy is *always* shadowed under
+`APP_DIRS` alone. The picker has only ever rendered because some `DIRS` entry
+pointed at core's template directory. Verified on the live stand: `iron-auth`
+resolved `admin/base_site.html` to Django's stock template while
+`iron-recordings`, one `get_common_templates()` call away, resolved core's.
+Two and a half months, in the one service the centralised admin login lands
+on, with a correct `STAPEL_SERVICES` in its environment the whole time.
+
+So the dependency is gone:
+
+- **`stapel_core.django.admin.install`** (new) appends core's template
+  directory and the nav context processor to every Django template engine at
+  `ready()`. A service gets the picker by installing stapel-core and nothing
+  else — no template, no settings line, no opt-in — and a hand-written
+  `TEMPLATES` block is repaired in place without touching the service. Core's
+  directory is *appended*, so a project that deliberately ships its own
+  `admin/base_site.html` still wins. (The `ready()` wiring itself landed a
+  commit early, in 0.79.0.)
+- **`stapel_core.nav.E005` / `E006`** say so out loud when a project defeats
+  the installer anyway — by pinning its own `OPTIONS["loaders"]` (which
+  bypasses `DIRS` entirely) or by rebuilding `TEMPLATES` after apps are
+  ready. E005 fires when `admin/base_site.html` resolves to neither core's
+  copy nor one the project ships; E006 when the context processor is missing.
+- **`tests/test_admin_picker.py`** is the gate whose absence let this run for
+  months. It renders the real admin through the real client and reads the
+  real HTML, under a `TEMPLATES` block that mentions stapel-core nowhere —
+  `DIRS: []`, `APP_DIRS: True` — for a monolith and for a split deployment,
+  plus iron-auth's dead-`DIRS`-entry shape as its own case. Six of its
+  eleven tests fail with the installer disabled.
+
+### Changed — a missing entry is never silence
+
+- `build_services()` renders the **topology**, not just the registry: every
+  service `STAPEL_SERVICES` declares, plus every sibling the deployment's own
+  mount registry claims exists and the registry forgot. The second group
+  renders present-but-flagged (`declared: False`, a `not in registry` badge,
+  a `title` naming E004) rather than not rendering. A silently missing entry
+  is indistinguishable from this whole bug. No network call is made —
+  "reachable" here means the deployment says the service is there, which is
+  the only question a template render may honestly ask.
+- The **"All Services" section no longer collapses below two entries**, so a
+  monolith lists itself. The collapse made "this deployment has one service"
+  and "the service registry was lost again" look identical on screen.
+
 ## [0.79.0] — 2026-09-17
 
 ### Added — core answers for the identity mirror, because core creates it

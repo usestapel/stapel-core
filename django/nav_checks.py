@@ -15,6 +15,8 @@ E001_BAD_SERVICES = "stapel_core.nav.E001"
 E002_BAD_NAV_LINKS = "stapel_core.nav.E002"
 W003_DUPLICATE_SERVICE_DASHBOARD = "stapel_core.nav.W003"
 E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT = "stapel_core.nav.E004"
+E005_PICKER_TEMPLATE_SHADOWED = "stapel_core.nav.E005"
+E006_NAV_CONTEXT_PROCESSOR_MISSING = "stapel_core.nav.E006"
 
 
 @checks.register("stapel_nav")
@@ -144,13 +146,117 @@ def check_services_declared(app_configs=None, **kwargs):
     )]
 
 
+@checks.register("stapel_nav")
+def check_picker_renders(app_configs=None, **kwargs):
+    """E005/E006 — the admin picker must actually be reachable at render time.
+
+    This is the check whose absence let the feature disappear for months at a
+    time. Everything else about the switcher was asserted somewhere —
+    ``get_services`` parsing, the ``NAV_LINKS`` merge, ``E004``'s "a split
+    deployment declared no registry" — and none of it noticed that the
+    *template carrying the switcher was not the template the admin rendered*.
+
+    ``django.contrib.admin`` ships its own ``admin/base_site.html`` and sits
+    ahead of ``stapel_core.django`` in ``INSTALLED_APPS``, so under
+    ``APP_DIRS`` alone core's copy is always shadowed. On ironmemo that
+    happened the day stapel-core stopped being bind-mounted at
+    ``/app/stapel_core``: ``iron-auth``'s hand-written ``DIRS`` entry became
+    a path that does not exist, Django said nothing about it, and the admin
+    quietly fell back to the stock template.
+
+    :func:`stapel_core.django.admin.install.install_admin_nav` makes that
+    unreachable by construction. This check is what says so out loud when a
+    project defeats it anyway — by pinning its own ``OPTIONS["loaders"]``, by
+    rebuilding ``TEMPLATES`` after ``ready()``, or by shipping an
+    ``admin/base_site.html`` of its own that does not extend core's.
+    """
+    from django.conf import settings
+
+    from stapel_core.django.admin.install import (
+        CORE_TEMPLATES_DIR,
+        NAV_CONTEXT_PROCESSOR,
+    )
+
+    if not getattr(settings, "TEMPLATES", None):
+        return []  # no engine at all — django.contrib.admin's admin.E403
+
+    findings = []
+
+    try:
+        from django.template.loader import get_template
+
+        origin = get_template("admin/base_site.html").origin.name or ""
+    except Exception:
+        origin = None
+
+    if origin is not None:
+        import os
+
+        resolved = os.path.realpath(origin)
+        core_dir = os.path.realpath(CORE_TEMPLATES_DIR)
+        project_dirs = []
+        for engine in settings.TEMPLATES:
+            if not isinstance(engine, dict):
+                continue
+            for entry in engine.get("DIRS") or []:
+                path = os.path.realpath(str(entry))
+                if path != core_dir:
+                    project_dirs.append(path)
+        from_core = resolved.startswith(core_dir + os.sep)
+        # A project template is a deliberate override — its own business, and
+        # it may well extend core's. Only the stock django.contrib.admin copy
+        # (or anything else that is neither) means the picker is gone.
+        from_project = any(resolved.startswith(d + os.sep) for d in project_dirs)
+        if not from_core and not from_project:
+            findings.append(checks.Error(
+                f"admin/base_site.html resolves to {origin!r}, which is "
+                f"neither stapel-core's copy nor one this project ships — so "
+                f"the admin renders Django's stock header and the "
+                f"cross-service service picker does not appear at all.",
+                hint="stapel_core installs its template directory into every "
+                     "Django engine at boot. Something removed it again: "
+                     "check for OPTIONS['loaders'] pinned by hand (which "
+                     "bypasses DIRS entirely), or for a TEMPLATES setting "
+                     "rebuilt after apps are ready. stapel_core.django."
+                     "settings.get_common_templates() is the supported "
+                     "shape; a literal path to the library's template "
+                     "directory is not (it rots the moment the library moves "
+                     "from a bind mount to a wheel).",
+                id=E005_PICKER_TEMPLATE_SHADOWED,
+            ))
+
+    engines_missing = []
+    for index, engine in enumerate(settings.TEMPLATES):
+        if not isinstance(engine, dict):
+            continue
+        if engine.get("BACKEND") != "django.template.backends.django.DjangoTemplates":
+            continue
+        processors = (engine.get("OPTIONS") or {}).get("context_processors") or []
+        if NAV_CONTEXT_PROCESSOR not in processors:
+            engines_missing.append(engine.get("NAME") or f"TEMPLATES[{index}]")
+    if engines_missing:
+        findings.append(checks.Error(
+            f"The admin navigation context processor "
+            f"({NAV_CONTEXT_PROCESSOR}) is missing from {engines_missing} — "
+            f"the picker's template renders, but with no services in context, "
+            f"so the header comes out empty.",
+            hint="stapel_core adds it at boot; a TEMPLATES setting rebuilt "
+                 "after apps are ready loses it again.",
+            id=E006_NAV_CONTEXT_PROCESSOR_MISSING,
+        ))
+    return findings
+
+
 __all__ = [
     "E001_BAD_SERVICES",
     "E002_BAD_NAV_LINKS",
     "W003_DUPLICATE_SERVICE_DASHBOARD",
     "E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT",
+    "E005_PICKER_TEMPLATE_SHADOWED",
+    "E006_NAV_CONTEXT_PROCESSOR_MISSING",
     "check_services",
     "check_nav_links",
     "check_service_dashboard_duplicates",
     "check_services_declared",
+    "check_picker_renders",
 ]

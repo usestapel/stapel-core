@@ -132,6 +132,23 @@ details.stapel-dropdown[open] .stapel-dropdown-content {
     background: var(--selected-bg, #e4e4e4);
     font-weight: 600;
 }
+/* A sibling the deployment's mount registry declares but STAPEL_SERVICES
+   does not: shown, linked, and visibly flagged. It is listed rather than
+   dropped because a dropped entry is indistinguishable from the switcher
+   regression this whole block keeps suffering. */
+.stapel-dropdown-item.undeclared {
+    opacity: 0.75;
+}
+.stapel-badge {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+    vertical-align: middle;
+    white-space: nowrap;
+}
 .stapel-dropdown-item .links {
     display: flex;
     gap: 8px;
@@ -296,12 +313,15 @@ details.stapel-dropdown[open] .stapel-dropdown-content {
             Services <span class="chevron" aria-hidden="true">▾</span>
         </summary>
         <div class="stapel-dropdown-content">
-            {% if stapel_services_multi %}
+            {# Rendered whenever there is anything to render — a monolith #}
+            {# lists itself. The section used to collapse below two entries, #}
+            {# which made "this deployment has one service" and "the service #}
+            {# registry was lost again" look exactly alike on screen. #}
             <div class="stapel-dropdown-section">
                 <div class="stapel-dropdown-title">All Services</div>
                 {% for service in stapel_services %}
-                <div class="stapel-dropdown-item{% if service.is_active %} active{% endif %}">
-                    <span>{{ service.name }}</span>
+                <div class="stapel-dropdown-item{% if service.is_active %} active{% endif %}{% if not service.declared %} undeclared{% endif %}"{% if service.note %} title="{{ service.note }}"{% endif %}>
+                    <span>{{ service.name }}{% if not service.declared %} <span class="stapel-badge">not in registry</span>{% endif %}</span>
                     <span class="links">
                         <a href="{{ service.admin_url }}">Admin</a>
                         {% if service.swagger_url %}<a href="{{ service.swagger_url }}">API</a>{% endif %}
@@ -309,7 +329,6 @@ details.stapel-dropdown[open] .stapel-dropdown-content {
                 </div>
                 {% endfor %}
             </div>
-            {% endif %}
             {% for section, links in stapel_nav_sections.items %}
             <div class="stapel-dropdown-section">
                 <div class="stapel-dropdown-title">{{ section|capfirst }}</div>
