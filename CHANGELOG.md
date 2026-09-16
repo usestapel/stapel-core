@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.78.0] — 2026-09-17
+
+### Changed — `grant_credits` is no longer operator-only by default
+
+0.76.0 seeded `OPERATOR_ONLY_PERMISSIONS` with `grant_credits`. The product
+owner overruled it within hours, and correctly: in his deployment staff means
+QA or above, a staff member should simply be able to get credits, and a
+per-operator step is one more thing to remember on top of an ask he had
+already made twice. The security instinct was answering a question nobody had
+asked, and it made the affordance harder rather than safer.
+
+The list is empty by default now. The MECHANISM stays, because the shape it
+encodes is real — the Staff group is every staff member, so a genuinely
+destructive permission must not be grantable through one — it is simply not
+what "may top up a wallet" is. Register the permissions that are, at their
+definition site.
+
+
 ## [0.77.0] — 2026-09-17
 
 ### Fixed — the export side is guarded too, so the loop cannot be closed the wrong way round

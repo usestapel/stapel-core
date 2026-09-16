@@ -45,10 +45,20 @@ STAFF_GROUP_NAME = 'Staff'
 # Entries are matched either bare ("grant_credits", any app) or app-qualified
 # ("billing.grant_credits"). Bare is usually right: the codename is the verb.
 
-OPERATOR_ONLY_PERMISSIONS: set = {
-    # The first member, and the one that named the rule.
-    "grant_credits",
-}
+# EMPTY BY DEFAULT, and `grant_credits` is deliberately NOT here.
+#
+# It was, for a few hours on 2026-09-17. The owner overruled it, and correctly:
+# staff means QA or above in his deployment, a staff member should simply be
+# able to get credits, and a per-operator step is a thing to remember on top of
+# an ask he had already made twice. The security instinct was answering a
+# question nobody had asked, and it made the affordance harder rather than
+# safer.
+#
+# The mechanism stays because the shape is real — a group IS every staff
+# member, so a genuinely destructive permission must not be grantable through
+# one. It is simply not what "may top up a wallet" is. Register the ones that
+# are, at their definition site.
+OPERATOR_ONLY_PERMISSIONS: set = set()
 
 
 class OperatorOnlyPermissionInFixture(Exception):

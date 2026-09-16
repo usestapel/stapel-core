@@ -32,6 +32,17 @@ from stapel_core.django.groups import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clean_registry():
+    """The registry is module state; a test that registers must not leak."""
+    from stapel_core.django.groups import OPERATOR_ONLY_PERMISSIONS
+
+    before = set(OPERATOR_ONLY_PERMISSIONS)
+    yield
+    OPERATOR_ONLY_PERMISSIONS.clear()
+    OPERATOR_ONLY_PERMISSIONS.update(before)
+
+
 def _fixture(tmp_path, perms, name="Staff"):
     path = tmp_path / "staff_group.json"
     path.write_text(json.dumps({"group_name": name, "permissions": perms}))
@@ -55,10 +66,21 @@ def _entry(codename):
 
 @pytest.mark.django_db
 class TestAnActingPermissionIsRefused:
-    def test_grant_credits_is_operator_only_out_of_the_box(self):
-        assert is_operator_only("billing", "grant_credits") is True
+    def test_the_list_is_EMPTY_out_of_the_box(self):
+        """`grant_credits` is deliberately not here — see the module.
+
+        It was, briefly. The owner overruled it: staff means QA or above,
+        and a staff member should simply be able to get credits. The
+        mechanism stays for permissions that are genuinely destructive; a
+        top-up is not one.
+        """
+        from stapel_core.django.groups import OPERATOR_ONLY_PERMISSIONS
+
+        assert OPERATOR_ONLY_PERMISSIONS == set()
+        assert is_operator_only("billing", "grant_credits") is False
 
     def test_a_fixture_naming_one_is_refused(self, tmp_path):
+        register_operator_only_permission("grant_credits")
         ct = ContentType.objects.get_for_model(Permission)
         path = _fixture(
             tmp_path,
@@ -73,6 +95,7 @@ class TestAnActingPermissionIsRefused:
 
     def test_nothing_is_applied_when_one_entry_offends(self, tmp_path):
         """A partial application of a fixture wrong in principle is worse."""
+        register_operator_only_permission("grant_credits")
         ct = ContentType.objects.get_for_model(Permission)
         path = _fixture(
             tmp_path,
@@ -176,6 +199,7 @@ class TestExportIsGuardedToo:
     def test_exporting_a_group_that_holds_an_acting_permission_is_refused(
         self, tmp_path
     ):
+        register_operator_only_permission("grant_credits")
         ct = ContentType.objects.get_for_model(Permission)
         Permission.objects.get_or_create(
             content_type=ct, codename="grant_credits",
