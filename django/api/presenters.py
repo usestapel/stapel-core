@@ -62,7 +62,7 @@ import json
 import re
 import textwrap
 import uuid
-from typing import Any, Callable, Union
+from typing import Any, Callable, Optional, Union
 
 from django.db import models
 from django.db.models.fields.related import ForeignKey, OneToOneField
@@ -127,14 +127,46 @@ _TYPE_MAP: dict[type, type] = {
 }
 
 
-def _infer_type(field: models.Field) -> Any:
-    """Best-effort Python type for a Django model field (as-is fields only)."""
+def _base_type(field: models.Field) -> Any:
+    """The Python type of a field's VALUE, ignoring whether it may be absent."""
     if isinstance(field, (ForeignKey, OneToOneField)):
-        return _infer_type(field.target_field)
+        # The relation's nullability lives on the FK, not on the primary key it
+        # points at — a pk is never null even when the relation is optional.
+        return _base_type(field.target_field)
     for django_type, py_type in _TYPE_MAP.items():
         if isinstance(field, django_type):
             return py_type
     return Any
+
+
+def _infer_type(field: models.Field) -> Any:
+    """Best-effort Python type for a Django model field (as-is fields only).
+
+    ``null=True`` MAKES THE TYPE OPTIONAL, and it did not used to. A presenter
+    naming a nullable column in ``fields = (...)`` inferred the bare type, so
+    the emitted contract declared a required non-nullable value for a column
+    the database is free to leave empty — and every presenter in the estate
+    naming such a column carried the same claim.
+
+    Found by `stapel-webhooks`' contract wire test:
+    ``DeliveryPresenterDTO.response_status`` was declared a required
+    non-nullable ``integer`` over ``IntegerField(null=True)``, and the wire
+    sends ``null`` for every delivery not yet attempted — the state every row
+    is in the moment it is written, and the state a replay deliberately puts a
+    row back into. A generated client typed it ``number`` and received null on
+    the ordinary case.
+
+    ``null``, not ``blank``: ``blank=True`` on a ``CharField`` yields ``""``,
+    which is a value of the declared type and not an absence. Only ``null``
+    puts something outside the type on the wire.
+
+    ``Any`` is left alone — ``Optional[Any]`` is ``Any``, and writing it would
+    suggest a distinction the type does not carry.
+    """
+    base = _base_type(field)
+    if base is Any:
+        return base
+    return Optional[base] if getattr(field, "null", False) else base
 
 
 def _field_help_text(field: models.Field) -> str:

@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.74.0] — 2026-09-17
+
+### Fixed — a presenter's `null=True` column no longer declares itself non-nullable
+
+`presenters._infer_type` mapped a Django field class through `_TYPE_MAP` and
+**never read `field.null`**, so a presenter naming a nullable column in
+`fields = (…)` inferred the bare type. The emitted contract then declared a
+required non-nullable value for a column the database is free to leave empty —
+and **every presenter in the estate naming such a column carried the same
+claim**.
+
+Found twice, independently, by contract wire tests in the same sweep:
+
+- `stapel-webhooks` — `DeliveryPresenterDTO.response_status`, declared a
+  required non-nullable `integer` over `IntegerField(null=True)`. The wire
+  sends `null` for every delivery not yet attempted: the state every row is in
+  the moment `plan_delivery` writes it, and the state `replay` deliberately
+  puts a row back into.
+- `stapel-moderation` — `VerdictPresenterDTO.confidence`, declared a required
+  non-nullable `number` over `FloatField(null=True)` commented "LLM only". The
+  wire sends `null` on every **human** verdict — which is every verdict that
+  endpoint can produce.
+
+Both libraries already spelled their *other* nullables correctly by hand, in
+`custom_fields`, with an explicit `Optional[...]`. The inference was the half
+nobody had to think about, so it was the half that was wrong.
+
+`null`, not `blank`: `blank=True` on a `CharField` yields `""`, a value of the
+declared type rather than an absence. Only `null` puts something outside the
+type on the wire. A nullable **foreign key** is handled where its nullability
+lives — on the relation, not on the primary key it points at, which is never
+null even when the relation is optional. `Any` is left alone, because
+`Optional[Any]` is `Any` and writing it would suggest a distinction the type
+does not carry.
+
+Consuming libraries pick this up when their core pin moves and `make contract`
+is re-run; the two wire tests above record their findings as strict xfails that
+fail loudly the moment the claim becomes true.
+
+
 ## [0.73.0] — 2026-09-17
 
 ### Added — `staff_group sync`: membership follows the flag, so nobody keeps two lists
