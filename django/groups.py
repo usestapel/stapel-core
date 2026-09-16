@@ -16,6 +16,63 @@ logger = logging.getLogger(__name__)
 STAFF_GROUP_NAME = 'Staff'
 
 
+# ---------------------------------------------------------------------------
+# Permissions that ACT, and therefore must never sit in a group fixture
+# ---------------------------------------------------------------------------
+#
+# THE INCIDENT THIS ENCODES, 2026-09-16. `_ensure_user_in_staff_group` (see
+# stapel_core.django.jwt.utils) enrols every mirrored non-superuser is_staff
+# account into the Staff group on EVERY JWT request. So the Staff group is not
+# a subset of staff — it IS staff. A fleet that had just built a deliberate
+# split between "may look at wallets" and "may grant credits" put the new
+# `grant_credits` permission into its Staff group fixture, and thereby handed
+# the money to precisely the people the split existed to separate from it. The
+# mistake survived review and was caught only by watching a view-only operator
+# grant credits on a live stand.
+#
+# THE RULE, which is now a mechanism rather than a sentence in a comment:
+#
+#   The group carries a BASELINE OF VISIBILITY. Anything that ACTS — grants
+#   money, mutates state, triggers a job — is granted PER OPERATOR and must
+#   never appear in a group fixture.
+#
+# A permission is declared operator-only at its definition site: the library
+# that adds it to a model's Meta.permissions registers it here, and
+# `setup_staff_group_from_fixture` then REFUSES a fixture that names it. There
+# is no escape hatch on purpose — a deployment that wants a person to hold it
+# grants it to that person, which is the whole point.
+#
+# Entries are matched either bare ("grant_credits", any app) or app-qualified
+# ("billing.grant_credits"). Bare is usually right: the codename is the verb.
+
+OPERATOR_ONLY_PERMISSIONS: set = {
+    # The first member, and the one that named the rule.
+    "grant_credits",
+}
+
+
+class OperatorOnlyPermissionInFixture(Exception):
+    """A group fixture named a permission that ACTS. See the block above."""
+
+
+def register_operator_only_permission(codename: str) -> None:
+    """Declare a permission operator-only, from the library that defines it.
+
+    Call it from the app's ``AppConfig.ready()``, next to the model whose
+    ``Meta.permissions`` introduces the codename, so the declaration and the
+    definition are read together.
+    """
+    OPERATOR_ONLY_PERMISSIONS.add(codename)
+
+
+def is_operator_only(app_label: str, codename: str) -> bool:
+    """Is this permission one that must not be granted through a group."""
+    return (
+        codename in OPERATOR_ONLY_PERMISSIONS
+        or f"{app_label}.{codename}" in OPERATOR_ONLY_PERMISSIONS
+    )
+
+
 def get_or_create_staff_group() -> Group:
     """
     Get or create the Staff group.
@@ -176,56 +233,103 @@ def ensure_staff_group_permissions(
                 logger.warning(f"ContentType not found: {app_label}.{model_name}")
 
 
-def setup_staff_group_from_fixture(fixture_path: str) -> None:
-    """
-    Load Staff group permissions from a JSON fixture file.
+def setup_staff_group_from_fixture(fixture_path: str) -> dict:
+    """Make the Staff group's permissions match the fixture. A MIRROR.
 
-    Fixture format:
-    {
-        "group_name": "Staff",
-        "permissions": [
-            {"app_label": "vpn", "model": "configlink", "codename": "view_configlink"},
-            ...
-        ]
-    }
+    Fixture format::
 
-    Args:
-        fixture_path: Path to the JSON fixture file
+        {
+            "group_name": "Staff",
+            "permissions": [
+                {"app_label": "vpn", "model": "configlink",
+                 "codename": "view_configlink"},
+                ...
+            ]
+        }
+
+    MIRROR, NOT TOP-UP — changed 2026-09-17, and the reason is worth keeping.
+    This used to only ever ADD. A fixture could therefore widen a group and
+    never narrow one, so the only reachable direction was the unsafe one and
+    de-granting required somebody to know to call ``permissions.set()`` by
+    hand. That was discovered the way such things are: a corrected fixture was
+    re-imported with ``--force`` and corrected nothing, silently, while
+    reporting success. The fixture is the truth now; what is not in it is
+    removed, and the return value says what went.
+
+    Raises :class:`OperatorOnlyPermissionInFixture` when the fixture names a
+    permission that ACTS rather than reveals — see the block at the top of
+    this module. The group is every staff member, so such a permission in a
+    group fixture grants it to all of them.
+
+    Returns a report: ``{"group", "added", "removed", "missing"}``.
     """
     import json
     import os
 
     if not os.path.exists(fixture_path):
         logger.warning(f"Fixture file not found: {fixture_path}")
-        return
+        return {"group": None, "added": [], "removed": [], "missing": []}
 
     with open(fixture_path, 'r') as f:
         data = json.load(f)
 
     group_name = data.get('group_name', STAFF_GROUP_NAME)
+    permissions_data = data.get('permissions', [])
+
+    # Refuse BEFORE touching the group: a partial application of a fixture
+    # that is wrong in principle is worse than not applying it at all.
+    offenders = [
+        f"{p['app_label']}.{p['codename']}"
+        for p in permissions_data
+        if is_operator_only(p.get('app_label', ''), p.get('codename', ''))
+    ]
+    if offenders:
+        raise OperatorOnlyPermissionInFixture(
+            f"{fixture_path} names {', '.join(offenders)}, which act rather "
+            f"than reveal. The Staff group is every staff member (the JWT "
+            f"mirror enrols them on sight), so a permission granted through "
+            f"it is held by all of them. Grant it to the individual operator "
+            f"instead, and keep the group to a baseline of visibility."
+        )
+
     group, _ = Group.objects.get_or_create(name=group_name)
 
-    permissions_data = data.get('permissions', [])
-    added_count = 0
-
+    wanted = []
+    missing = []
     for perm_data in permissions_data:
         try:
             ct = ContentType.objects.get(
                 app_label=perm_data['app_label'],
                 model=perm_data['model']
             )
-            perm = Permission.objects.get(
-                content_type=ct,
-                codename=perm_data['codename']
+            wanted.append(
+                Permission.objects.get(content_type=ct, codename=perm_data['codename'])
             )
-            if not group.permissions.filter(pk=perm.pk).exists():
-                group.permissions.add(perm)
-                added_count += 1
         except (ContentType.DoesNotExist, Permission.DoesNotExist) as e:
-            logger.warning(f"Could not add permission {perm_data}: {e}")
+            # Named but absent: usually a model that has been renamed or
+            # removed and a fixture nobody re-exported. Reported, never
+            # silently dropped — that is how a fixture rots unnoticed.
+            missing.append(f"{perm_data.get('app_label')}.{perm_data.get('codename')}")
+            logger.warning(f"Could not resolve permission {perm_data}: {e}")
 
-    if added_count:
-        logger.info(f"Added {added_count} permissions to '{group_name}' group from fixture")
+    have = set(group.permissions.all())
+    want = set(wanted)
+    added = sorted(f"{p.content_type.app_label}.{p.codename}" for p in want - have)
+    removed = sorted(f"{p.content_type.app_label}.{p.codename}" for p in have - want)
+
+    group.permissions.set(wanted)
+
+    if added or removed or missing:
+        logger.info(
+            "staff group '%s' from fixture: +%s -%s, %s unresolved",
+            group_name, len(added), len(removed), len(missing),
+        )
+    return {
+        "group": group_name,
+        "added": added,
+        "removed": removed,
+        "missing": missing,
+    }
 
 
 def export_staff_group_fixture(output_path: str) -> None:

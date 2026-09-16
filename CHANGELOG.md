@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.76.0] — 2026-09-17
+
+### Added — a group fixture may not carry a permission that ACTS
+
+`_ensure_user_in_staff_group` enrols every mirrored non-superuser `is_staff`
+account into the Staff group on **every** JWT request. So the Staff group is
+not a subset of staff — it *is* staff, and a permission placed in a group
+fixture is held by all of them.
+
+That is not obvious, and it cost a fleet on 2026-09-17. It had just built a
+deliberate split between "may look at wallets" and "may grant credits", put
+the new `grant_credits` into its Staff group fixture, and thereby handed the
+money to precisely the people the split existed to separate from it. Review
+did not catch it. It was caught by watching a view-only operator grant credits
+on a live stand.
+
+So the rule is now a mechanism:
+
+> The group carries a **baseline of visibility**. Anything that **acts** —
+> grants money, mutates state, triggers a job — is granted **per operator**
+> and must never appear in a group fixture.
+
+A permission is declared operator-only at its definition site, by the library
+whose model introduces it, via `register_operator_only_permission()`;
+`OPERATOR_ONLY_PERMISSIONS` seeds with `grant_credits`, the codename that
+named the rule. `setup_staff_group_from_fixture` then refuses such a fixture,
+naming the permission and saying why, and `staff_group import` turns that into
+a `CommandError` so a bootstrap `require` aborts the boot rather than starting
+half-applied. There is no escape hatch, on purpose: a deployment that wants a
+person to hold it grants it to that person.
+
+### Fixed — importing a fixture is a MIRROR, not a top-up
+
+`setup_staff_group_from_fixture` only ever ADDED. A fixture could widen a
+group and never narrow one, so the only reachable direction was the unsafe
+one, and de-granting required knowing to call `permissions.set()` by hand.
+This was discovered the way such things are: a corrected fixture was
+re-imported with `--force`, corrected nothing, and reported success.
+
+The fixture is the truth now — what is not in it is removed — and the call
+returns `{group, added, removed, missing}` so the command can say what went.
+`missing` is new too: a fixture naming a permission this service does not have
+(a renamed or removed model) used to be logged and forgotten, which is how a
+fixture rots unnoticed.
+
+
 ## [0.75.0] — 2026-09-17
 
 ### Fixed — a keyset anchor declared `string` while sending an integer

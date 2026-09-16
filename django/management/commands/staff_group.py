@@ -102,14 +102,47 @@ class Command(BaseCommand):
         if not os.path.exists(fixture_path):
             raise CommandError(f'Fixture file not found: {fixture_path}')
 
-        if options['force']:
-            setup_staff_group_from_fixture(fixture_path)
-            self.stdout.write(self.style.SUCCESS(f'Force-imported Staff group from {fixture_path}'))
-        else:
-            if load_staff_group_if_empty(fixture_path):
-                self.stdout.write(self.style.SUCCESS(f'Imported Staff group from {fixture_path}'))
+        from stapel_core.django.groups import OperatorOnlyPermissionInFixture
+
+        try:
+            if options['force']:
+                report = setup_staff_group_from_fixture(fixture_path)
+                self.stdout.write(
+                    self.style.SUCCESS(f'Force-imported Staff group from {fixture_path}')
+                )
+                self._report_import(report)
             else:
-                self.stdout.write(self.style.WARNING('Staff group already has permissions, skipping import'))
+                if load_staff_group_if_empty(fixture_path):
+                    self.stdout.write(
+                        self.style.SUCCESS(f'Imported Staff group from {fixture_path}')
+                    )
+                else:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            'Staff group already has permissions, skipping import'
+                        )
+                    )
+        except OperatorOnlyPermissionInFixture as exc:
+            # A CommandError, so the bootstrap's `require` aborts the boot: a
+            # deployment whose group fixture would hand an acting permission
+            # to every staff member should not start with it half-applied.
+            raise CommandError(str(exc)) from None
+
+    def _report_import(self, report):
+        """Say what the mirror moved — especially what it took away."""
+        for name in report.get('added', []):
+            self.stdout.write(self.style.SUCCESS(f'  + {name}'))
+        for name in report.get('removed', []):
+            # The half that used to be impossible: before 0.75.0 an import
+            # could only ever widen a group.
+            self.stdout.write(self.style.WARNING(f'  - {name}  (not in the fixture)'))
+        for name in report.get('missing', []):
+            self.stdout.write(self.style.ERROR(
+                f'  ? {name}  named by the fixture but no such permission here '
+                f'— renamed or removed model; re-export'
+            ))
+        if not any(report.get(k) for k in ('added', 'removed', 'missing')):
+            self.stdout.write('  already in step')
 
     def handle_sync(self, options):
         """Make Staff-group membership follow the is_staff flag."""
