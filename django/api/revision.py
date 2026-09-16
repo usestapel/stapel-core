@@ -306,6 +306,36 @@ max revision from `/revision` endpoint. Response includes Cache-Control header f
             ),
         ],
     )
+    def get_serializer(self, *args, **kwargs):
+        """The `data.json` action serialises a LIST, and the schema must say so.
+
+        drf-spectacular decides list-ness in `_is_list_view`: if the response
+        serializer is not already a ListSerializer it falls back to
+        `view.action == 'list'`, and this action is called `data_json`. So the
+        generator described one object while the body has always been
+        `serializer(queryset, many=True).data` — an array. That is the
+        stapel-alerts defect (a hand-written annotation the generator cannot
+        check) living in a shared mixin, which makes it worse: it is inherited.
+
+        Measured across the fleet before this was written: of the three
+        libraries mixing this in, one had hand-annotated
+        `responses={200: X(many=True)}` on its own viewset and was correct, one
+        had not and was wrong, and nothing told the difference. Correctness
+        must not be something each consumer remembers.
+
+        Overriding `get_serializer` is also what makes the generator ASK: with
+        no override it short-circuits to `get_serializer_class()(context=...)`
+        and never sees the action at all (drf_spectacular/openapi.py, the
+        `view.__class__.get_serializer == GenericAPIView.get_serializer`
+        branch).
+
+        `setdefault`, so the runtime call that already passes `many=True`
+        explicitly is untouched.
+        """
+        if getattr(self, 'action', None) == 'data_json':
+            kwargs.setdefault('many', True)
+        return super().get_serializer(*args, **kwargs)  # type: ignore[misc]
+
     @action(detail=False, methods=['get'], url_path='data.json', pagination_class=None)
     def data_json(self, request):
         """Return all items as a JSON array with long cache headers."""

@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.71.0] — 2026-09-16
+
+### Fixed — two shared declarations that described something the wire never sent
+
+Both were found by a contract WIRE test — one that performs every operation a
+committed `docs/schema.json` declares and validates the body it gets back —
+run against `stapel-categories`. Neither could be found by a drift gate:
+`test_contract.py` compares the committed document against a fresh emission of
+the same annotations, so both sides came from the same claim and agreed.
+
+These two matter more than a library's own lie because they are **inherited**.
+
+#### `RevisionViewSetMixin.data_json` declared one object and sent an array
+
+The action's `@extend_schema` annotated `parameters` and never `responses`.
+drf-spectacular decides list-ness in `_is_list_view`: when the response
+serializer is not already a `ListSerializer` it falls back to `view.action ==
+'list'`, and this action is called `data_json` — so the generator described a
+single object while the body has always been `serializer(queryset,
+many=True).data`.
+
+That is the `stapel-alerts` 0.2.0 defect (a hand-written annotation the
+generator cannot check) living in a shared mixin, which makes it worse: every
+consumer inherits it.
+
+**Measured before it was fixed.** Of the three libraries mixing it in, one had
+hand-annotated `responses={200: X(many=True)}` on its own viewset and was
+correct, one had not and was wrong, and nothing distinguished them. Correctness
+must not be something each consumer remembers.
+
+The mixin now overrides `get_serializer` to pass `many=True` for that action.
+Overriding it is also what makes the generator *ask*: with no override,
+drf-spectacular short-circuits to `get_serializer_class()(context=…)` and never
+sees the action at all. `setdefault`, so the runtime call that already passes
+`many=True` explicitly is untouched.
+
+#### `BulkUpdateResponse.updated_ids` declared uuid strings and sent integers
+
+It was `ListField(child=UUIDField())`, while consumers append `obj.pk` of
+models keyed on a `BigAutoField`. A client generated from the contract typed
+them `string[]` and received `[1, 2, 3]`.
+
+Declared as a **union** (`integer` or `uuid` string) rather than narrowed to
+either: this serializer is shared by every bulk endpoint in the estate and the
+pk type is the consuming model's choice, not this module's — narrowing it to
+integer would only move the same lie to a uuid-keyed consumer. The new
+`PrimaryKeyValueField` is declaration-only and exists so a shared response can
+describe `obj.pk` honestly.
+
+Proven end to end rather than asserted: regenerating `stapel-categories`'
+schema against this release turns its two `data.json` operations into
+`ARRAY of Category` / `ARRAY of Feature` and its `updated_ids` into the union.
+
+
 ## [0.70.0] — 2026-09-16
 
 ### `env_enum` — the environment may pick among the names a library ships

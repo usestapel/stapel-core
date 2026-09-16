@@ -13,6 +13,7 @@ from drf_spectacular.utils import (
     OpenApiParameter,
     OpenApiResponse,
     extend_schema,
+    extend_schema_field,
 )
 from rest_framework import serializers
 
@@ -83,11 +84,37 @@ class MessageResponseSerializer(serializers.Serializer):
     message = serializers.CharField(help_text="Success message")
 
 
+@extend_schema_field(
+    {"oneOf": [{"type": "integer"}, {"type": "string", "format": "uuid"}]}
+)
+class PrimaryKeyValueField(serializers.Field):
+    """A written row's primary key, whatever type the consuming model gave it.
+
+    Read-only and declaration-only: it exists so a shared response serializer
+    can describe `obj.pk` honestly without guessing whether the consumer keyed
+    its table on a BigAutoField or a uuid.
+    """
+
+    def to_representation(self, value):
+        return value
+
+
 class BulkUpdateResponseSerializer(serializers.Serializer):
     """Response for bulk create/update operations."""
 
+    # The pk of whatever was written, and that is NOT always a uuid: the
+    # consumers of this response append `obj.pk` of models whose primary key is
+    # a BigAutoField, so the wire carries integers while this declared uuid
+    # STRINGS. A client generated from the contract typed them `string[]` and
+    # received `[1, 2, 3]`.
+    #
+    # Declared as a UNION rather than narrowed to either: this serializer is
+    # shared by every bulk endpoint in the estate and the pk type is the
+    # consuming model's choice, not this module's. Narrowing it to integer
+    # would just move the same lie to a uuid-keyed consumer.
     updated_ids = serializers.ListField(
-        child=serializers.UUIDField(), help_text="List of created/updated object IDs"
+        child=PrimaryKeyValueField(),
+        help_text="List of created/updated object IDs (each a pk: integer or uuid)",
     )
 
 
