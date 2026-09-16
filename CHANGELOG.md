@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.79.0] — 2026-09-17
+
+### Added — core answers for the identity mirror, because core creates it
+
+A service that consumes an external identity keeps a local ``users.User`` row
+per person it has ever seen — created by this library from a JWT
+(``JWT_CREATE_USERS_FROM_TOKEN``) and from the ``user.created`` projection.
+That row carries email and username, and **no module claimed it**, because it
+is not any module's data.
+
+So an account erasure collected a complete receipt set while the address
+survived. Measured end to end on a live fleet, 2026-09-16, on a purpose-built
+subject: nine owners asked, nine answered, every receipt inside 0.73s, request
+``deleted``, ``completeness_waived=False`` — and one store still held
+``gdpr-drill@stapel.test`` with ``is_active=True``. Every owner was telling the
+truth about its own data. Roughly 880 such rows existed across that fleet,
+claimed by nobody.
+
+``stapel_core.gdpr.identity`` registers as the ``identity_mirror`` data owner,
+automatically, wherever ``JWT_CREATE_USERS_FROM_TOKEN`` is on — so a service
+inherits the obligation by MIRRORING users rather than by remembering to
+declare an owner. It is a no-op in the identity owner, where that setting is
+off and stapel-gdpr's ``erase_identity`` is already the single writer of the
+primary row.
+
+It anonymises rather than deletes, because other tables reference these rows by
+id, and it uses the field list and tombstone shape stapel-gdpr uses — it is
+written to be the single implementation both call, and stapel-gdpr delegates to
+it from the release that depends on this one.
+
+Idempotency is decided by RECOGNISING the tombstone, not by checking whether
+the fields are empty: after an anonymisation they are not empty, they hold the
+tombstone. A first cut tested emptiness, and a redelivery minted a second
+tombstone for one person — the history-splitting failure the guard existed to
+prevent, caught by its own test.
+
+A silent no-op raises instead of receipting. An anonymiser that quietly does
+nothing while the protocol reports success is the exact defect this closes.
+
+### Added — ``manage.py gdpr_sweep_identity_mirror``
+
+The provider closes the future; anyone erased BEFORE it shipped got a complete
+receipt set with their email still in every mirror, and the orchestrator will
+not ask again. The sweep takes the already-erased ids
+(``--user-ids-file``, ``-`` for stdin), is dry-runnable, and goes through the
+same owner callable so a sweep and a live erasure cannot leave rows in
+different states.
+
+It REFUSES to run where this process is not a mirror — there the local user
+table is the authoritative identity, and anonymising it from a list would erase
+accounts nobody asked about. That refusal is the safety property: the command
+cannot be pointed at the identity owner by mistake.
+
 ## [0.78.0] — 2026-09-17
 
 ### Changed — `grant_credits` is no longer operator-only by default

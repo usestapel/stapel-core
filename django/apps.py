@@ -43,6 +43,33 @@ class CommonDjangoConfig(AppConfig):
         # Idempotent (dispatch_uid), best-effort (never breaks has_perm).
         from stapel_core.access.audit import connect_access_audit
         connect_access_audit()
+        # The identity MIRROR (stapel_core.gdpr.identity). A service that
+        # consumes an external identity keeps a local users.User row per
+        # person it has seen — email, username — created by this very
+        # library. No module claimed it, so an account erasure collected a
+        # complete receipt set while the address survived in every mirror
+        # (measured on a live fleet 2026-09-16: nine owners done, a live
+        # email in the store). Registration is keyed to the setting that
+        # CREATES the rows, so a service inherits the obligation by mirroring
+        # users rather than by remembering to declare an owner. A no-op where
+        # JWT_CREATE_USERS_FROM_TOKEN is off — i.e. in the identity owner,
+        # where stapel-gdpr already erases the primary row.
+        from stapel_core.gdpr.identity import register_identity_mirror_owner
+        register_identity_mirror_owner()
+        # The admin's cross-service picker, installed rather than configured.
+        # It renders from admin/base_site.html, which django.contrib.admin
+        # also ships and — being listed earlier in INSTALLED_APPS — always
+        # wins under APP_DIRS. So the picker only ever appeared because some
+        # service's TEMPLATES["DIRS"] happened to name core's template
+        # directory, and it vanished silently every time that hand-written
+        # line rotted (ironmemo's iron-auth froze the bind-mount path
+        # /app/stapel_core/django/templates and lost the picker the day the
+        # library became a wheel). This appends core's directory and the nav
+        # context processor to every Django engine at boot, so a service gets
+        # the picker by installing stapel-core and nothing else. See
+        # stapel_core.django.admin.install for the full history.
+        from stapel_core.django.admin.install import connect_admin_nav_installer
+        connect_admin_nav_installer()
         # Secret-provider seam checks (stapel_core.secrets): W-level — the env
         # default always works; a broken custom provider surfaces here.
         from stapel_core.secrets import checks as _secrets_checks  # noqa: F401
