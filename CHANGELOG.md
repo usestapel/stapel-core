@@ -15,7 +15,7 @@ rendered.** Two outages, measured:
   deployment predated the generators that seed it, so every admin fell into
   the monolith fallback and listed only itself. `stapel_core.nav.E004`
   (0.55.0) closed that half.
-* **2026-07-05 → today, a client fleet's `iron-auth`.** It hand-wrote its own
+* **2026-07-05 → today, a client fleet's auth service.** It hand-wrote its own
   `TEMPLATES` block instead of calling `get_common_templates()`, naming the
   library's template directory by its literal container path,
   `/app/stapel_core/django/templates` — correct only while stapel-core was
@@ -30,9 +30,9 @@ directories in `INSTALLED_APPS` order, `django.contrib.admin` ships its own
 `admin/base_site.html`, and it is listed ahead of `stapel_core.django` in
 every Stapel settings module. Core's copy is *always* shadowed under
 `APP_DIRS` alone. The picker has only ever rendered because some `DIRS` entry
-pointed at core's template directory. Verified on the live stand: `iron-auth`
+pointed at core's template directory. Verified on a live stand: the auth service
 resolved `admin/base_site.html` to Django's stock template while
-`iron-recordings`, one `get_common_templates()` call away, resolved core's.
+a sibling one `get_common_templates()` call away resolved core's.
 Two and a half months, in the one service the centralised admin login lands
 on, with a correct `STAPEL_SERVICES` in its environment the whole time.
 
@@ -55,7 +55,7 @@ So the dependency is gone:
   months. It renders the real admin through the real client and reads the
   real HTML, under a `TEMPLATES` block that mentions stapel-core nowhere —
   `DIRS: []`, `APP_DIRS: True` — for a monolith and for a split deployment,
-  plus iron-auth's dead-`DIRS`-entry shape as its own case. Six of its
+  plus that dead-`DIRS`-entry shape as its own case. Six of its
   eleven tests fail with the installer disabled.
 
 ### Changed — a missing entry is never silence

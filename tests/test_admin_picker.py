@@ -17,7 +17,7 @@ It did not, twice, for different reasons:
   from a library hardcode to the ``STAPEL_SERVICES`` deploy-config; the
   deployment predated the generators that seed it, fell into the monolith
   fallback, and every admin listed only itself.
-* **2026-07-05 → 2026-09-17, a client fleet's ``iron-auth``.** It hand-wrote
+* **2026-07-05 → 2026-09-17, a client fleet's auth service.** It hand-wrote
   ``TEMPLATES`` with the library's bind-mount path,
   ``/app/stapel_core/django/templates``. The library became a pip wheel, the
   bind mount was deleted, the string stayed. Django does not object to a
@@ -30,7 +30,7 @@ It did not, twice, for different reasons:
 So the tests below render the real admin through the real client and read the
 real HTML, under a ``TEMPLATES`` block that deliberately does **not** mention
 stapel-core — ``DIRS: []``, ``APP_DIRS: True``, no nav context processor.
-That is the iron-auth shape. Every one of them fails with the installer disabled.
+That is the shape that broke. Every one of them fails with the installer disabled.
 """
 import uuid
 
@@ -41,7 +41,7 @@ from django.test import Client, override_settings
 
 from stapel_core.django.users.models import User
 
-# The iron-auth shape: an engine that names stapel-core nowhere at all.
+# The shape that broke: an engine that names stapel-core nowhere at all.
 # django.contrib.admin sits ahead of stapel_core.django, so under APP_DIRS
 # alone its base_site.html wins and the picker is gone.
 BARE_TEMPLATES = [{
@@ -187,7 +187,7 @@ def test_microservice_admin_links_every_sibling(picker_env, settings):
 def test_the_picker_survives_a_dead_hand_written_dirs_entry(
     picker_env, settings
 ):
-    """iron-auth's exact regression, as a test.
+    """That exact regression, as a test.
 
     A service that hand-wrote its ``TEMPLATES`` and named the library's
     template directory by a container path that no longer exists. Before
