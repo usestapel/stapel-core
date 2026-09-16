@@ -56,6 +56,16 @@ class CommonDjangoConfig(AppConfig):
         # where stapel-gdpr already erases the primary row.
         from stapel_core.gdpr.identity import register_identity_mirror_owner
         register_identity_mirror_owner()
+        # E010: a package may not ship an emits schema for a fact another
+        # package emits. Whichever copy a service loads becomes that service's
+        # contract, so a stale one refuses the owner's payload — and a refusal
+        # inside an erasure's own transaction rolls the erasure back while
+        # every receipt still reports success. Registered here so it runs at
+        # `manage.py check` in every service.
+        from django.core.checks import register as _register_check
+
+        from stapel_core.comm.schema_ownership import check_schema_ownership
+        _register_check(check_schema_ownership)
         # The admin's cross-service picker, installed rather than configured.
         # It renders from admin/base_site.html, which django.contrib.admin
         # also ships and — being listed earlier in INSTALLED_APPS — always

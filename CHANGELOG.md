@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.81.0] — 2026-09-17
+
+Minor: the identity-mirror owner name changes shape, and a new Error-level
+check will fail a service that ships somebody else's schema.
+
+### Fixed — one owner name for N services hid one service's failure
+
+The mirror registered under a single flat `identity_mirror`. One name means
+one `ErasurePart` and one receipt, so whichever service answered first marked
+it done and the orchestrator stopped waiting — and a second service that
+FAILED was invisible behind the first's success.
+
+Measured on a live fleet, 2026-09-16: two services mirrored one subject, one
+anonymised it and one rolled back, the receipt said done, and the address
+survived. That is the defect this module was written to close, reproduced one
+level down. It works only while everything succeeds, which is the state a
+protocol is not needed for.
+
+The name is now `identity_mirror:<service>`, from `STAPEL_SERVICE_NAME` (then
+`SERVICE_NAME`, then the user model's app label). A service with no name is a
+boot error rather than a guess — guessing is what puts two services under one
+name. A deployment lists one entry per mirroring service in
+`STAPEL_GDPR["DATA_OWNERS"]`, which is the inventory finally naming what is
+there.
+
+### Fixed — core ships the schemas for the facts core emits
+
+`gdpr.section.erased` and `gdpr.owner.alive` are emitted by
+`stapel_core.gdpr.owners`, and core shipped no schema for either. Three
+consuming libraries each shipped their own copy. Two carried the current
+eight-property shape; one carried a five-property version with
+`additionalProperties: false`.
+
+Whichever copy a service loaded became that service's contract, so in the
+service holding the stale one core's receipt was refused for an unexpected
+`receipt_id` — inside the erasure's own transaction, which is what makes "a
+rolled-back erasure never produces a receipt" true. The erasure rolled back.
+The mirror logged that it had anonymised, and the anonymisation was undone.
+
+### Added — `stapel_core.comm.E010`, so the class cannot recur
+
+A package that ships `schemas/emits/<action>.json` for a fact another package
+emits now fails `manage.py check`, naming both packages and the fact. Deleting
+one stale copy fixes one day; this stops the next library vendoring somebody
+else's truth. Identical copies are reported too, deliberately — identical is
+how divergent starts, and removing one costs a deleted file.
+
+This was the third time in one night that a local copy of another module's
+truth produced a confident wrong answer, and the most damaging: the other two
+were wrong in public, while this silently reversed a compliance action.
+
 ## [0.80.2] — 2026-09-17
 
 ### Fixed — the mirror sweep reported work it had not done

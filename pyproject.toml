@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-core"
-version = "0.80.2"
+version = "0.81.0"
 description = "Core Django utilities for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -234,4 +234,4 @@ packages = [
 # keys, and the file every module's gate reads to answer "does the owner ship
 # this language". Left out of the wheel, core's texts silently vanish from
 # every deployment and the fleet's modules go back to needing their own copies.
-"stapel_core" = ["migrations/*.py", "django/templates/**/*", "django/translations/*.json", "static/**/*", "py.typed", "notifications/schemas/**/*.json", "CONFIG.MD", "PRESENTERS.MD", "docs/capabilities.json", "docs/llms.txt", "docs/flows.json", "docs/errors.json"]
+"stapel_core" = ["migrations/*.py", "django/templates/**/*", "django/translations/*.json", "static/**/*", "py.typed", "notifications/schemas/**/*.json", "gdpr/schemas/**/*.json", "CONFIG.MD", "PRESENTERS.MD", "docs/capabilities.json", "docs/llms.txt", "docs/flows.json", "docs/errors.json"]

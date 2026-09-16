@@ -64,11 +64,56 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
-#: The owner name this registers under, and the name a deployment must list in
-#: ``STAPEL_GDPR["DATA_OWNERS"]`` for the orchestrator to ask it. Distinct from
-#: ``auth`` on purpose: they are different rows in different databases, and a
-#: receipt should say which one answered.
-OWNER = "identity_mirror"
+#: Prefix of the owner name. The full name is PER SERVICE —
+#: ``identity_mirror:<service>`` — and that is the whole of a correction the
+#: first design got wrong.
+#:
+#: One shared name means one ``ErasurePart`` and one receipt for N services.
+#: Whichever service answers first marks the part done and the orchestrator
+#: stops waiting, so a second service that FAILED is invisible behind the
+#: first one's success. Measured on a live fleet, 2026-09-16: two services
+#: mirrored one subject, one anonymised and one rolled back, the receipt said
+#: done, and the address survived. That is the defect this module was written
+#: to close, reproduced one level down — and it works only while everything
+#: succeeds, which is the state nobody needs a protocol for.
+#:
+#: A deployment therefore lists one entry per mirroring service in
+#: ``STAPEL_GDPR["DATA_OWNERS"]``. That is not a cost: it is the inventory
+#: finally naming what is actually there.
+OWNER_PREFIX = "identity_mirror"
+
+
+def owner_name(service: str | None = None) -> str:
+    """This service's mirror-owner name: ``identity_mirror:<service>``.
+
+    The service name comes from ``STAPEL_SERVICE_NAME`` when a deployment sets
+    it, else Django's ``SERVICE_NAME``, else the app label of the user model's
+    application — in that order, because the first is explicit, the second is
+    what most services in this fleet already carry, and the third always
+    exists. A name that cannot be determined is a boot error rather than a
+    guess, since the whole point is that two services do not share one.
+    """
+    from django.conf import settings
+
+    name = service or getattr(settings, "STAPEL_SERVICE_NAME", "") or getattr(
+        settings, "SERVICE_NAME", ""
+    )
+    if not name:
+        from django.contrib.auth import get_user_model
+
+        name = get_user_model()._meta.app_config.label
+    slug = str(name).strip().lower().replace(" ", "-").replace("_", "-")
+    if not slug:
+        raise RuntimeError(
+            "identity mirror: this service has no name to register under. "
+            "Set STAPEL_SERVICE_NAME — the mirror owner must be per service, "
+            "or one service's receipt answers for another's failure."
+        )
+    return f"{OWNER_PREFIX}:{slug}"
+
+
+#: Kept for hosts that referenced the old flat name.
+OWNER = OWNER_PREFIX
 
 #: Subject types the mirror can erase. Only ``account`` — a mirror row is keyed
 #: by user id and nothing else; claiming ``workspace`` or ``recording`` would
@@ -260,7 +305,7 @@ def register_identity_mirror_owner() -> bool:
         from stapel_core.comm import on_action
         from stapel_core.gdpr import register_gdpr_owner
 
-        register_gdpr_owner(OWNER, list(SUBJECT_TYPES), erase_subject)
+        register_gdpr_owner(owner_name(), list(SUBJECT_TYPES), erase_subject)
         # Registering as an owner subscribes `user.deleted`, and an app that
         # knows deletion and not merge strands the merged account's rows —
         # stapel_core.lifecycle.E001 refuses that combination, correctly. See
@@ -274,6 +319,8 @@ def register_identity_mirror_owner() -> bool:
 
 __all__ = [
     "OWNER",
+    "OWNER_PREFIX",
+    "owner_name",
     "SUBJECT_TYPES",
     "IDENTITY_FIELDS",
     "IDENTIFYING_FIELDS",

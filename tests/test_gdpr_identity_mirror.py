@@ -232,3 +232,100 @@ class TestTheSweepIsHonestAboutWhatItDid:
         assert "does not mirror identities" in str(exc.value)
         user.refresh_from_db()
         assert user.email == "person@example.com"
+
+
+class TestTheOwnerNameIsPerService:
+    """One shared owner name means one ErasurePart and one receipt for N
+    services, so the first to answer marks it done and a second service's
+    FAILURE is invisible behind the first's success.
+
+    Measured on a live fleet 2026-09-16: two services mirrored one subject,
+    one anonymised and one rolled back, the receipt said done, and the address
+    survived. The defect this module closes, one level down.
+    """
+
+    def test_it_is_prefixed_and_namespaced(self, settings):
+        settings.STAPEL_SERVICE_NAME = "iron-workspaces"
+        assert identity.owner_name() == "identity_mirror:iron-workspaces"
+
+    def test_two_services_get_two_names(self, settings):
+        settings.STAPEL_SERVICE_NAME = "iron-recordings"
+        a = identity.owner_name()
+        settings.STAPEL_SERVICE_NAME = "iron-workspaces"
+        b = identity.owner_name()
+        assert a != b
+
+    def test_it_falls_back_to_service_name(self, settings):
+        settings.STAPEL_SERVICE_NAME = ""
+        settings.SERVICE_NAME = "Iron Recordings"
+        assert identity.owner_name() == "identity_mirror:iron-recordings"
+
+    def test_a_nameless_service_is_an_error_not_a_guess(self, settings, monkeypatch):
+        """Guessing would put two services under one name, which is the bug."""
+        settings.STAPEL_SERVICE_NAME = ""
+        settings.SERVICE_NAME = ""
+        monkeypatch.setattr(identity, "owner_name", identity.owner_name)
+        with pytest.raises(RuntimeError) as exc:
+            identity.owner_name(service="   ")
+        assert "per service" in str(exc.value)
+
+
+class TestNobodyShipsSomebodyElsesSchema:
+    """A library shipping its own copy of a fact another library owns is how
+    a stale five-property `gdpr.section.erased` refused core's eight-property
+    receipt — inside the erasure's transaction, so the erasure rolled back
+    while every receipt still reported success."""
+
+    def test_core_ships_the_facts_it_emits(self):
+        from pathlib import Path
+
+        import stapel_core
+
+        emits = Path(stapel_core.__file__).parent / "gdpr" / "schemas" / "emits"
+        for action in ("gdpr.section.erased", "gdpr.owner.alive"):
+            assert (emits / f"{action}.json").is_file(), action
+
+    def test_the_shipped_schema_accepts_the_receipt_core_emits(self):
+        import json
+        from pathlib import Path
+
+        import jsonschema
+
+        import stapel_core
+
+        path = (
+            Path(stapel_core.__file__).parent
+            / "gdpr" / "schemas" / "emits" / "gdpr.section.erased.json"
+        )
+        schema = json.loads(path.read_text())
+        # The exact shape stapel_core.gdpr.owners emits, receipt_id included —
+        # the property the stale copy rejected.
+        jsonschema.validate(
+            {
+                "correlation_id": "c1",
+                "owner": "identity_mirror:iron-recordings",
+                "subject_type": "account",
+                "subject_key": "u1",
+                "receipt_id": "identity_mirror:account:u1:c1",
+                "counts": {"identity_mirror": 1},
+            },
+            schema,
+        )
+
+    def test_the_check_names_both_packages(self, tmp_path):
+        from stapel_core.comm import schema_ownership
+
+        foreign = tmp_path / "stapel_someone_else" / "schemas" / "emits"
+        foreign.mkdir(parents=True)
+        (foreign / "gdpr.section.erased.json").write_text("{}")
+
+        found = schema_ownership.foreign_schema_copies([str(tmp_path)])
+        assert ("gdpr.section.erased", "stapel_someone_else", "stapel_core") in found
+
+    def test_core_shipping_its_own_is_not_a_finding(self, tmp_path):
+        from stapel_core.comm import schema_ownership
+
+        mine = tmp_path / "stapel_core" / "schemas" / "emits"
+        mine.mkdir(parents=True)
+        (mine / "gdpr.section.erased.json").write_text("{}")
+        assert schema_ownership.foreign_schema_copies([str(tmp_path)]) == []
