@@ -115,3 +115,58 @@ class TestRegistration:
         """Claiming a subject type it cannot erase would make the liveness
         probe a lie about what this can do."""
         assert identity.SUBJECT_TYPES == ("account",)
+
+
+@pytest.mark.django_db
+class TestMerge:
+    """`stapel_core.lifecycle.E001` caught this module the day it shipped:
+    registering as a data owner subscribes `user.deleted`, and an app that
+    knows deletion and not merge strands the merged account's rows."""
+
+    def _event(self, **payload):
+        import types
+
+        return types.SimpleNamespace(payload=payload, event_id="evt-merge")
+
+    def test_the_losing_row_is_anonymised_not_deleted(self):
+        """Other tables still reference it by id; dropping it takes them
+        with it under CASCADE or breaks them."""
+        loser = _mirrored("loser@example.com")
+        winner = _mirrored("winner@example.com")
+
+        identity.reparent_on_merge(
+            self._event(from_user_id=str(loser.pk), into_user_id=str(winner.pk))
+        )
+
+        loser.refresh_from_db()
+        assert get_user_model().objects.filter(pk=loser.pk).exists()
+        assert loser.email.endswith("@deleted.invalid")
+
+    def test_the_surviving_account_is_untouched(self):
+        loser = _mirrored("loser@example.com")
+        winner = _mirrored("winner@example.com")
+
+        identity.reparent_on_merge(
+            self._event(from_user_id=str(loser.pk), into_user_id=str(winner.pk))
+        )
+
+        winner.refresh_from_db()
+        assert winner.email == "winner@example.com"
+        assert winner.is_active is True
+
+    def test_a_redelivered_merge_does_nothing(self):
+        loser = _mirrored("loser@example.com")
+        identity.reparent_on_merge(self._event(from_user_id=str(loser.pk)))
+        loser.refresh_from_db()
+        first = loser.email
+        identity.reparent_on_merge(self._event(from_user_id=str(loser.pk)))
+        loser.refresh_from_db()
+        assert loser.email == first
+
+    def test_a_payload_without_from_user_id_is_refused_not_crashed(self):
+        identity.reparent_on_merge(self._event(into_user_id="x"))
+
+    def test_an_unknown_id_is_a_no_op(self):
+        import uuid
+
+        identity.reparent_on_merge(self._event(from_user_id=str(uuid.uuid4())))

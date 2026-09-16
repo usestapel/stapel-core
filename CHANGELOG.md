@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.80.1] — 2026-09-17
+
+### Fixed — the identity mirror knew deletion and not merge
+
+0.79.0 registered the mirror as a GDPR data owner, and `register_gdpr_owner`
+subscribes the legacy `user.deleted` account signal by default. That left core
+handling deletion and not merge, which `stapel_core.lifecycle.E001` refuses —
+for a reason worth quoting: *a merge re-parents rows to the surviving account;
+an app that only knows deletion strands them.* The check caught this module
+the day it shipped, in the generated-project boot smoke rather than in the
+module's own suite.
+
+A merge means something narrower for a mirror than for a module with its own
+tables. There is exactly one row per identity, keyed by user id, and after a
+merge `from_user_id` names an account that exists nowhere — while rows in
+other modules are re-parented to `into_user_id` by their own handlers, keyed
+off the event rather than off this row. So there is nothing to re-parent, and
+deleting would be wrong: other tables may still reference the losing id.
+
+The losing row is anonymised instead — the same treatment an erasure gives it,
+for the same reason. It keeps the key other rows point at and stops carrying a
+person. Idempotent: a redelivered merge finds a tombstone and does nothing.
+
 ## [0.80.0] — 2026-09-17
 
 ### Fixed — the admin's cross-service picker is installed, not configured

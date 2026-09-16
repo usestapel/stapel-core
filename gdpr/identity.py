@@ -195,6 +195,48 @@ def erase_subject(subject_type: str, subject_key: str, workspace_id=None):
     return {"identity_mirror": 1}
 
 
+def reparent_on_merge(event) -> None:
+    """``user.merged``: the losing account's mirror row stops naming anybody.
+
+    Registering as a data owner subscribes ``user.deleted`` too, and core's
+    own ``stapel_core.lifecycle.E001`` check refuses that in isolation, for a
+    reason worth quoting: *a merge re-parents rows to the surviving account;
+    an app that only knows deletion strands them.* The check caught this
+    module the day it shipped.
+
+    What a merge means here is narrower than for a module with its own
+    tables. The mirror holds exactly one row per identity, keyed by user id,
+    and after a merge ``from_user_id`` names an account that no longer exists
+    anywhere — while local rows in OTHER modules are being re-parented to
+    ``into_user_id`` by their own handlers, keyed off the event, not off this
+    row.
+
+    So there is nothing to re-parent and deleting would be wrong: other
+    tables may still reference the losing id, and dropping it takes them with
+    it under CASCADE or breaks them. The row is anonymised instead — the same
+    treatment an erasure gives it, for the same reason. It keeps the key that
+    other rows point at and stops carrying a person.
+
+    Idempotent: a redelivered merge finds a tombstone and does nothing.
+    """
+    payload = getattr(event, "payload", None) or {}
+    from_user_id = payload.get("from_user_id")
+    if not from_user_id:
+        logger.warning("user.merged without from_user_id: %r", payload)
+        return
+
+    from django.contrib.auth import get_user_model
+
+    user = get_user_model().objects.filter(pk=from_user_id).first()
+    if user is None or is_tombstoned(user):
+        return
+    anonymize_identity(user)
+    logger.info(
+        "identity mirror anonymised after a merge [from=%s into=%s]",
+        from_user_id, payload.get("into_user_id"),
+    )
+
+
 def mirrors_identities() -> bool:
     """Does this process keep a local mirror of somebody else's users?
 
@@ -215,9 +257,15 @@ def register_identity_mirror_owner() -> bool:
     if not mirrors_identities():
         return False
     try:
+        from stapel_core.comm import on_action
         from stapel_core.gdpr import register_gdpr_owner
 
         register_gdpr_owner(OWNER, list(SUBJECT_TYPES), erase_subject)
+        # Registering as an owner subscribes `user.deleted`, and an app that
+        # knows deletion and not merge strands the merged account's rows —
+        # stapel_core.lifecycle.E001 refuses that combination, correctly. See
+        # reparent_on_merge for what a merge means to a mirror.
+        on_action("user.merged")(reparent_on_merge)
     except Exception:  # pragma: no cover - never break a boot over this
         logger.warning("could not register the identity-mirror GDPR owner", exc_info=True)
         return False
@@ -234,6 +282,7 @@ __all__ = [
     "TOMBSTONE_PREFIX",
     "TOMBSTONE_EMAIL_SUFFIX",
     "erase_subject",
+    "reparent_on_merge",
     "mirrors_identities",
     "register_identity_mirror_owner",
 ]
