@@ -62,7 +62,7 @@ class CommonDjangoConfig(AppConfig):
         # wins under APP_DIRS. So the picker only ever appeared because some
         # service's TEMPLATES["DIRS"] happened to name core's template
         # directory, and it vanished silently every time that hand-written
-        # line rotted (ironmemo's iron-auth froze the bind-mount path
+        # line rotted (a client fleet's auth service froze the bind-mount path
         # /app/stapel_core/django/templates and lost the picker the day the
         # library became a wheel). This appends core's directory and the nav
         # context processor to every Django engine at boot, so a service gets

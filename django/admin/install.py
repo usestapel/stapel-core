@@ -7,7 +7,7 @@ context processor + the ``STAPEL_SERVICES``/mount topology) has been built,
 lost, rebuilt and lost again on live fleets since 2026-05. Every
 disappearance had the same shape, and none of them was a bug in the picker:
 
-* **2026-07-05, ironmemo.** ``iron-auth`` hand-wrote its own ``TEMPLATES``
+* **2026-07-05, a client fleet.** ``iron-auth`` hand-wrote its own ``TEMPLATES``
   block instead of calling :func:`stapel_core.django.settings.
   get_common_templates`, naming the core template directory by its literal
   container path — ``/app/stapel_core/django/templates``, correct only while
@@ -78,7 +78,7 @@ NAV_CONTEXT_PROCESSOR = "stapel_core.django.admin.context.stapel_services"
 
 #: Core's template directory, resolved from the installed package location —
 #: identical for a vendored checkout and a pip-installed wheel, which is the
-#: whole point (a literal container path is what rotted on ironmemo).
+#: whole point (a literal container path is what rotted on a client fleet).
 CORE_TEMPLATES_DIR = str(Path(__file__).resolve().parent.parent / "templates")
 
 #: Backends whose DIRS/context_processors this module understands. A Jinja2
