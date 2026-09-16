@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.72.0] — 2026-09-17
+
+### Added — `stapel_core.testing.assert_declared_paths_resolve`: a contract nothing drives is a contract nothing checks
+
+Five of the first eight libraries swept with a contract wire test had a pytest
+urlconf pointing somewhere their own `docs/schema.json` does not describe, so
+the committed contract had **never been driven by anything** — and every suite
+was green throughout. The shapes were all different, which is the argument for
+putting the check in one place every library inherits rather than in eight
+conftests:
+
+- a prefix one segment short **and** under a different root;
+- the paths mounted bare, with no prefix at all;
+- less than the emission mounted, leaving half a library's own contract
+  unreachable;
+- both the host's segment and the module's own skipped;
+- a **doubled** prefix.
+
+It is the same family as a gate nobody asks. Every recipe can be written, the
+run can be green, and not one request went where the contract says it goes —
+because when the mount is wrong, every operation is equally and silently
+unreachable, which no per-operation check can see.
+
+`assert_declared_paths_resolve(schema, urlconf=None)` resolves every path key
+in a committed document and fails **naming the unresolved paths**, saying
+plainly that the mount is wrong rather than the recipes.
+`unresolved_declared_paths` and `declared_paths` are exported for callers that
+want the list rather than the assertion.
+
+Path parameters are substituted with several concrete shapes (uuid, int, slug)
+and a path counts as reachable if any one resolves: the question is whether the
+mount exists, not whether a particular id does. A single uuid was the first cut
+and it produced three false positives on integer-keyed paths in the first
+library it ran on; that case is pinned by a test.
+
+**A library whose deployed prefix differs from its contract prefix keeps
+both.** `stapel-workspaces` is the proof case, and the instructive one: its
+suite mounts `workspaces/api/workspaces/` because that is one host's *real*
+deployed prefix, pinned deliberately by another test — so two mounts answered
+two different questions and nobody noticed the contract one was never asked.
+Pass the contract urlconf to this helper and keep the deployed pin where it is;
+both halves are pinned by tests here.
+
+
 ## [0.71.0] — 2026-09-16
 
 ### Fixed — two shared declarations that described something the wire never sent

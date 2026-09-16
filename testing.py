@@ -202,3 +202,78 @@ def iter_own_sources(root: Path, suffix: str = ".py") -> Iterator[Path]:
         if is_foreign_source(path, root, venv_roots, packaging_roots):
             continue
         yield path
+
+
+# ---------------------------------------------------------------------------
+# The contract mount: a contract nothing drives is a contract nothing checks
+# ---------------------------------------------------------------------------
+
+#: Concrete values tried for each ``{param}`` of a declared path. Resolution
+#: cares about the SHAPE of a segment, and the fleet's urlconfs use several
+#: converters, so a path counts as reachable if ANY shape resolves: the
+#: question is whether the mount exists, not whether a particular id does.
+#:
+#: A single uuid was the first cut and it reported false positives on
+#: integer-keyed paths.
+PATH_PARAM_CANDIDATES = (
+    "00000000-0000-4000-8000-000000000000",
+    "1",
+    "a-slug",
+)
+
+
+def declared_paths(schema: dict) -> list:
+    """Every path key in a committed OpenAPI document, sorted."""
+    return sorted(schema.get("paths", {}))
+
+
+def unresolved_declared_paths(schema: dict, urlconf=None) -> list:
+    """Declared paths that do not resolve under *urlconf* (default: active)."""
+    from django.urls import Resolver404, resolve
+
+    import re as _re
+
+    unresolved = []
+    for path in declared_paths(schema):
+        for value in PATH_PARAM_CANDIDATES:
+            try:
+                resolve(_re.sub(r"\{[^}]+\}", value, path), urlconf=urlconf)
+                break
+            except Resolver404:
+                continue
+        else:
+            unresolved.append(path)
+    return unresolved
+
+
+def assert_declared_paths_resolve(schema: dict, urlconf=None) -> None:
+    """Every path the committed document declares must resolve HERE.
+
+    THE DEFECT THIS NAMES. Five of the first eight libraries swept had a test
+    urlconf pointing somewhere their own ``docs/schema.json`` does not
+    describe: one mounted a different prefix AND one segment short, one
+    mounted the paths bare, one mounted less than the emission did, one
+    skipped both the host's segment and the module's own, and one mounted a
+    DOUBLED prefix. In every case the committed contract was never driven by
+    anything, and the suite was green throughout.
+
+    It is the same family as a gate nobody asks. Every recipe can be written,
+    the run can be green, and not one request went where the contract says it
+    goes — because when the mount is wrong, every operation is equally and
+    silently unreachable, which no per-operation check can see.
+
+    A library whose DEPLOYED prefix differs from its contract prefix keeps
+    both: pass the contract urlconf here, and pin the deployed one in its own
+    test. `stapel-workspaces` is the proof case — its suite mounts
+    ``workspaces/api/workspaces/`` because that is one host's real prefix, and
+    a separate test pins it deliberately. Two mounts answering two different
+    questions is fine. Neither being asked about the contract is not.
+    """
+    unresolved = unresolved_declared_paths(schema, urlconf=urlconf)
+    assert not unresolved, (
+        "a contract nothing drives is a contract nothing checks: these paths "
+        "are declared in the committed schema and do not resolve under this "
+        "suite's urlconf, so nothing here can be exercising them. The MOUNT "
+        "is wrong, not the recipes — fix the urlconf this test declares, or "
+        "the emission it is meant to mirror:\n  " + "\n  ".join(unresolved)
+    )
