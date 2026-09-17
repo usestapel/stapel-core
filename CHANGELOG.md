@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.82.0] — 2026-09-17
+
+Minor: `comm.E010` splits by severity, because as an Error it took a fleet
+down for a file that could not misbehave.
+
+### Fixed — a gate that refused the boot over a harmless copy
+
+0.81.0 shipped E010 at Error level while eight of our own libraries still
+vendored core's two gdpr schemas. The first deploy that carried it put a
+fleet's cdn family into `Restarting`: `stapel_cdn` shipped a copy of
+`gdpr.owner.alive.json` that was byte-identical to core's, had therefore never
+refused a payload, and could not.
+
+A check whose finding is "this file is currently correct" must not be the
+reason a service stops serving. The level now follows the damage:
+
+- **E010** — the copy DIFFERS from the owner's schema, or will not parse. This
+  is the original failure: a contract that rejects the owner's own receipt and
+  rolls a compliance action back while every receipt reports success. Refusing
+  the boot is right.
+- **W010** — the copy is semantically identical. Reported on every boot and
+  still to be deleted, because identical copies are how divergent ones start,
+  but it is not a reason to stop serving.
+
+Comparison is on parsed JSON, so a reflowed copy is not divergence. An
+unreadable copy counts as divergent: a contract we cannot read is not one we
+can call harmless.
+
+`foreign_schema_copies()` now yields `(action, package, owner, divergent)`;
+`check_schema_ownership()` takes `search_roots=` so the severity is testable
+without touching `sys.path`.
+
+### Still to delete
+
+Eight source repos carry a copy today — analytics, auth, billing, calendar,
+cdn, notifications, profiles, video. Each is a W010 until it is removed.
+
 ## [0.81.0] — 2026-09-17
 
 Minor: the identity-mirror owner name changes shape, and a new Error-level

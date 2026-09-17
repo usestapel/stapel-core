@@ -8,6 +8,9 @@ answered with receipts in under a second, the request reached `deleted` with
 Every module answered truthfully about its own data. Nobody answered for the
 framework's copy of the identity, because it is not any module's data.
 """
+import json
+from pathlib import Path
+
 import pytest
 from django.contrib.auth import get_user_model
 
@@ -320,7 +323,12 @@ class TestNobodyShipsSomebodyElsesSchema:
         (foreign / "gdpr.section.erased.json").write_text("{}")
 
         found = schema_ownership.foreign_schema_copies([str(tmp_path)])
-        assert ("gdpr.section.erased", "stapel_someone_else", "stapel_core") in found
+        assert (
+            "gdpr.section.erased",
+            "stapel_someone_else",
+            "stapel_core",
+            True,  # divergent: `{}` is not core's schema
+        ) in found
 
     def test_core_shipping_its_own_is_not_a_finding(self, tmp_path):
         from stapel_core.comm import schema_ownership
@@ -329,3 +337,97 @@ class TestNobodyShipsSomebodyElsesSchema:
         mine.mkdir(parents=True)
         (mine / "gdpr.section.erased.json").write_text("{}")
         assert schema_ownership.foreign_schema_copies([str(tmp_path)]) == []
+
+
+class TestSchemaOwnershipSeverity:
+    """A copy that cannot yet misbehave must not refuse the boot.
+
+    Shipping the E010 check as an Error while eight of our own libraries still
+    vendored the two schemas made the check an outage generator: a fleet's cdn
+    family went to ``Restarting`` on a byte-identical copy that had never
+    refused a payload and could not. The damage E010 exists to stop is a copy
+    that DIFFERS from the owner's — that is the one that rejects the owner's
+    receipt and rolls an erasure back. An identical copy is the state that
+    becomes divergent later, so it is still reported, at Warning.
+    """
+
+    def _core_copy_of(self, action):
+        import stapel_core
+
+        return (
+            Path(stapel_core.__file__).parent
+            / "gdpr"
+            / "schemas"
+            / "emits"
+            / f"{action}.json"
+        ).read_text()
+
+    def test_identical_copy_is_a_warning(self, tmp_path):
+        from stapel_core.comm import schema_ownership
+
+        foreign = tmp_path / "stapel_lookalike" / "schemas" / "emits"
+        foreign.mkdir(parents=True)
+        (foreign / "gdpr.owner.alive.json").write_text(
+            self._core_copy_of("gdpr.owner.alive")
+        )
+
+        problems = schema_ownership.check_schema_ownership(search_roots=[str(tmp_path)])
+        assert [p.id for p in problems] == [schema_ownership.W010]
+        assert "stapel_lookalike" in problems[0].msg
+
+    def test_divergent_copy_is_an_error(self, tmp_path):
+        from stapel_core.comm import schema_ownership
+
+        foreign = tmp_path / "stapel_stale" / "schemas" / "emits"
+        foreign.mkdir(parents=True)
+        (foreign / "gdpr.section.erased.json").write_text(
+            json.dumps({"type": "object", "additionalProperties": False})
+        )
+
+        problems = schema_ownership.check_schema_ownership(search_roots=[str(tmp_path)])
+        assert [p.id for p in problems] == [schema_ownership.E010]
+
+    def test_whitespace_only_difference_is_not_divergence(self, tmp_path):
+        from stapel_core.comm import schema_ownership
+
+        foreign = tmp_path / "stapel_reformatted" / "schemas" / "emits"
+        foreign.mkdir(parents=True)
+        reflowed = json.dumps(
+            json.loads(self._core_copy_of("gdpr.owner.alive")), indent=4
+        )
+        (foreign / "gdpr.owner.alive.json").write_text(reflowed)
+
+        problems = schema_ownership.check_schema_ownership(search_roots=[str(tmp_path)])
+        assert [p.id for p in problems] == [schema_ownership.W010]
+
+    def test_unparseable_copy_is_an_error(self, tmp_path):
+        """A copy we cannot compare is not a copy we can call harmless."""
+        from stapel_core.comm import schema_ownership
+
+        foreign = tmp_path / "stapel_broken" / "schemas" / "emits"
+        foreign.mkdir(parents=True)
+        (foreign / "gdpr.owner.alive.json").write_text("{not json")
+
+        problems = schema_ownership.check_schema_ownership(search_roots=[str(tmp_path)])
+        assert [p.id for p in problems] == [schema_ownership.E010]
+
+    def test_divergence_is_reported_per_copy(self, tmp_path):
+        from stapel_core.comm import schema_ownership
+
+        (tmp_path / "stapel_ok" / "schemas" / "emits").mkdir(parents=True)
+        (
+            tmp_path / "stapel_ok" / "schemas" / "emits" / "gdpr.owner.alive.json"
+        ).write_text(self._core_copy_of("gdpr.owner.alive"))
+        (tmp_path / "stapel_bad" / "schemas" / "emits").mkdir(parents=True)
+        (
+            tmp_path / "stapel_bad" / "schemas" / "emits" / "gdpr.owner.alive.json"
+        ).write_text("{}")
+
+        by_package = {
+            p.obj: p.id
+            for p in schema_ownership.check_schema_ownership(
+                search_roots=[str(tmp_path)]
+            )
+        }
+        assert by_package["stapel_ok:gdpr.owner.alive"] == schema_ownership.W010
+        assert by_package["stapel_bad:gdpr.owner.alive"] == schema_ownership.E010

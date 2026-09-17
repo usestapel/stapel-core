@@ -45,16 +45,32 @@ the module that called :func:`stapel_core.comm.emit` for that name, or
 declared it — so the comparison is against what the fleet actually does, not
 against a hand-kept list of who owns what.
 
-Reported as ``stapel_core.comm.E010``, at Error level, naming both packages
-and the fact. A schema for a fact you do not emit is never correct: at best it
-duplicates, at worst it contradicts, and the contradiction is invisible until
-the day the owner adds a field.
+Every foreign copy is reported, naming both packages and the fact. A schema
+for a fact you do not emit is never correct: at best it duplicates, at worst it
+contradicts, and the contradiction is invisible until the day the owner adds a
+field.
 
-WHAT IT CANNOT SEE
-------------------
-A copy that is byte-identical today. It is reported anyway, and deliberately:
-identical copies are how divergent ones start, and the cost of removing one is
-a deleted file.
+SEVERITY IS THE COPY'S DIVERGENCE, NOT ITS EXISTENCE
+----------------------------------------------------
+Shipping this at Error level while eight of our own libraries still vendored
+the two schemas made the check an outage generator rather than a gate: a
+fleet's cdn family went to ``Restarting`` on a copy that was byte-identical to
+core's and had therefore never refused a payload and could not.
+
+So the level follows the damage.
+
+``E010`` — the copy DIFFERS from the owner's, or cannot be parsed to find out.
+This is the failure above: a contract that rejects the owner's payload and
+rolls a compliance action back while every receipt reports success. A boot is
+the right place to stop.
+
+``W010`` — the copy is semantically identical. It cannot misbehave today. It
+is still wrong, still reported, and still deleted, because identical copies
+are how divergent ones start and the cost of removing one is a deleted file.
+A warning names it on every boot without taking a service down for a file that
+is, at this moment, harmless.
+
+Comparison is on parsed JSON, so reformatting is not divergence.
 """
 from __future__ import annotations
 
@@ -64,6 +80,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 E010 = "stapel_core.comm.E010"
+W010 = "stapel_core.comm.W010"
 
 #: Facts this library emits and therefore owns. Read by the check; a package
 #: other than ``stapel_core`` shipping a schema for one of these is the defect.
@@ -87,16 +104,51 @@ def _shipping_package(schema_path: Path) -> str:
     return schema_path.parent.name
 
 
-def foreign_schema_copies(search_roots=None) -> list[tuple[str, str, str]]:
-    """``(action, shipping package, owning package)`` for every foreign copy.
+def _owner_schema(action: str):
+    """Core's own copy of ``action``, parsed. ``None`` if it is not readable.
+
+    Without it there is nothing to compare against, so every foreign copy is
+    treated as divergent — the safe direction.
+    """
+    import json
+
+    path = Path(__file__).resolve().parent.parent / "gdpr" / "schemas" / "emits"
+    try:
+        return json.loads((path / f"{action}.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _is_divergent(path: Path, action: str) -> bool:
+    """Does this copy say something different from the owner's schema?
+
+    Compared as parsed JSON: an identical schema reflowed by a formatter is not
+    divergence. A copy that will not parse counts as divergent, because a
+    contract we cannot read is not one we can call harmless.
+    """
+    import json
+
+    owner = _owner_schema(action)
+    if owner is None:
+        return True
+    try:
+        return json.loads(path.read_text()) != owner
+    except (OSError, ValueError):
+        return True
+
+
+def foreign_schema_copies(search_roots=None) -> list[tuple[str, str, str, bool]]:
+    """``(action, shipping package, owning package, divergent)`` per copy.
 
     Walks the import path for ``*/schemas/emits/<action>.json`` and reports any
-    whose shipping package is not the owner of that action.
+    whose shipping package is not the owner of that action. ``divergent`` says
+    whether the copy differs from the owner's schema — see the module docstring
+    for why that, and not the copy's mere existence, sets the severity.
     """
     import sys
 
     roots = [Path(p) for p in (search_roots or sys.path) if p]
-    found: list[tuple[str, str, str]] = []
+    found: list[tuple[str, str, str, bool]] = []
     seen: set[tuple[str, str]] = set()
     for root in roots:
         if not root.is_dir():
@@ -110,34 +162,49 @@ def foreign_schema_copies(search_roots=None) -> list[tuple[str, str, str]]:
                 if key in seen:
                     continue
                 seen.add(key)
-                found.append((action, package, "stapel_core"))
+                found.append((action, package, "stapel_core", _is_divergent(path, action)))
     return sorted(found)
 
 
-def check_schema_ownership(app_configs=None, **kwargs):
+def check_schema_ownership(app_configs=None, search_roots=None, **kwargs):
     """System check: nobody ships a schema for a fact they do not emit."""
-    from django.core.checks import Error
+    from django.core.checks import Error, Warning
 
     problems = []
-    for action, package, owner in foreign_schema_copies():
-        problems.append(
-            Error(
-                f"{package} ships schemas/emits/{action}.json, but {action} is "
-                f"emitted by {owner}. Whichever copy a service loads becomes "
-                f"that service's contract, so a stale one silently refuses the "
-                f"owner's payload — and a refusal inside an erasure's own "
-                f"transaction rolls the erasure back while every receipt still "
-                f"reports success. Delete the copy in {package} and let "
-                f"{owner}'s schema serve.",
-                id=E010,
-                obj=f"{package}:{action}",
-            )
+    for action, package, owner, divergent in foreign_schema_copies(search_roots):
+        shared = (
+            f"{package} ships schemas/emits/{action}.json, but {action} is "
+            f"emitted by {owner}. Whichever copy a service loads becomes that "
+            f"service's contract. Delete the copy in {package} and let "
+            f"{owner}'s schema serve."
         )
+        if divergent:
+            problems.append(
+                Error(
+                    f"{shared} This copy DIFFERS from {owner}'s, so it silently "
+                    f"refuses the owner's payload — and a refusal inside an "
+                    f"erasure's own transaction rolls the erasure back while "
+                    f"every receipt still reports success.",
+                    id=E010,
+                    obj=f"{package}:{action}",
+                )
+            )
+        else:
+            problems.append(
+                Warning(
+                    f"{shared} This copy matches {owner}'s today, so nothing is "
+                    f"refused yet; it becomes the error above on the day "
+                    f"{owner} changes the schema and {package} does not.",
+                    id=W010,
+                    obj=f"{package}:{action}",
+                )
+            )
     return problems
 
 
 __all__ = [
     "E010",
+    "W010",
     "CORE_OWNED_ACTIONS",
     "check_schema_ownership",
     "foreign_schema_copies",
