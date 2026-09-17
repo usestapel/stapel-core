@@ -431,3 +431,69 @@ class TestSchemaOwnershipSeverity:
         }
         assert by_package["stapel_ok:gdpr.owner.alive"] == schema_ownership.W010
         assert by_package["stapel_bad:gdpr.owner.alive"] == schema_ownership.E010
+
+
+class TestDivergenceIsValidationShape:
+    """Prose is not a contract. `const` is.
+
+    Six of the eight vendored copies found on 2026-09-17 differed from core's
+    only in `description` text and key order — they validate identically and
+    can refuse nothing. Two differed in the way that bites: stapel-profiles
+    pinned `owner` to `{"const": "profile"}` and required four more fields, so
+    a service loading that copy rejects a receipt from
+    `identity_mirror:iron-profiles` — the exact refusal-inside-the-erasure's-
+    transaction this module exists to stop, still live in the fleet.
+
+    Calling all eight Errors would refuse six boots over a docstring. Calling
+    all eight Warnings would let the two real ones through. The line is the
+    validating shape.
+    """
+
+    def _core_copy_of(self, action):
+        import stapel_core
+
+        return (
+            Path(stapel_core.__file__).parent
+            / "gdpr"
+            / "schemas"
+            / "emits"
+            / f"{action}.json"
+        ).read_text()
+
+    def test_different_description_is_only_a_warning(self, tmp_path):
+        from stapel_core.comm import schema_ownership
+
+        schema = json.loads(self._core_copy_of("gdpr.section.erased"))
+        schema["description"] = "This module sends {owner: 'auth', ...}"
+        schema["properties"]["counts"]["description"] = "per-model tally"
+        foreign = tmp_path / "stapel_prose" / "schemas" / "emits"
+        foreign.mkdir(parents=True)
+        (foreign / "gdpr.section.erased.json").write_text(json.dumps(schema))
+
+        problems = schema_ownership.check_schema_ownership(search_roots=[str(tmp_path)])
+        assert [p.id for p in problems] == [schema_ownership.W010]
+
+    def test_owner_pinned_to_a_const_is_an_error(self, tmp_path):
+        """The live one: a copy that refuses every owner but its own."""
+        from stapel_core.comm import schema_ownership
+
+        schema = json.loads(self._core_copy_of("gdpr.section.erased"))
+        schema["properties"]["owner"] = {"type": "string", "const": "profile"}
+        foreign = tmp_path / "stapel_pinned" / "schemas" / "emits"
+        foreign.mkdir(parents=True)
+        (foreign / "gdpr.section.erased.json").write_text(json.dumps(schema))
+
+        problems = schema_ownership.check_schema_ownership(search_roots=[str(tmp_path)])
+        assert [p.id for p in problems] == [schema_ownership.E010]
+
+    def test_extra_required_fields_are_an_error(self, tmp_path):
+        from stapel_core.comm import schema_ownership
+
+        schema = json.loads(self._core_copy_of("gdpr.section.erased"))
+        schema["required"] = ["correlation_id", "owner", "subject_type", "counts"]
+        foreign = tmp_path / "stapel_strict" / "schemas" / "emits"
+        foreign.mkdir(parents=True)
+        (foreign / "gdpr.section.erased.json").write_text(json.dumps(schema))
+
+        problems = schema_ownership.check_schema_ownership(search_roots=[str(tmp_path)])
+        assert [p.id for p in problems] == [schema_ownership.E010]

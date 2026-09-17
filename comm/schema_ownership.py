@@ -70,7 +70,14 @@ are how divergent ones start and the cost of removing one is a deleted file.
 A warning names it on every boot without taking a service down for a file that
 is, at this moment, harmless.
 
-Comparison is on parsed JSON, so reformatting is not divergence.
+Comparison is on the VALIDATING shape: annotation keywords (``description``,
+``title``, ``$comment``, ``examples``, ``default``, ``$id``) are stripped and
+keys are order-insensitive, because none of them can refuse a payload. Of the
+eight copies found on 2026-09-17, six differed from core's only in their prose
+— calling those Errors would have refused six boots over a docstring. Two
+differed in the way that bites: ``owner`` pinned to ``{"const": "profile"}``
+and four extra ``required`` fields, which rejects a receipt from any other
+owner and is the live failure at the top of this file.
 """
 from __future__ import annotations
 
@@ -104,6 +111,29 @@ def _shipping_package(schema_path: Path) -> str:
     return schema_path.parent.name
 
 
+#: JSON Schema keywords that document rather than validate. A copy that differs
+#: only in these validates identically to the owner's and can refuse nothing.
+ANNOTATION_KEYWORDS = frozenset(
+    {"description", "title", "$comment", "examples", "default", "$id"}
+)
+
+
+def _validation_shape(node):
+    """``node`` with every annotation keyword removed, recursively.
+
+    What is left is exactly what decides whether a payload is accepted.
+    """
+    if isinstance(node, dict):
+        return {
+            key: _validation_shape(value)
+            for key, value in node.items()
+            if key not in ANNOTATION_KEYWORDS
+        }
+    if isinstance(node, list):
+        return [_validation_shape(item) for item in node]
+    return node
+
+
 def _owner_schema(action: str):
     """Core's own copy of ``action``, parsed. ``None`` if it is not readable.
 
@@ -114,17 +144,18 @@ def _owner_schema(action: str):
 
     path = Path(__file__).resolve().parent.parent / "gdpr" / "schemas" / "emits"
     try:
-        return json.loads((path / f"{action}.json").read_text())
+        return _validation_shape(json.loads((path / f"{action}.json").read_text()))
     except (OSError, ValueError):
         return None
 
 
 def _is_divergent(path: Path, action: str) -> bool:
-    """Does this copy say something different from the owner's schema?
+    """Does this copy VALIDATE differently from the owner's schema?
 
-    Compared as parsed JSON: an identical schema reflowed by a formatter is not
-    divergence. A copy that will not parse counts as divergent, because a
-    contract we cannot read is not one we can call harmless.
+    Compared on the validating shape, so a reflowed copy or one with its own
+    prose is not divergence — it accepts and refuses exactly what the owner's
+    does. A copy that will not parse counts as divergent, because a contract we
+    cannot read is not one we can call harmless.
     """
     import json
 
@@ -132,7 +163,7 @@ def _is_divergent(path: Path, action: str) -> bool:
     if owner is None:
         return True
     try:
-        return json.loads(path.read_text()) != owner
+        return _validation_shape(json.loads(path.read_text())) != owner
     except (OSError, ValueError):
         return True
 
@@ -203,6 +234,7 @@ def check_schema_ownership(app_configs=None, search_roots=None, **kwargs):
 
 
 __all__ = [
+    "ANNOTATION_KEYWORDS",
     "E010",
     "W010",
     "CORE_OWNED_ACTIONS",

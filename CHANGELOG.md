@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.82.1] — 2026-09-17
+
+Patch: E010 divergence is the validating shape, not the prose.
+
+0.82.0 compared parsed JSON, which called all eight vendored copies divergent
+and would have refused eight boots. Six of them differ from core's only in
+`description` text and key order: they accept and refuse exactly what core's
+schema does. A docstring is not a contract.
+
+Annotation keywords (`description`, `title`, `$comment`, `examples`, `default`,
+`$id`) are now stripped before comparison, recursively, and keys compare
+order-insensitively.
+
+Measured against the eight copies on the path, this moves six to W010 and
+leaves the two that bite at E010:
+
+    E010  stapel_notifications  gdpr.section.erased
+    E010  stapel_profiles       gdpr.section.erased
+
+Both pin `owner` to a `const` — `{"const": "profile"}`, `{"const":
+"notifications"}` — and require four fields core leaves optional. A service
+loading either copy rejects a receipt whose owner is anything else, including
+`identity_mirror:<service>`. That is the refusal-inside-the-erasure's-own-
+transaction at the top of `comm/schema_ownership.py`, still live, and it is
+why a mirror drill sees one service answer and another roll back.
+
 ## [0.82.0] — 2026-09-17
 
 Minor: `comm.E010` splits by severity, because as an Error it took a fleet
