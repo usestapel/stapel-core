@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.82.2] — 2026-09-17
+
+Patch: ship the generated docs 0.82.0 and 0.82.1 left stale.
+
+Both releases ran `make contract` and then staged only `docs/capabilities.json`
+by pathspec, so `docs/llms.txt` and `README.md` kept the old version stamp and
+CI refused both tags on drift. No code change; 0.82.1's content is what lands.
+
 ## [0.82.1] — 2026-09-17
 
 Patch: E010 divergence is the validating shape, not the prose.
