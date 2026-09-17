@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.83.0] — 2026-09-17
+
+Minor: a registered `GDPRProvider` answers an erasure by being registered, and
+a section nothing can answer for is an Error at boot.
+
+### Fixed — four declared data owners that could never receipt
+
+A classified fleet's `svc-classified-core` installs stapel-listings,
+stapel-reviews and stapel-moderation. All three register a `GDPRProvider` in
+`gdpr_registry` from `AppConfig.ready()`; the host declares all three in
+`STAPEL_GDPR["DATA_OWNERS"]`. Every visible part looked wired, and none of them
+could answer an erasure.
+
+`gdpr_registry` is the MONOLITH path — stapel-gdpr's orchestrator walks
+`gdpr_registry.providers` in its own process. In a split fleet the provider
+sits in a peer, reachable only over `gdpr.erasure.requested`, which needed a
+second, separate `register_gdpr_owner` each library had to remember.
+stapel-agent remembers, which is why `agent` answered and the other three did
+not.
+
+Measured live on 2026-09-17, on erasure request **id 1** — the first ever run
+on a fleet with real users. Ten declared owners, six that could answer, four
+`ErasurePart` rows stuck `pending` with `completeness_waived=False`, so the
+request can never reach `deleted`. Nobody had found out, because finding out
+requires running an erasure.
+
+`stapel_core.gdpr.provider_bridge` now answers for every registered provider
+that has no owner of its own. A library that wires itself explicitly still
+wins, unchanged.
+
+The bridge resolves at DISPATCH, not at `ready()`. `AppConfig.ready()` runs in
+`INSTALLED_APPS` order, so an eager bridge would race any library that wires
+itself and `register_gdpr_owner` raises `one name is one owner` — which app
+won, and whether the process booted, would depend on a list's order. It builds
+the handlers `register_gdpr_owner` would have built, so there is no second copy
+of the protocol.
+
+The provider interface is keyed by a user and nothing else, so the bridge
+claims `account` and only `account`; a probe answered with a type it cannot
+erase is the lie one level up. It runs `anonymize` then `delete`, the
+orchestrator's own order, so a section behaves the same in a peer as in the
+monolith.
+
+### Added — `gdpr.E011`, a declared owner with no reachable answerer
+
+Error, at boot, naming the stranded sections. This gap was found by running an
+erasure, which is the worst way to find it: the next person to learn would have
+been a subject exercising their right to erasure.
+
 ## [0.82.2] — 2026-09-17
 
 Patch: ship the generated docs 0.82.0 and 0.82.1 left stale.
