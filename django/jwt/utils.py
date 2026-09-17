@@ -307,6 +307,21 @@ def serialize_user_to_jwt_data(user) -> Dict[str, Any]:
     return data
 
 
+class ShadowUserConflict(IntegrityError):
+    """An INSERT of the mirrored user row hit a constraint we cannot resolve.
+
+    NOT the first-contact race: that one is resolved in place — the loser
+    re-reads the winner's row and replays its own claims onto it. This is
+    raised only when the row is still absent after the collision AND no row
+    can be found under the token's phone, email or username, i.e. the
+    constraint that fired is one this seam cannot reason about (a unique
+    email held by an account the token does not name, a deployment-specific
+    index). It subclasses ``IntegrityError`` so existing handlers, retries
+    and DLQ policies keep working, and it exists so the failure is not read
+    as "already mirrored" by whoever sees it next.
+    """
+
+
 def _apply_jwt_fields(user, user_data: Dict[str, Any], phone=None):
     """Apply optional JWT fields (is_anonymous, auth_type, phone) to user."""
     if hasattr(user, "is_anonymous") and "is_anonymous" in user_data:
@@ -489,6 +504,94 @@ def _resolve_jwt_user(user_data: Dict[str, Any], reasons: list):
     return user
 
 
+def _sync_user_from_jwt(user, user_data: Dict[str, Any]):
+    """Replay the validated claims onto a user row that already exists.
+
+    One writer for the sync, reached two ways: the ordinary second request,
+    where the row was found by primary key, and the loser of a first-contact
+    race, whose INSERT collided with the winner's. The second used to return
+    the winner's row untouched, so the claims that request carried — a
+    changed email, a staff flag, new roles — were dropped on the floor and
+    only landed on whatever request came next.
+    """
+    pk = user_data.get("user_id")
+
+    # Staff status sync-down (admin-suite AS-2, c.3).
+    updated = False
+    create_from_jwt = _create_users_from_token()
+
+    if create_from_jwt:
+        # Consumer (shadow-copy) mode — REPLACE from the claim (c.3):
+        # auth is the source of truth for staff status. The old
+        # "upgrade-only" rule is gone: it made revocation impossible (A3)
+        # AND let a replayed stale token re-elevate a demoted admin.
+        jwt_is_staff = bool(user_data.get("is_staff", False))
+        jwt_is_superuser = bool(user_data.get("is_superuser", False))
+        if user.is_staff != jwt_is_staff:
+            user.is_staff = jwt_is_staff
+            updated = True
+        if user.is_superuser != jwt_is_superuser:
+            user.is_superuser = jwt_is_superuser
+            updated = True
+        # Roles: REPLACE only when the claim is present. Absence =
+        # pre-AS-2 token = no information: never grant and never revoke
+        # from silence (no downgrade AND no upgrade by an old token).
+        if "staff_roles" in user_data and hasattr(user, "staff_roles"):
+            claim_roles = [str(r) for r in (user_data.get("staff_roles") or [])]
+            if list(user.staff_roles or []) != claim_roles:
+                user.staff_roles = claim_roles
+                updated = True
+        # Account lifecycle is NOT synced from the claim, in either
+        # direction (0.43.0). A token carries the lifecycle state of the
+        # moment it was minted and asserts it for the rest of its life,
+        # so letting it write `is_active` let it reactivate a row and
+        # then pass the gate that reads that row. Fleet-wide lifecycle
+        # travels in the revocation namespace (`user_deactivated:<uid>`,
+        # checked above); what is left in this column is whatever THIS
+        # service decided locally, which a bearer token may not overrule.
+    # else: authoritative-user-store mode (auth service / monolith with
+    # stapel-auth): the local DB is canonical, a token must never write
+    # staff attributes OR account lifecycle back into it. (This fixes the
+    # pre-AS-2 hole where a stale staff token replayed at the auth service
+    # re-elevated a demoted admin via upgrade-only, and audit GDPR-01,
+    # where a token issued before account closure — which carries
+    # is_active=true for the rest of its lifetime — wrote that value back
+    # and undid the closure. Closure and reactivation belong to the
+    # lifecycle service, never to a bearer token.)
+
+    # Email: replace only when the claim carries one. Writing the absent
+    # case through nulled the column on every request that presented a
+    # token without it.
+    jwt_email = user_data.get("email")
+    if jwt_email and user.email != jwt_email:
+        user.email = jwt_email
+        updated = True
+
+    # Sync is_anonymous, auth_type, phone from JWT
+    if hasattr(user, "is_anonymous") and "is_anonymous" in user_data:
+        if user.is_anonymous != user_data["is_anonymous"]:
+            user.is_anonymous = user_data["is_anonymous"]
+            updated = True
+    if hasattr(user, "auth_type") and "auth_type" in user_data:
+        if user.auth_type != user_data["auth_type"]:
+            user.auth_type = user_data["auth_type"]
+            updated = True
+    jwt_phone = user_data.get("phone") or None
+    if jwt_phone and hasattr(user, "phone") and user.phone != jwt_phone:
+        user.phone = jwt_phone
+        updated = True
+
+    if updated:
+        user.save()
+        logger.info(f"Updated user from JWT: {pk}")
+
+    # Auto-add staff users to Staff group
+    if user.is_staff and not user.is_superuser:
+        _ensure_user_in_staff_group(user)
+
+    return user
+
+
 def _get_or_create_user_from_jwt(user_data: Dict[str, Any], reasons: list = None):
     """Core get-or-create logic for :func:`get_or_create_user_from_jwt`.
 
@@ -511,80 +614,7 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any], reasons: list = None
         # Try to get existing user by PK
         user = User.objects.get(pk=pk)
 
-        # Staff status sync-down (admin-suite AS-2, c.3).
-        updated = False
-        create_from_jwt = _create_users_from_token()
-
-        if create_from_jwt:
-            # Consumer (shadow-copy) mode — REPLACE from the claim (c.3):
-            # auth is the source of truth for staff status. The old
-            # "upgrade-only" rule is gone: it made revocation impossible (A3)
-            # AND let a replayed stale token re-elevate a demoted admin.
-            jwt_is_staff = bool(user_data.get("is_staff", False))
-            jwt_is_superuser = bool(user_data.get("is_superuser", False))
-            if user.is_staff != jwt_is_staff:
-                user.is_staff = jwt_is_staff
-                updated = True
-            if user.is_superuser != jwt_is_superuser:
-                user.is_superuser = jwt_is_superuser
-                updated = True
-            # Roles: REPLACE only when the claim is present. Absence =
-            # pre-AS-2 token = no information: never grant and never revoke
-            # from silence (no downgrade AND no upgrade by an old token).
-            if "staff_roles" in user_data and hasattr(user, "staff_roles"):
-                claim_roles = [str(r) for r in (user_data.get("staff_roles") or [])]
-                if list(user.staff_roles or []) != claim_roles:
-                    user.staff_roles = claim_roles
-                    updated = True
-            # Account lifecycle is NOT synced from the claim, in either
-            # direction (0.43.0). A token carries the lifecycle state of the
-            # moment it was minted and asserts it for the rest of its life,
-            # so letting it write `is_active` let it reactivate a row and
-            # then pass the gate that reads that row. Fleet-wide lifecycle
-            # travels in the revocation namespace (`user_deactivated:<uid>`,
-            # checked above); what is left in this column is whatever THIS
-            # service decided locally, which a bearer token may not overrule.
-        # else: authoritative-user-store mode (auth service / monolith with
-        # stapel-auth): the local DB is canonical, a token must never write
-        # staff attributes OR account lifecycle back into it. (This fixes the
-        # pre-AS-2 hole where a stale staff token replayed at the auth service
-        # re-elevated a demoted admin via upgrade-only, and audit GDPR-01,
-        # where a token issued before account closure — which carries
-        # is_active=true for the rest of its lifetime — wrote that value back
-        # and undid the closure. Closure and reactivation belong to the
-        # lifecycle service, never to a bearer token.)
-
-        # Email: replace only when the claim carries one. Writing the absent
-        # case through nulled the column on every request that presented a
-        # token without it.
-        jwt_email = user_data.get("email")
-        if jwt_email and user.email != jwt_email:
-            user.email = jwt_email
-            updated = True
-
-        # Sync is_anonymous, auth_type, phone from JWT
-        if hasattr(user, "is_anonymous") and "is_anonymous" in user_data:
-            if user.is_anonymous != user_data["is_anonymous"]:
-                user.is_anonymous = user_data["is_anonymous"]
-                updated = True
-        if hasattr(user, "auth_type") and "auth_type" in user_data:
-            if user.auth_type != user_data["auth_type"]:
-                user.auth_type = user_data["auth_type"]
-                updated = True
-        jwt_phone = user_data.get("phone") or None
-        if jwt_phone and hasattr(user, "phone") and user.phone != jwt_phone:
-            user.phone = jwt_phone
-            updated = True
-
-        if updated:
-            user.save()
-            logger.info(f"Updated user from JWT: {pk}")
-
-        # Auto-add staff users to Staff group
-        if user.is_staff and not user.is_superuser:
-            _ensure_user_in_staff_group(user)
-
-        return user
+        return _sync_user_from_jwt(user, user_data)
 
     except User.DoesNotExist:
         # Check if we should create users from JWT
@@ -673,11 +703,36 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any], reasons: list = None
                 collision = exc
 
             if collision is not None:
-                # Lost a race to create the same user: the winner's row is
-                # the answer, and nothing needs repairing.
+                # ── The first-contact race, resolved in place (0.84.0) ────
+                #
+                # Two services (or two requests of one service) see the same
+                # new account's first token in the same tick, both read
+                # DoesNotExist, both INSERT, and one loses on `users_pkey`.
+                # Measured on a client fleet's production database: 48 losses
+                # between 2026-09-13 and 2026-09-17, ~10/day and rising with
+                # signups.
+                #
+                # Losing is EXPECTED, so it is not an error path: the loser
+                # re-reads the winner's row and collapses into the ordinary
+                # second-request case. One re-read, no loop — if the row is
+                # gone again the fall-through below decides, and nothing
+                # calls back into the create.
+                #
+                # It syncs rather than returning the row untouched, because
+                # the loser is holding a validated token that may say more
+                # than the winner's did (a changed email, a staff flag, roles
+                # the winner's payload had no business carrying — an EVENT
+                # payload never carries privileges, see
+                # stapel_core.django.users.shadow). Returning the winner's
+                # row raw dropped those claims for that whole request.
                 raced = User.objects.filter(pk=pk).first()
                 if raced is not None:
-                    return raced
+                    logger.info(
+                        "Shadow row for %s was created concurrently; "
+                        "applying this token's claims to it",
+                        pk,
+                    )
+                    return _sync_user_from_jwt(raced, user_data)
 
                 # The collision was on an alternate unique key, so a row for
                 # this person exists under a DIFFERENT local id.
@@ -691,7 +746,14 @@ def _get_or_create_user_from_jwt(user_data: Dict[str, Any], reasons: list = None
                 if existing_user is None:
                     # Nothing to re-key and nothing to return — the constraint
                     # that fired is not one this function can reason about.
-                    raise collision
+                    # Named, so that it is never read as "already mirrored".
+                    logger.error(
+                        "Shadow row for %s could not be inserted and no row "
+                        "matches its phone/email/username: %s",
+                        pk,
+                        collision,
+                    )
+                    raise ShadowUserConflict(str(collision)) from collision
 
                 # ── Compared as TEXT, and this is the other half of it ────
                 # `pk` arrives as a `str` off the JWT claim; `existing_user.pk`

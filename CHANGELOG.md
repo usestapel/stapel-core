@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.84.0] — 2026-09-18
+
+Minor: the loser of a first-contact race keeps its own claims, and a
+collision this seam cannot resolve is named instead of guessed at.
+
+### Fixed — the mirrored user row dropped the claims of the racing request
+
+Consumer mode materialises the local `users` row the first time an account
+presents a token here. Two of those first contacts race constantly: a fleet
+runs several services against one identity, a page fires two requests in a
+tick, a bus consumer bootstraps a workspace while the browser is still
+loading. Both readers see `DoesNotExist`, both INSERT, and one loses on
+`users_pkey`.
+
+0.60.1 made losing survivable — the loser re-reads the winner's row instead
+of running the destructive re-key path on it. It was still lossy: the row
+came back UNTOUCHED, so everything the losing request's token asserted — a
+changed email, `is_staff`, `staff_roles` — was dropped for that whole
+request. The event path makes that worse rather than better:
+`ensure_shadow_user` deliberately carries no privileges (an event is not a
+token), so when the event wins the race, a staff member's first authenticated
+request landed on a row mirrored without their privileges and returned it as
+is.
+
+Measured on a client fleet's production database: 48 lost INSERTs between
+2026-09-13 and 2026-09-17, ~10/day, climbing with signups, and unchanged by a
+full redeploy.
+
+The loser now collapses into the ordinary second-request case: it re-reads
+the winner's row and replays its own validated claims onto it, through the
+same writer the "row was already there" path uses — `_sync_user_from_jwt`,
+extracted here so the two cannot drift. One re-read, no loop, no second
+INSERT.
+
+### Fixed — an unresolvable constraint is `ShadowUserConflict`, not a shrug
+
+When the INSERT collides, the row is still absent afterwards AND nothing
+matches the token's phone, email or username, the constraint that fired is
+one this seam cannot reason about. It used to re-raise the bare
+`IntegrityError`, which the caller above logged as a generic creation
+failure. It is now `stapel_core.django.jwt.utils.ShadowUserConflict` —
+logged with the colliding id and the constraint text, and a subclass of
+`IntegrityError` so existing handlers, retries and DLQ policies are
+unaffected. The point is that a unique-email collision can no longer be read
+as "somebody already mirrored this user".
+
+### Added — the test harness can point at a real database
+
+`stapel_core.testing.configure_django` now honours
+`STAPEL_TEST_DATABASE_URL` and configures Postgres when it is set. SQLite
+`:memory:` gives every connection its own database, so two writers never
+meet and a concurrency defect cannot be reproduced at all — the fix above
+would have been untestable where it actually happens. The new CI job
+`concurrency` runs the first-contact suite against `postgres:16` with two
+threads on two connections, and the suite asserts the variable was honoured
+so the job cannot go green by quietly falling back to SQLite.
+
 ## [0.83.2] — 2026-09-18
 
 Patch: the admin session-timeout widget polls a path that still exists.

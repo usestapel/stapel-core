@@ -75,3 +75,33 @@ jobs:
         continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  # The concurrency gate. SQLite `:memory:` gives every connection its own
+  # database, so two writers never meet and the first-contact INSERT race
+  # cannot be reproduced there. It is reproduced here, against a real server:
+  # two threads, two connections, one mirrored user row.
+  concurrency:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: stapel
+          POSTGRES_DB: core_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]" pytest-django "psycopg[binary]"
+      - name: First-contact race against Postgres
+        env:
+          STAPEL_TEST_DATABASE_URL: postgres://postgres:stapel@127.0.0.1:5432/core_test
+        # The suite asserts the variable was honoured, so this job cannot go
+        # green by quietly running on SQLite.
+        run: pytest tests/test_first_contact_insert_race.py tests/test_jwt_shadow_rekey.py tests/test_ensure_shadow_user.py -q -v

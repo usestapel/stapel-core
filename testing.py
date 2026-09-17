@@ -12,6 +12,7 @@ Usage in conftest.py:
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -39,6 +40,33 @@ BASE_REST_FRAMEWORK = {
 }
 
 
+def test_database() -> dict:
+    """SQLite in memory, or the server ``STAPEL_TEST_DATABASE_URL`` names.
+
+    Concurrency cannot be tested on ``:memory:`` — every connection gets its
+    own database, so two writers never meet. A suite that needs the real
+    interleaving (the first-contact INSERT race) points this at a
+    Postgres and marks its test to skip without one; everything else keeps
+    the fast in-process default. Env-gated rather than a settings knob so
+    that one CI job, and no source change, decides.
+    """
+    url = os.environ.get("STAPEL_TEST_DATABASE_URL", "")
+    if not url:
+        return {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+
+    from urllib.parse import unquote, urlparse
+
+    parsed = urlparse(url)
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": (parsed.path or "/postgres").lstrip("/"),
+        "USER": unquote(parsed.username or "postgres"),
+        "PASSWORD": unquote(parsed.password or ""),
+        "HOST": parsed.hostname or "127.0.0.1",
+        "PORT": str(parsed.port or 5432),
+    }
+
+
 def configure_django(
     *,
     installed_apps: list[str],
@@ -60,12 +88,7 @@ def configure_django(
 
     settings.configure(
         SECRET_KEY='test-secret-key-not-for-production',
-        DATABASES={
-            'default': {
-                'ENGINE': 'django.db.backends.sqlite3',
-                'NAME': ':memory:',
-            }
-        },
+        DATABASES={'default': test_database()},
         INSTALLED_APPS=all_apps,
         MIDDLEWARE=middleware if middleware is not None else BASE_MIDDLEWARE,
         ROOT_URLCONF='',
