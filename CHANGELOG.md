@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.83.2] — 2026-09-18
+
+Patch: the admin session-timeout widget polls a path that still exists.
+
+### Fixed — `jwt_session.js` 404-looped forever on a retired pre-v1 endpoint
+
+The admin session-timeout widget (`static/admin/js/jwt_session.js`, loaded
+on every admin page via `base_site.html`) hardcoded the pre-v1 literals
+`/auth/api/jwt/status/` and `/auth/api/jwt/refresh/`. A fleet host retired
+that whole unversioned mount (its refresh half had no tracked-session
+requirement), and one open admin tab polled the now-404 status path every
+30s with no backoff — 804 hits in a week, log audit 2026-09-18.
+
+Both constants now point at the v1 canon: `/auth/api/v1/jwt/status/`
+(restored read-only in `stapel-auth>=0.42.0`'s `get_jwt_status_urls`) and
+the pre-existing `/auth/api/v1/token/refresh/`. Independently, a 404 is a
+permanent answer — the widget now stops polling after 3 consecutive 404s
+from the status endpoint instead of retrying forever.
+
+No dependency floor change here — `stapel-core` does not depend on
+`stapel-auth`. A host needs `stapel-auth>=0.42.0` (which ships
+`get_jwt_status_urls`) for the new path to actually resolve; against an
+older `stapel-auth` the widget still degrades safely — it just stops
+polling after 3 consecutive 404s instead of retrying forever.
+
 ## [0.83.1] — 2026-09-17
 
 Patch: the storage gate's own probe was failing correct deployments.
