@@ -54,7 +54,9 @@ deployment happens to be hearing about it.
 """
 from __future__ import annotations
 
+import errno
 import os
+import uuid
 from typing import Dict, List, Optional, Tuple
 
 from django.core import checks
@@ -74,6 +76,12 @@ EXTRA_ROOTS_SETTING = "STAPEL_STORAGE_ROOTS"
 AUTO, ENFORCE, WARN, OFF = "auto", "enforce", "warn", "off"
 
 _PROBE_PREFIX = ".stapel-writable-"
+
+#: How many times a lost ``O_EXCL`` race is retried under a fresh name. A
+#: collision needs a 128-bit uuid to repeat, so one retry is already beyond
+#: reach; the loop exists so that EEXIST has somewhere to go that is not a
+#: verdict.
+_PROBE_ATTEMPTS = 8
 
 _HINT = (
     "This is ownership, not configuration: a shared docker volume keeps the "
@@ -227,12 +235,32 @@ def _nearest_existing(path: str) -> str:
         current = parent
 
 
+def _probe_path(path: str) -> str:
+    """A probe filename that no other prober can be holding.
+
+    The pid alone is NOT unique enough, and the way it failed is worth
+    keeping written down. Container pids are small and start again from 1 in
+    every container, and a service family shares one volume subtree — so
+    two containers of one service family both computed
+    ``.stapel-writable-7`` in ``/app/media``, one lost the exclusive create,
+    and the gate refused a deployment with nothing wrong with it (live,
+    2026-09-17). The same name also jams permanently: a prober killed between
+    the create and the unlink leaves that exact file behind, and from then on
+    every container that ever gets that pid reports the root unwritable.
+
+    The pid stays in the name only because it says which process left a
+    stray probe behind; the uuid is what makes the name unique.
+    """
+    return os.path.join(path, f"{_PROBE_PREFIX}{os.getpid()}-{uuid.uuid4().hex}")
+
+
 def probe_root(path: str) -> Optional[Tuple[str, str]]:
     """``(check id, message)`` when *path* is unusable, else ``None``.
 
     Creates *path* when it is missing, then creates and removes one probe
-    file in it. Nothing else is written, and the probe is removed on every
-    exit path including failure.
+    file in it. Nothing else is written, the probe is removed on every exit
+    path including failure, and no file this process did not create is ever
+    touched.
     """
     if not os.path.isdir(path):
         if os.path.exists(path):
@@ -252,23 +280,39 @@ def probe_root(path: str) -> Optional[Tuple[str, str]]:
                 f"{_describe(ancestor)}.",
             )
 
-    probe = os.path.join(path, f"{_PROBE_PREFIX}{os.getpid()}")
-    try:
-        descriptor = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except OSError as exc:
-        return (
-            E001_ROOT_NOT_WRITABLE,
-            f"{path!r} is not writable by {_process_identity()}: "
-            f"{exc.strerror} (errno {exc.errno}). The directory is "
-            f"{_describe(path)}.",
-        )
-    try:
-        os.close(descriptor)
-    finally:
+    for _ in range(_PROBE_ATTEMPTS):
+        probe = _probe_path(path)
         try:
-            os.unlink(probe)
-        except OSError:  # pragma: no cover - a root that took the file back
-            pass
+            descriptor = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                # NEVER a statement about writability. O_EXCL reports EEXIST
+                # on the name, before the kernel has looked at the
+                # directory's write bit at all — so the only thing this
+                # proves is that the name was taken. Take another one. The
+                # file belongs to whoever created it: do not stat it, do not
+                # unlink it, do not mention it.
+                continue
+            return (
+                E001_ROOT_NOT_WRITABLE,
+                f"{path!r} is not writable by {_process_identity()}: "
+                f"{exc.strerror} (errno {exc.errno}). The directory is "
+                f"{_describe(path)}.",
+            )
+        try:
+            os.close(descriptor)
+        finally:
+            try:
+                os.unlink(probe)
+            except OSError:  # pragma: no cover - a root that took the file back
+                pass
+        return None
+
+    # Every attempt lost its name — which a uuid cannot do by chance, so
+    # something is generating these names deliberately. Still not a
+    # writability finding: this check reports what it measured, and it has
+    # measured nothing about the write bit. Say nothing rather than refuse a
+    # boot on a guess.
     return None
 
 

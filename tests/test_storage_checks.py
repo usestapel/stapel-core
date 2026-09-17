@@ -15,6 +15,7 @@ import pytest
 from django.core import checks
 from django.test import override_settings
 
+from stapel_core.django import storage_checks
 from stapel_core.django.boot import BOOT_GATE_TAGS
 from stapel_core.django.storage_checks import (
     E001_ROOT_NOT_WRITABLE,
@@ -254,4 +255,85 @@ def test_the_check_is_registered_under_its_tag():
 def test_probe_root_is_idempotent(tmp_path):
     assert probe_root(str(tmp_path)) is None
     assert probe_root(str(tmp_path)) is None
+    assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# The probe must not be the thing that fails the boot
+# ---------------------------------------------------------------------------
+#
+# Reported live on a client fleet 2026-09-17, on a CORRECT deployment:
+#
+#   stapel_core.storage.E001: MEDIA_ROOT: '/app/media' is not writable by
+#   uid 10001:10001: File exists (errno 17). The directory is owned by
+#   10001:10001, mode 0755.
+#
+# One sentence says the tree is unwritable and the next says it is owned by
+# this very uid, mode 755. Both were true of what the code measured, and the
+# conclusion was nonsense: the probe was named after the pid alone, container
+# pids are small and repeat across containers, and a service family shares
+# one volume subtree — so one container collided with a sibling's probe and
+# the gate refused to serve a deployment with nothing wrong with it. That is
+# how a boot gate gets switched off fleet-wide.
+#
+# EEXIST is never an answer about writability: O_EXCL reports it before the
+# kernel has looked at the directory's write bit at all.
+
+def test_a_siblings_probe_file_does_not_fail_the_gate(tmp_path, monkeypatch):
+    """The exact production shape: same pid, same directory, two containers."""
+    monkeypatch.setattr(os, "getpid", lambda: 7)
+    sibling = tmp_path / f"{storage_checks._PROBE_PREFIX}7"
+    sibling.write_text("")
+
+    with override_settings(MEDIA_ROOT=str(tmp_path), STATIC_ROOT=None, **ENFORCING):
+        findings = check_storage_roots_writable()
+
+    assert findings == [], [f.msg for f in findings]
+    # And the sibling's probe is not ours to remove: it may be an open file
+    # belonging to a live process, and unlinking it is how one container's
+    # boot check corrupts another's.
+    assert sibling.exists()
+
+
+def test_a_lost_race_retries_instead_of_concluding(tmp_path, monkeypatch):
+    """Losing O_EXCL to a racing sibling must produce a fresh name, not a verdict."""
+    taken = tmp_path / f"{storage_checks._PROBE_PREFIX}collision"
+    taken.write_text("")
+    names = iter([str(taken), str(tmp_path / f"{storage_checks._PROBE_PREFIX}free")])
+    monkeypatch.setattr(storage_checks, "_probe_path", lambda path: next(names))
+
+    assert probe_root(str(tmp_path)) is None
+    assert taken.exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [taken.name]
+
+
+def test_eexist_is_never_reported_as_not_writable(tmp_path, monkeypatch):
+    """Even when every attempt loses, the gate says nothing rather than lying."""
+    taken = tmp_path / f"{storage_checks._PROBE_PREFIX}always"
+    taken.write_text("")
+    monkeypatch.setattr(storage_checks, "_probe_path", lambda path: str(taken))
+
+    assert probe_root(str(tmp_path)) is None
+
+
+def test_two_probe_names_in_one_directory_differ(tmp_path):
+    """A name that repeats across containers is the defect; assert it cannot."""
+    first = storage_checks._probe_path(str(tmp_path))
+    second = storage_checks._probe_path(str(tmp_path))
+    assert first != second
+    assert os.path.dirname(first) == str(tmp_path)
+    assert os.path.basename(first).startswith(storage_checks._PROBE_PREFIX)
+
+
+def test_the_probe_is_removed_when_close_raises(tmp_path, monkeypatch):
+    """No unexpected exception may leave a probe behind for the next boot."""
+    real_close = os.close
+
+    def exploding_close(descriptor):
+        real_close(descriptor)
+        raise MemoryError("not an OSError, and not the probe's problem")
+
+    monkeypatch.setattr(storage_checks.os, "close", exploding_close)
+    with pytest.raises(MemoryError):
+        probe_root(str(tmp_path))
     assert list(tmp_path.iterdir()) == []

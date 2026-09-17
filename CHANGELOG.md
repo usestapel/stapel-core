@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.83.1] — 2026-09-17
+
+Patch: the storage gate's own probe was failing correct deployments.
+
+### Fixed — `stapel_core.storage.E001` raised by a name collision, not by a permission
+
+`probe_root` named its probe file `.stapel-writable-<pid>` and created it with
+`O_CREAT|O_EXCL`. Container pids are small and start again from 1 in every
+container, and a service family shares one volume subtree — so two containers
+probing one directory computed the SAME name, one lost the exclusive create,
+and `EEXIST` was reported as "not writable".
+
+Live on a client fleet, 2026-09-17, on a deployment with nothing wrong
+with it:
+
+```
+stapel_core.storage.E001: MEDIA_ROOT: '/app/media' is not writable by
+uid 10001:10001: File exists (errno 17). The directory is owned by
+10001:10001, mode 0755.
+```
+
+One sentence says the tree is unwritable and the next says it is owned by that
+very uid, mode 755. The container refused to serve, and uid 10001 writes
+there by hand without complaint.
+
+This is worse than a missed defect. `stapel_storage` is on `BOOT_GATE_TAGS`,
+so the finding refuses the start — a gate that fails a correct deployment is
+how a gate gets set to `off` fleet-wide, and then the real unwritable volume
+it was built for goes back to being invisible.
+
+The same name had a second failure mode nobody had hit yet: a prober killed
+between the create and the unlink leaves that exact file behind for ever, and
+from then on every container that draws that pid reports the root unwritable.
+
+Two changes, and the second is the one that matters:
+
+* The probe name is `.stapel-writable-<pid>-<uuid4>`. The pid stays only
+  because it says which process left a stray probe behind; the uuid is what
+  makes the name unique.
+* `EEXIST` is never a writability verdict, under any name. `O_EXCL` reports it
+  on the NAME, before the kernel has looked at the directory's write bit at
+  all, so a lost race retries under a fresh name (`_PROBE_ATTEMPTS`) and a
+  run that somehow loses every attempt reports nothing rather than guessing.
+  A file this process did not create is never stat'ed, unlinked or mentioned —
+  it may be an open probe belonging to a live sibling.
+
+No API change. `MEDIA_ROOT`/`STATIC_ROOT`/`LOGGING`/`STAPEL_STORAGE_ROOTS`
+roots, the E001/E002/E003/W001 ids and the gate modes are all as they were.
+
 ## [0.83.0] — 2026-09-17
 
 Minor: a registered `GDPRProvider` answers an erasure by being registered, and
