@@ -45,3 +45,66 @@ def clear_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def error_registry_is_whole():
+    """Import every error module once, before any test can be the one that does.
+
+    Several core modules register their keys at import, and the i18n gates
+    force those imports on first use — so which test paid for them, and which
+    keys the registry holds while a test runs, depended on the file order.
+    Paying once up front makes the registry the same for every test.
+    """
+    from stapel_core.i18n import source_owners
+
+    source_owners("errors")
+
+
+@pytest.fixture(autouse=True)
+def restore_error_registries(error_registry_is_whole):
+    """Error keys are registered process-globally; put the registry back.
+
+    ``register_service_errors`` writes into four module-level dicts that every
+    later test reads, and the drift gates in tests/test_error_i18n.py read them
+    as the fleet's catalogue: a probe key registered by an earlier test is
+    reported there as a core key nobody translated, and an overridden baseline
+    text as a translation gone stale. Restored around every test rather than
+    on request, because an opt-in sandbox is a rule each new test has to
+    remember, and the tests that forgot it were only red in one file ordering.
+    """
+    from stapel_core.django.api import errors as errors_module
+
+    names = (
+        "_GLOBAL_REGISTRY",
+        "_LANGUAGE_REGISTRY",
+        "_REMEDIATION_REGISTRY",
+        "_OWNER_REGISTRY",
+    )
+    saved = {name: dict(getattr(errors_module, name)) for name in names}
+    yield
+    for name, snapshot in saved.items():
+        live = getattr(errors_module, name)
+        live.clear()
+        live.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def drop_eventstore_buffer():
+    """Discard whatever a test left in the event store's write buffer.
+
+    The buffer is one process-global object. A test that appends without a
+    database leaves its events pending in it, and the next ``override_settings``
+    of an eventstore key fires ``_reset_state``, which FLUSHES — so those events
+    land in whichever test's database is open at that moment and are counted by
+    its assertions. Dropped rather than flushed here: flushing outside a
+    database-enabled test is what produced them in the wrong place to begin
+    with.
+    """
+    yield
+    from stapel_core import eventstore
+
+    with eventstore._lock:
+        eventstore._buffer = None
+        eventstore._backends.clear()
+        eventstore._default_backend = None
