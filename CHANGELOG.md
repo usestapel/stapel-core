@@ -1,5 +1,78 @@
 # Changelog
 
+## [0.85.0] — 2026-09-18
+
+Minor: a route that was served but undocumented becomes part of the contract,
+and the class of defect gets a check.
+
+### Fixed — `jwt/status/` was invisible to every schema generated from it
+
+`JWTStatusView` was a plain Django `View`. drf-spectacular describes DRF
+views, so it emitted nothing for this one: a consuming module mounts the route
+at `…/api/v1/jwt/status/`, the admin session-timeout widget polls it on every
+open admin tab, and the consumer's `docs/schema.json` had no entry for it.
+Every client generated from that document was generated without it, and the
+contract gate was green — a gate cannot notice the absence of something it was
+never told about.
+
+The view is an `APIView` now, with an `@extend_schema` response serializer, so
+the route appears wherever the schema is emitted. Nothing on the wire moved:
+the handlers still return the same `JsonResponse` bodies with the same keys
+and the same status codes for the anonymous, expired and valid cases. Three
+declarations keep it that way, and each is load-bearing:
+
+- `authentication_classes = []` — the deployment's default is usually
+  `JWTCookieAuthentication`, which CREATES the local user row for a token it
+  has not seen. This endpoint is the read-only sibling that audit AUTH-02
+  spared *because* it mints nothing; inheriting the default authenticator
+  would have handed it a side effect it never had.
+- `perform_authentication()` overridden to do nothing — DRF resolves
+  `request.user` eagerly, and with no authenticator that resolution writes
+  `AnonymousUser` back onto the underlying Django request. The endpoint would
+  then report "not authenticated" for every caller: its whole answer,
+  inverted. Caught by the behavioural pins, not by review.
+- `permission_classes = [AllowAny]`, `throttle_classes = []` — a plain `View`
+  had neither gate nor throttle, and a service whose DRF default is
+  `IsAuthenticated` would otherwise answer "am I logged in?" with 401 for
+  exactly the caller who needs to ask.
+
+### Added — the contract checks (`stapel_contract`), so the next one is named
+
+`stapel_core.contract.W001`: a route whose mounted path carries the §37 `api`
+segment, whose view is not a DRF view, and which declares no exemption. That
+route cannot appear in `docs/schema.json`, and nothing else in the fleet says
+so. `W002` reports a `stapel_contract_exempt` value that is not an exemption —
+a typo must not read as a declaration.
+
+The waiver keeps the check alive: a stream, a download or a foreign webhook
+envelope is legitimately a plain view, and says so with
+`stapel_contract_exempt = "<why>"` (or `True`). Both answers are green; only
+silence is a finding. W-level throughout — the route is usually mounted from
+an installed wheel, and an Error there blocks a deploy over a file the reader
+cannot edit, which is how a whole tag ends up in `SILENCED_SYSTEM_CHECKS`.
+
+Built on the shared surface survey (`django/urlsurvey.py`), like the §37 mount
+containment and adoption checks before it.
+
+The fleet sweep this check codifies found six routes: the five this library
+mounts itself — `api/health/`, `api/health/ready/`, `api/health/live/`,
+`api/metrics/`, `api/version/`, served by nearly every service through
+`get_health_urls()` — and one in a product outside this repository. The five
+are plain views on purpose (an orchestrator probe, a Prometheus text
+exposition, a build-identity probe; none of them an operation a generated
+client calls) and now say so through the new `contract_exempt()` decorator.
+Had they stayed silent, the check would have arrived with a five-finding flood
+in every service and been muted on its first day.
+
+### Fixed — the test harness baked DRF's own schema class into every view
+
+`stapel_core.testing` left `DEFAULT_SCHEMA_CLASS` unset. drf-spectacular
+resolves the base schema class when `@extend_schema` is *applied* — at import
+time — so every decorated view in every library testing against this harness
+inherited DRF's `AutoSchema` instead of the one `stapel_core.django.settings`
+configures, and a schema assertion tested a class no service runs. The harness
+now carries the deployment default.
+
 ## [0.84.0] — 2026-09-18
 
 Minor: the loser of a first-contact race keeps its own claims, and a

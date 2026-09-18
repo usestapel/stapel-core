@@ -37,6 +37,12 @@ BASE_REST_FRAMEWORK = {
     # Empty by default — avoid IsAuthenticated/IsServiceRequest blocking tests with 403
     'DEFAULT_PERMISSION_CLASSES': [],
     'EXCEPTION_HANDLER': 'stapel_core.django.api.errors.stapel_exception_handler',
+    # The deployment default (stapel_core.django.settings), because
+    # drf-spectacular resolves the base schema class when @extend_schema is
+    # APPLIED — at import time. A harness that leaves this unset bakes DRF's
+    # own AutoSchema into every decorated view, and a schema assertion then
+    # tests a class no service runs.
+    'DEFAULT_SCHEMA_CLASS': 'stapel_core.django.openapi.schemas.PermissionAwareAutoSchema',
 }
 
 

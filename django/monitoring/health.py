@@ -14,6 +14,8 @@ from django.db import connection
 from django.conf import settings
 from django.urls import path
 
+from stapel_core.django.contract_checks import contract_exempt
+
 logger = logging.getLogger(__name__)
 
 
@@ -242,6 +244,11 @@ def _run_dependency_checks():
     return checks, critical_down
 
 
+@contract_exempt(
+    "the deployment probe surface: read by uptime monitors and orchestrators, "
+    "not by API clients, and its 503 is a routing signal rather than an error "
+    "body a generated client should model"
+)
 def health_check(request):
     """
     Health check endpoint with basic metrics.
@@ -285,6 +292,7 @@ def health_check(request):
     }, status=200 if healthy else 503)
 
 
+@contract_exempt("orchestrator probe: plain-text OK/503, no client generated from the schema calls it")
 def readiness_probe(request):
     """
     Kubernetes readiness probe.
@@ -321,6 +329,7 @@ def readiness_probe(request):
     return HttpResponse("OK", status=200)
 
 
+@contract_exempt("orchestrator probe: plain-text OK, no client generated from the schema calls it")
 def liveness_probe(request):
     """
     Kubernetes liveness probe.
@@ -331,6 +340,7 @@ def liveness_probe(request):
     return HttpResponse("OK", status=200)
 
 
+@contract_exempt("Prometheus text exposition — not a JSON operation, and a scrape target is not an API client")
 def prometheus_metrics(request):
     """
     Prometheus metrics endpoint.

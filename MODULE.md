@@ -2831,6 +2831,58 @@ the resolver through the same primitives (`iter_surface()`, `iter_url_patterns`,
 `path_segments`, `callback_owner_app_label`). Written once they are a
 mechanism; the `stapel_mounts` private names re-export from there unchanged.
 
+### Contract checks — a route the schema cannot see (`django/contract_checks.py`)
+
+The third user of the surface survey, and a check about **documents rather
+than behaviour**. A service's `docs/schema.json` is emitted by drf-spectacular,
+which describes DRF views; a plain Django `View` mounted under the API prefix
+is skipped in silence. The route is live, clients poll it, and the document
+every consumer generates against does not mention it — while the contract gate
+passes, because a gate cannot notice the absence of something it was never told
+about. The green tick is over a surface smaller than the one the service
+serves.
+
+Found on this library's own `JWTStatusView` (0.85.0): mounted by an installed
+module at `…/api/v1/jwt/status/`, polled by the admin session-timeout widget on
+every open admin tab, and absent from the consumer's schema for as long as it
+existed. The view moved to DRF in the same release; the check is so the next
+one is named at `manage.py check` time.
+
+| id | level | meaning |
+|---|---|---|
+| `stapel_core.contract.W001` | Warning | a route with an `api` path segment whose view is not a DRF view and declares no exemption — drf-spectacular emits no path for it |
+| `stapel_core.contract.W002` | Warning | `stapel_contract_exempt` is set to something that is not an exemption (a typo must not read as a declaration) |
+
+The waiver keeps the genre's shape — **an explicit answer instead of silence**:
+
+```python
+from stapel_core.django.contract_checks import contract_exempt
+
+@contract_exempt("Prometheus text exposition — a scrape target is not a client")
+def prometheus_metrics(request):
+    ...
+
+class EventStreamView(View):
+    stapel_contract_exempt = "SSE — DRF has no renderer for a live stream"
+```
+
+`True` is the bare marker; a string is better, because the reason is what a
+reader of `docs/schema.json` will want six months later. Both answers are
+green; only silence is the finding. This library's own probe surface
+(`get_health_urls()` — health, readiness, liveness, metrics, version) is
+declared this way: every service mounts it, so leaving it silent would have
+made the check arrive as a five-finding flood.
+
+W-level throughout, for the reason W002 is W-level in the adoption family: the
+route is usually mounted from somebody else's wheel, and an Error there would
+block deploys over a file the reader cannot edit. The package name is in the
+message so the fix can be asked for where it belongs.
+
+Does **not** catch: a DRF view drf-spectacular still cannot describe well
+(being a DRF view is necessary, not sufficient — `stapel-tools`' schema lint
+asks that question against the emitted document); an API served under a prefix
+that is not the §37 `api` segment; whether the emitted operation is *correct*.
+
 ### Lifecycle-pair checks — a merge is not a delete (`comm/lifecycle_checks.py`)
 
 The second adoption check, and the first whose **premise is a subscription

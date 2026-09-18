@@ -74,6 +74,8 @@ from django.conf import settings
 from django.http import JsonResponse
 from django.urls import path
 
+from stapel_core.django.contract_checks import contract_exempt
+
 # The document's shape, shared with every other thing in a fleet that answers
 # this question — including the storefront's static /_version.json, which is
 # emitted by a node build and has no Python in it at all. One shape means a
@@ -158,6 +160,10 @@ def build_info():
     }
 
 
+@contract_exempt(
+    "build-identity probe: an outside observer asking what this container is, "
+    "not an operation of the service's API"
+)
 def version_view(request):
     """``GET <prefix>api/version/`` — see the module docstring."""
     if not _config().get("PUBLIC", True):

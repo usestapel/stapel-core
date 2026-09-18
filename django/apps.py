@@ -162,6 +162,13 @@ class CommonDjangoConfig(AppConfig):
         from stapel_core.django import (  # noqa: F401
             captcha_checks as _captcha_checks,
         )
+        # Contract checks (stapel_core.django.contract_checks): W-level when a
+        # route under the API prefix is not a DRF view and does not say it is
+        # a plain one on purpose. drf-spectacular emits nothing for such a
+        # route, so the service serves it while its docs/schema.json — and
+        # every client generated from that document — has never heard of it,
+        # and the contract gate passes over a surface it cannot see.
+        from stapel_core.django import contract_checks as _contract_checks  # noqa: F401
         # Adoption checks (stapel_core.django.adoption_checks): E-level when
         # the AUTH_ANONYMOUS axis is on and a view gates on a bare
         # IsAuthenticated without saying whether guests are meant to pass —
