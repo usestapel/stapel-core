@@ -247,6 +247,15 @@ def deliver_to_subscribers(event, handlers) -> list[Exception]:
     Raising ``ValidationError`` for a transient case now means "give up on
     this event", which is not what the raiser meant.
     """
+    from .delivery_scope import delivery_scope
+
+    # One fan-out states a fact once: see delivery_scope for why the window is
+    # this loop and not the process (a redelivery must be free to say it again).
+    with delivery_scope():
+        return _run_handlers(event, handlers)
+
+
+def _run_handlers(event, handlers) -> list[Exception]:
     from django.core.exceptions import ValidationError
 
     retriable: list[Exception] = []

@@ -454,3 +454,74 @@ def test_pseudonymize_honours_a_custom_prefix():
     value = pseudonymize("42", prefix="gone:")
     assert value.startswith("gone:")
     assert pseudonymize(value, prefix="gone:") == value
+
+
+# ── the receipt writer refuses to say it twice ──────────────────────────────
+#
+# The bridge yielding to a hand-written handler closes the path we found. This
+# is the wall behind it: whatever paths exist, one fan-out of one erasure
+# request writes at most one receipt per (request, owner, subject). A
+# REDELIVERY is a different fan-out and still receipts — the orchestrator may
+# never have seen the first one.
+
+
+@pytest.mark.django_db
+def test_a_second_receipt_in_one_delivery_is_refused(sink, caplog):
+    from stapel_core.comm.delivery_scope import delivery_scope
+    from stapel_core.gdpr.owners import _emit_receipt
+
+    with override_settings(STAPEL_COMM=INPROCESS):
+        with caplog.at_level("WARNING"):
+            with delivery_scope():
+                _emit_receipt("docs", "c-1", "document", "doc-9", {"documents": 3})
+                _emit_receipt("docs", "c-1", "document", "doc-9", {"documents": 3})
+
+    assert len(sink[SECTION_ERASED]) == 1, "one deletion, one receipt"
+    assert "docs:document:doc-9:c-1" in caplog.text
+
+
+@pytest.mark.django_db
+def test_a_different_part_in_the_same_delivery_still_receipts(sink):
+    from stapel_core.comm.delivery_scope import delivery_scope
+    from stapel_core.gdpr.owners import _emit_receipt
+
+    with override_settings(STAPEL_COMM=INPROCESS):
+        with delivery_scope():
+            _emit_receipt("docs", "c-1", "document", "doc-9", {})
+            _emit_receipt("media", "c-1", "document", "doc-9", {})
+
+    assert [r["owner"] for r in sink[SECTION_ERASED]] == ["docs", "media"]
+
+
+@pytest.mark.django_db
+def test_a_redelivery_is_a_new_delivery_and_receipts_again(sink):
+    from stapel_core.comm.delivery_scope import delivery_scope
+    from stapel_core.gdpr.owners import _emit_receipt
+
+    with override_settings(STAPEL_COMM=INPROCESS):
+        for _ in range(2):
+            with delivery_scope():
+                _emit_receipt("docs", "c-1", "document", "doc-9", {})
+
+    first, second = sink[SECTION_ERASED]
+    assert first["receipt_id"] == second["receipt_id"]
+
+
+@pytest.mark.django_db
+def test_the_guard_is_armed_by_the_fan_out_itself(sink):
+    """Two subscribers, one event: the second receipt never leaves."""
+    from stapel_core.bus.event import Event
+    from stapel_core.comm.actions import deliver_to_subscribers
+    from stapel_core.gdpr.owners import _emit_receipt
+
+    def receipt_handler(event):
+        _emit_receipt("docs", "c-1", "document", "doc-9", {})
+
+    with override_settings(STAPEL_COMM=INPROCESS):
+        errors = deliver_to_subscribers(
+            Event(event_type=ERASURE_REQUESTED, service="gdpr", payload={}),
+            [receipt_handler, receipt_handler],
+        )
+
+    assert errors == []
+    assert len(sink[SECTION_ERASED]) == 1

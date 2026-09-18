@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.85.1] — 2026-09-18
+
+Patch: the provider bridge yields to a library that already answers for
+itself, and a receipt cannot be written twice in one delivery.
+
+### Fixed — one erasure, two receipts, for eight libraries
+
+0.83.0's bridge answers `gdpr.erasure.requested` for every provider in
+`gdpr_registry` that has not called `register_gdpr_owner`. That test is too
+narrow. `register_gdpr_owner` is not the only way a library answers: eight
+libraries on this path register a `GDPRProvider` from `AppConfig.ready()` AND
+hand-write the sixty lines of the protocol with
+`@on_action("gdpr.erasure.requested")`. They never call `register_gdpr_owner`,
+so the bridge read them as unanswered and answered beside them — one erasure,
+two receipts per part, from 0.83.0 onward. Every deployment on 0.83.0, 0.83.1,
+0.83.2, 0.84.0 or 0.85.0 that installs such a library has been double-
+receipting since it was deployed.
+
+A receipt asserts that a deletion happened. Two of them for one part assert it
+happened twice, and no reader of the audit trail can tell which is the record.
+
+The bridge now asks "is anything in this process already answering for it",
+not "did this section call `register_gdpr_owner`". A hand-written handler
+carries no section name, so the link is the one it does carry unambiguously:
+the installed app that defines it, against the installed app that defines the
+provider's class — the attribution `comm.lifecycle_checks` already used,
+extracted to `stapel_core.comm.attribution`. Same app, same library: the
+bridge stands down, per action, so a library that hand-wrote one of the two
+handlers still gets the other bridged. Handlers core built itself are excluded
+by their `stapel_gdpr_owner` stamp, so an owner registered by name cannot
+stand the bridge down for an unrelated section.
+
+### Added — `gdpr.W012`, bridged and hand-handled at the same time
+
+Warning, never an Error: the bridge yields, so the deployment is correct and
+refusing a boot over a library merely carrying its own copy would be a second
+outage for a fixed defect. The message names the section, the app and the
+module of the hand-written handler, and asks for the one-line migration to
+`register_gdpr_owner`. The reason to take it is that the bridge's answer is
+per app, not per section: an app with a second provider would stand the bridge
+down for that one too.
+
+### Added — one fan-out states a fact once
+
+`stapel_core.comm.delivery_scope` — the wall behind the fix. Core's receipt
+writer now refuses a second `gdpr.section.erased` for the same (request,
+owner, subject) within one delivery and logs a warning naming the receipt id,
+so a future third answerer cannot double a receipt either.
+
+The window is one delivery, not the process and not the correlation id.
+Delivery is at-least-once: a REDELIVERY is a separate fan-out and must be free
+to receipt again — with the same deterministic id — because the orchestrator
+may never have received the first. Suppressing that would trade a duplicate
+for a receipt nobody ever sees.
+
 ## [0.85.0] — 2026-09-18
 
 Minor: a route that was served but undocumented becomes part of the contract,

@@ -38,6 +38,34 @@ and implements ``delete``/``anonymize``. Being registered is the act. So core
 answers on its behalf, and a library that wants to answer for itself still
 can.
 
+WHAT "ALREADY HAS AN OWNER" MEANS
+---------------------------------
+``register_gdpr_owner`` is not the only way a library answers. Eight of them
+register a ``GDPRProvider`` and ALSO hand-write the sixty lines of the
+protocol with ``@on_action("gdpr.erasure.requested")`` — they never call
+``register_gdpr_owner``, so 0.83.0's "has no explicit owner" test said no and
+the bridge answered beside them. One erasure then minted two receipts for one
+part. A receipt asserts that a deletion happened; two of them assert it
+happened twice, and that is a false legal record, not a duplicate log line.
+
+So the question the bridge asks is not "did this section call
+``register_gdpr_owner``" but "is anything in this process already answering
+for it". A hand-written handler is a plain function in the action registry —
+it carries no section name, and inventing one from its source would be
+guesswork. What it does carry, unambiguously, is the module it was defined in,
+and from that the INSTALLED APP that defines it
+(:mod:`stapel_core.comm.attribution`, the attribution the lifecycle-pair check
+already uses). A provider's class carries the same. Same app, same library:
+the library answers for itself and the bridge stands down.
+
+That is app-level, not section-level, and it is the coarser answer on purpose.
+An app that registered two providers and hand-wrote a handler for only one of
+them would stand the bridge down for both — so ``gdpr.W012`` names every
+section it yields for, and the migration it asks for (one
+``register_gdpr_owner`` call, the hand-written copy deleted) makes the
+question exact again. The alternative error is a double receipt, and a
+duplicated legal record is worse than a named one that needs a migration.
+
 WHY AT DISPATCH AND NOT AT ``ready()``
 --------------------------------------
 ``AppConfig.ready()`` runs in ``INSTALLED_APPS`` order. A bridge that
@@ -65,6 +93,7 @@ from stapel_core.gdpr import gdpr_registry
 logger = logging.getLogger(__name__)
 
 E011 = "stapel_core.gdpr.E011"
+W012 = "stapel_core.gdpr.W012"
 
 #: A provider's interface is ``delete(user_id)`` / ``anonymize(user_id)``. It
 #: is keyed by a user and nothing else, so the bridge claims ``account`` and
@@ -122,21 +151,65 @@ def _bridged_owner(provider):
     return built
 
 
-def _unbridged_providers():
-    """Registered providers whose section has no owner of its own.
+def _provider_app(provider) -> str:
+    """The installed app that defines *provider*'s class."""
+    from stapel_core.comm.attribution import owning_app
 
-    Asked fresh on every event: a library that wires itself explicitly is
+    module = getattr(provider.__class__, "__module__", "") or ""
+    return owning_app(module) if module else ""
+
+
+def _apps_answering(action: str) -> dict[str, str]:
+    """Installed app -> the module of a HAND-WRITTEN handler it registered.
+
+    Two kinds of subscriber are excluded, and both would otherwise make the
+    bridge stand down for a section nothing answers for:
+
+    - the bridge's own subscribers, which are the thing being asked about;
+    - the handlers :func:`register_gdpr_owner` built, which carry a
+      ``stapel_gdpr_owner`` stamp and whose sections are already answered by
+      name in :func:`registered_gdpr_owners`.
+
+    What is left is a library's own ``@on_action``.
+    """
+    from stapel_core.comm.attribution import handler_module, owning_app
+    from stapel_core.comm.registry import action_registry
+
+    answering: dict[str, str] = {}
+    for handler in action_registry.handlers(action):
+        if getattr(handler, "stapel_gdpr_bridge", False):
+            continue
+        if getattr(handler, "stapel_gdpr_owner", None):
+            continue
+        module = handler_module(handler)
+        if module:
+            answering.setdefault(owning_app(module), module)
+    return answering
+
+
+def _unbridged_providers(action: str | None = None):
+    """Registered providers nothing in this process already answers for.
+
+    Asked fresh on every event: a library that wires itself — by name with
+    ``register_gdpr_owner``, or by hand with ``@on_action`` — is
     authoritative, whenever in the boot it got round to saying so.
     """
-    from stapel_core.gdpr.owners import registered_gdpr_owners
+    from stapel_core.gdpr.owners import ERASURE_REQUESTED, registered_gdpr_owners
 
     explicit = set(registered_gdpr_owners())
-    return [p for p in gdpr_registry.providers if str(p.section) not in explicit]
+    answering = _apps_answering(action or ERASURE_REQUESTED)
+    return [
+        p
+        for p in gdpr_registry.providers
+        if str(p.section) not in explicit and _provider_app(p) not in answering
+    ]
 
 
 def bridge_erasure_requested(event) -> None:
     """Answer ``gdpr.erasure.requested`` for every unbridged provider."""
-    for provider in _unbridged_providers():
+    from stapel_core.gdpr.owners import ERASURE_REQUESTED
+
+    for provider in _unbridged_providers(ERASURE_REQUESTED):
         _bridged_owner(provider).handle_erasure_requested(event)
 
 
@@ -145,9 +218,18 @@ def bridge_owner_probe(event) -> None:
 
     From the same module that erases, so ``gdpr.owner.alive`` stays evidence
     that the erasure path is consumed rather than that a container is running.
+    Asked per action: a library may hand-write one of the two handlers.
     """
-    for provider in _unbridged_providers():
+    from stapel_core.gdpr.owners import OWNER_PROBE
+
+    for provider in _unbridged_providers(OWNER_PROBE):
         _bridged_owner(provider).handle_owner_probe(event)
+
+
+#: Marks the bridge's own subscribers, so :func:`_apps_answering` does not
+#: read them as a library answering for itself.
+bridge_erasure_requested.stapel_gdpr_bridge = True
+bridge_owner_probe.stapel_gdpr_bridge = True
 
 
 def register_provider_bridge() -> bool:
@@ -223,11 +305,66 @@ def check_owners_are_answerable(app_configs=None, **kwargs):
     ]
 
 
+def check_bridge_yields_to_hand_handlers(app_configs=None, **kwargs):
+    """System check: a provider that is both bridged and hand-handled.
+
+    WARNING, never an Error: the bridge yields, so the deployment is correct —
+    exactly one receipt per part — and refusing the boot over a library that
+    is merely carrying its own copy would be a second outage for a fixed
+    defect. What is left is a duplicated protocol, and the reason to migrate
+    it is that the bridge's answer here is app-level: it cannot tell WHICH
+    section of a multi-provider app the hand-written handler speaks for.
+    """
+    from django.core.checks import Warning as CheckWarning
+
+    from stapel_core.gdpr.owners import (
+        ERASURE_REQUESTED,
+        OWNER_PROBE,
+        registered_gdpr_owners,
+    )
+
+    explicit = set(registered_gdpr_owners())
+    answering = {
+        action: _apps_answering(action)
+        for action in (ERASURE_REQUESTED, OWNER_PROBE)
+    }
+    problems = []
+    for provider in gdpr_registry.providers:
+        section = str(provider.section)
+        if section in explicit:
+            continue
+        app = _provider_app(provider)
+        hand = {a: m[app] for a, m in answering.items() if app in m}
+        if not hand:
+            continue
+        where = ", ".join(f"{action} in {module}" for action, module in sorted(hand.items()))
+        problems.append(
+            CheckWarning(
+                f"GDPR provider section {section!r} is registered in "
+                f"gdpr_registry and app {app!r} also answers the protocol by "
+                f"hand ({where}). Core's provider bridge YIELDS, so this "
+                f"deployment writes one receipt per part — but the two "
+                f"wirings are one protocol kept in two places, and the "
+                f"bridge's answer is per app, not per section: an app with a "
+                f"second provider would stand the bridge down for that one "
+                f"too. Call stapel_core.gdpr.register_gdpr_owner({section!r}, "
+                f"[...], erase) from AppConfig.ready() and delete the "
+                f"hand-written handlers; the registration builds the same "
+                f"ones.",
+                id=W012,
+                obj=f"{section} ({where})",
+            )
+        )
+    return problems
+
+
 __all__ = [
     "E011",
+    "W012",
     "BRIDGED_SUBJECT_TYPES",
     "bridge_erasure_requested",
     "bridge_owner_probe",
+    "check_bridge_yields_to_hand_handlers",
     "check_owners_are_answerable",
     "register_provider_bridge",
 ]

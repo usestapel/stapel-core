@@ -66,6 +66,7 @@ class CommonDjangoConfig(AppConfig):
         # explicitly still wins. Subscribed here, resolved at dispatch — see
         # provider_bridge for why the order of ready() cannot be relied on.
         from stapel_core.gdpr.provider_bridge import (
+            check_bridge_yields_to_hand_handlers,
             check_owners_are_answerable,
             register_provider_bridge,
         )
@@ -85,6 +86,11 @@ class CommonDjangoConfig(AppConfig):
         # find it, since the first person to learn would otherwise be a
         # subject exercising their right to erasure.
         _register_check(check_owners_are_answerable)
+        # W012: a library that registers a provider AND hand-writes the
+        # protocol. The bridge yields to it, so the receipts stay one per
+        # part; the warning names the copy to delete. W-level — nothing
+        # refuses to boot over a duplicated wiring that behaves correctly.
+        _register_check(check_bridge_yields_to_hand_handlers)
         # The admin's cross-service picker, installed rather than configured.
         # It renders from admin/base_site.html, which django.contrib.admin
         # also ships and — being listed earlier in INSTALLED_APPS — always

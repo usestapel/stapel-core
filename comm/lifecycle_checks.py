@@ -47,7 +47,9 @@ app claims is reported under its top-level package. Handlers registered on a
 library's behalf by core — the ``user.deleted`` subscriber that
 :func:`stapel_core.gdpr.register_gdpr_owner` builds as a closure — carry a
 ``stapel_handler_module`` stamp naming the library that asked for them, so
-they are charged to that library and not to ``stapel_core``.
+they are charged to that library and not to ``stapel_core``. The rules live in
+:mod:`stapel_core.comm.attribution`; the GDPR provider bridge asks the same
+question.
 
 Checks
 ------
@@ -56,10 +58,10 @@ E001  an app handles a lifecycle event whose companion event has no handler
 """
 from __future__ import annotations
 
-import inspect
-
-from django.apps import apps
 from django.core import checks
+
+from .attribution import handler_module as _handler_module
+from .attribution import owning_app as _owner_of
 
 E001_LIFECYCLE_PAIR_UNHANDLED = "stapel_core.lifecycle.E001"
 
@@ -78,38 +80,6 @@ _WHY = {
         "requested for it."
     ),
 }
-
-
-def _handler_module(handler) -> str:
-    """The module a handler should be charged to.
-
-    ``stapel_handler_module`` wins: it is set where core subscribes a handler
-    on another package's behalf, and the closure's own ``__module__`` would
-    name core instead of the library that asked.
-    """
-    stamped = getattr(handler, "stapel_handler_module", None)
-    if stamped:
-        return str(stamped)
-    try:
-        handler = inspect.unwrap(handler)
-    except Exception:  # noqa: BLE001 — a broken __wrapped__ chain is not our error
-        pass
-    return str(getattr(handler, "__module__", "") or "")
-
-
-def _owner_of(module: str) -> str:
-    """Longest installed ``AppConfig.name`` that owns *module*.
-
-    Falls back to the top-level package so a handler living outside every
-    installed app is still named in the report rather than dropped.
-    """
-    best = ""
-    for config in apps.get_app_configs():
-        name = config.name
-        if module == name or module.startswith(f"{name}."):
-            if len(name) > len(best):
-                best = name
-    return best or module.split(".")[0]
 
 
 def _owners_subscribed_to(action: str) -> set[str]:

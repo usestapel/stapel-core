@@ -245,15 +245,35 @@ def _emit_receipt(
     *,
     user_id: str | None = None,
 ) -> None:
-    """Emit ``gdpr.section.erased``. The caller holds the erase transaction."""
-    from stapel_core.comm import emit
+    """Emit ``gdpr.section.erased``. The caller holds the erase transaction.
 
+    At most one receipt per (request, owner, subject) leaves one fan-out. A
+    receipt asserts that a deletion happened; a second one for the same part
+    asserts it happened twice, and no reader of the audit trail can tell which
+    of the two is the record. The window is the delivery, not the process:
+    delivery is at-least-once, so a REDELIVERY is a separate fan-out and
+    receipts again — with the same id — because the orchestrator may never
+    have received the first.
+    """
+    from stapel_core.comm import emit
+    from stapel_core.comm.delivery_scope import claim_once
+
+    rid = receipt_id(owner, subject_type, subject_key, correlation_id)
+    if not claim_once(f"{SECTION_ERASED}:{rid}"):
+        logger.warning(
+            "refusing a second %s receipt %s in one delivery — the first one "
+            "is the record. Two receipts for one part assert two deletions; "
+            "find the second answerer (gdpr.W012 names a library that both "
+            "registers a GDPRProvider and hand-writes the protocol).",
+            SECTION_ERASED, rid,
+        )
+        return
     payload = {
         "owner": owner,
         "subject_type": subject_type,
         "subject_key": subject_key,
         "correlation_id": correlation_id,
-        "receipt_id": receipt_id(owner, subject_type, subject_key, correlation_id),
+        "receipt_id": rid,
         "counts": dict(counts),
     }
     if user_id is not None:
@@ -399,6 +419,10 @@ def _build(
 
     for handler in (handle_erasure_requested, handle_owner_probe, handle_user_deleted):
         handler.stapel_handler_module = caller_module
+        # Core built these; the section they answer for is already in
+        # registered_gdpr_owners(). The provider bridge reads the stamp to
+        # tell them apart from a library's own hand-written @on_action.
+        handler.stapel_gdpr_owner = owner
 
     return GdprOwner(
         owner=owner,

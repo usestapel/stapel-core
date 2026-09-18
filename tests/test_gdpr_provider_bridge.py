@@ -38,6 +38,31 @@ import pytest
 
 pytestmark = pytest.mark.django_db
 
+ERASURE = "gdpr.erasure.requested"
+PROBE = "gdpr.owner.probe"
+SECTION_ERASED = "gdpr.section.erased"
+OWNER_ALIVE = "gdpr.owner.alive"
+INPROCESS = {"OUTBOX_ENABLED": False, "ACTION_TRANSPORT": "inprocess"}
+
+
+def _hand_written_erasure_handler(event):
+    """The sixty lines eight libraries carry, reduced to what matters here.
+
+    Defined in this module on purpose: attribution charges a handler to the
+    app that defines it, and the provider below is defined here too — which
+    is exactly the shape of a library that registers both.
+    """
+    from stapel_core.comm import emit
+
+    payload = event.payload
+    emit(SECTION_ERASED, {
+        "owner": "recordings",
+        "subject_type": payload["subject_type"],
+        "subject_key": payload["subject_key"],
+        "correlation_id": payload["correlation_id"],
+        "counts": {"recordings": 1},
+    }, key=payload["subject_key"])
+
 
 class _Provider:
     def __init__(self, section):
@@ -81,6 +106,44 @@ def registry(monkeypatch):
     provider_bridge._reset_bridge()
     yield fresh
     provider_bridge._reset_bridge()
+
+
+class _Subscriptions:
+    """Subscribe hand-written handlers the way ``@on_action`` does."""
+
+    def __init__(self):
+        self.handlers = []
+
+    def hand_written(self, action):
+        from stapel_core.comm.registry import action_registry
+
+        calls = []
+
+        def handle(event):
+            calls.append(event.payload.get("subject_key"))
+
+        action_registry.subscribe(action, handle)
+        self.handlers.append(handle)
+        return calls
+
+
+@pytest.fixture
+def subscriptions():
+    """Snapshot the gdpr subscriptions and put them back afterwards."""
+    from stapel_core.comm.registry import action_registry
+
+    names = (ERASURE, PROBE, SECTION_ERASED, OWNER_ALIVE)
+    before = {name: action_registry.handlers(name) for name in names}
+    for name in names:
+        # Earlier tests in this file register owners, and register_gdpr_owner
+        # subscribes for the whole process; start from an empty fan-out.
+        action_registry._subscribers[name] = []
+    try:
+        yield _Subscriptions()
+    finally:
+        # No unsubscribe in the registry: restore the lists this test found.
+        for name, handlers in before.items():
+            action_registry._subscribers[name] = list(handlers)
 
 
 @pytest.fixture
@@ -227,5 +290,139 @@ class TestADeclaredOwnerWithNoAnswerer:
             monkeypatch.setattr(provider_bridge, "_bridge_is_subscribed", lambda: False)
 
             assert provider_bridge.check_owners_are_answerable() == []
+        finally:
+            _reset_gdpr_owners()
+
+
+class TestALibraryThatAnswersForItselfIsNotBridged:
+    """The bridge must yield to a hand-written ``@on_action`` handler.
+
+    0.83.0 skipped a section only when it had called ``register_gdpr_owner``.
+    Eight libraries in this fleet register a ``GDPRProvider`` AND hand-write
+    the sixty lines of the protocol with ``@on_action`` — they never call
+    ``register_gdpr_owner``, so the bridge answered beside them and one
+    erasure minted two receipts for one part. A receipt says a deletion
+    happened; two of them say it happened twice, which is a false legal
+    record.
+    """
+
+    def test_one_part_gets_one_receipt(self, registry, subscriptions):
+        from django.test import override_settings
+
+        from stapel_core.bus.event import Event
+        from stapel_core.comm.actions import deliver
+        from stapel_core.comm.registry import action_registry
+        from stapel_core.gdpr import provider_bridge
+
+        provider = _Provider("recordings")
+        registry.register(provider)
+
+        receipted = []
+        action_registry.subscribe(
+            SECTION_ERASED, lambda e: receipted.append(e.payload["owner"])
+        )
+        action_registry.subscribe(ERASURE, _hand_written_erasure_handler)
+        action_registry.subscribe(ERASURE, provider_bridge.bridge_erasure_requested)
+
+        with override_settings(STAPEL_COMM=INPROCESS):
+            deliver(Event(
+                event_type=ERASURE,
+                service="gdpr",
+                payload={
+                    "correlation_id": "c1",
+                    "subject_type": "account",
+                    "subject_key": "u1",
+                },
+            ))
+
+        assert receipted == ["recordings"], "one part, one receipt"
+        assert provider.deleted == [], "the library erases through its own path"
+
+    def test_the_bridge_skips_it(self, registry, receipts, subscriptions):
+        from stapel_core.gdpr import provider_bridge
+
+        provider = _Provider("recordings")
+        registry.register(provider)
+        subscriptions.hand_written(ERASURE)
+
+        provider_bridge.bridge_erasure_requested(_request())
+
+        assert provider.deleted == [], "the library's own handler is the owner"
+        assert receipts == []
+
+    def test_the_probe_is_skipped_for_the_same_reason(self, registry, subscriptions):
+        from stapel_core.comm.registry import action_registry
+        from stapel_core.gdpr import provider_bridge
+
+        registry.register(_Provider("recordings"))
+        subscriptions.hand_written(PROBE)
+
+        alive = []
+        action_registry.subscribe(OWNER_ALIVE, lambda e: alive.append(e.payload))
+        import stapel_core.comm as comm
+
+        real = comm.emit
+        try:
+            comm.emit = lambda name, payload, **kw: alive.append((name, payload))
+            provider_bridge.bridge_owner_probe(_Event({"correlation_id": "c1"}))
+        finally:
+            comm.emit = real
+        assert alive == [], "two owner.alive answers for one owner is two owners"
+
+    def test_a_provider_with_no_hand_handler_is_still_bridged(
+        self, registry, receipts, subscriptions
+    ):
+        """Only the hand-handled app stands the bridge down."""
+        from stapel_core.gdpr import provider_bridge
+
+        registry.register(_Provider("listings"))
+
+        provider_bridge.bridge_erasure_requested(_request())
+
+        assert [r["owner"] for r in receipts] == ["listings"]
+        assert provider_bridge.check_bridge_yields_to_hand_handlers() == []
+
+    def test_a_hand_handler_without_a_provider_changes_nothing(
+        self, registry, receipts, subscriptions
+    ):
+        from stapel_core.gdpr import provider_bridge
+
+        subscriptions.hand_written(ERASURE)
+
+        provider_bridge.bridge_erasure_requested(_request())
+
+        assert receipts == []
+        assert provider_bridge.check_bridge_yields_to_hand_handlers() == []
+
+
+class TestBridgedAndHandHandledIsAWarning:
+    """gdpr.W012 — the bridge yields, and says whose copy to delete."""
+
+    def test_it_names_the_section_and_the_hand_written_module(
+        self, registry, subscriptions
+    ):
+        from stapel_core.gdpr import provider_bridge
+
+        registry.register(_Provider("recordings"))
+        subscriptions.hand_written(ERASURE)
+
+        problems = provider_bridge.check_bridge_yields_to_hand_handlers()
+
+        assert [p.id for p in problems] == [provider_bridge.W012]
+        assert "recordings" in problems[0].msg
+        assert _hand_written_erasure_handler.__module__ in problems[0].msg
+        assert problems[0].__class__.__name__ == "Warning", "never blocks a boot"
+
+    def test_an_explicitly_registered_owner_is_not_warned_about(
+        self, registry, subscriptions
+    ):
+        from stapel_core.gdpr import provider_bridge
+        from stapel_core.gdpr.owners import _reset_gdpr_owners, register_gdpr_owner
+
+        _reset_gdpr_owners()
+        try:
+            registry.register(_Provider("agent"))
+            register_gdpr_owner("agent", ["account"], lambda t, k, w=None: {})
+            assert provider_bridge.check_bridge_yields_to_hand_handlers() == []
         finally:
             _reset_gdpr_owners()
