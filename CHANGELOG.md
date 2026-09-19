@@ -1,6 +1,24 @@
 # Changelog
 
-## [0.86.0] — 2026-09-19
+## [0.86.1] — 2026-09-19
+
+Patch: CI tested a copy of the repository, not the repository. Same contents
+as 0.86.0, which never published — its tag is gated on a CI run that cannot
+go green, because the fix below is not in it.
+
+### Fixed — the matrix jobs installed a second, non-editable copy
+
+`Install test dependencies` ran `pip install ".[dev]" …` without `-e`, which
+put a non-editable `stapel_core` into site-packages on top of the editable
+install from the step before it. Every matrix job's suite then imported THAT
+copy: a run reporting on a snapshot of the tree rather than the tree, and a
+green one would have meant nothing about the checkout. It went unseen because
+the two were byte-identical in practice — until stapel-tools 0.68.0 shipped
+the freshness gate that asserts the package under test imports from inside the
+repository, and the next CI run refused, correctly. Both workflows now install
+editable. The `concurrency` job already did, and was the one job that passed.
+
+## [0.86.0] — 2026-09-19 (tagged, never published)
 
 Minor: the bus learns to be asked "is it actually out?", the outbox stops
 answering that question for it, and the emit guard becomes a gate that can

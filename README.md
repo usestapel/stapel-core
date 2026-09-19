@@ -24,7 +24,7 @@ pip install stapel-core
 
 | Fact | Value |
 |---|---|
-| Version | `0.86.0` |
+| Version | `0.86.1` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | Django | `Django>=5.2,<7.0` |
 | Usage surface | 57 |

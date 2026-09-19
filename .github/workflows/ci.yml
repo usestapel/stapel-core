@@ -48,7 +48,14 @@ jobs:
         # stapel-tools (dependency-free) carries the capabilities emitter that
         # tests/test_contract.py drift-gates — without it that gate would skip,
         # and a silently skipped gate is how docs/capabilities.json rots.
-        run: pip install ".[dev]" pytest-django "stapel-tools>=0.22.0,<1"
+        #
+        # -e, and it is load-bearing: without it this step installs a SECOND,
+        # non-editable copy of the repo into site-packages, which then shadows
+        # the editable install from the step above and is what the suite
+        # imports. The run would report on a copy of the tree rather than the
+        # tree — the very thing stapel-tools' freshness gate (0.68.0+) exists
+        # to refuse, and it duly refused this job the day that release landed.
+        run: pip install -e ".[dev]" pytest-django "stapel-tools>=0.22.0,<1"
 
       - name: Tests with coverage
         run: |
