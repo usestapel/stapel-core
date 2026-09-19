@@ -1,5 +1,121 @@
 # Changelog
 
+## [0.87.0] — 2026-09-19
+
+Minor: a consumer that is a member of no group stops being able to look
+alive. New settings, a new management command, new metrics.
+
+### Fixed — 16 hours of a container that was "Up" and consuming nothing
+
+On a client host a broker disturbance made a Kafka action consumer log
+
+    SESSTMOUT ... revoking assignment and rejoining group
+
+and it never rejoined. It then polled, quietly, for **16 hours**: no error
+after that line, the container `Up`, no healthcheck failure, autoheal idle —
+while the consumer group had ZERO members, lag grew without bound, and not
+one message was processed until a human restarted the container. Every
+`consume_actions`-style worker in every deployment could do this.
+
+Three separate things allowed it, and each is fixed:
+
+1. **Nothing read the assignment.** A `poll()` returning `None` looks the
+   same whether the topic is quiet or this process belongs to nothing. The
+   only thing that tells them apart is the partition assignment, and no code
+   in the loop looked at it. `stapel_core.bus.liveness.ConsumerLiveness` now
+   tracks the last successful poll, the last non-empty assignment, the
+   assignment size (from librdkafka's `on_assign`/`on_revoke`/`on_lost`
+   callbacks, cross-checked against `consumer.assignment()`) and the client's
+   `error_cb` — fatal errors, `_ALL_BROKERS_DOWN`, `_MAX_POLL_EXCEEDED`.
+   Those classes never arrive as a *message*, so a loop that watches only
+   messages is structurally blind to them.
+
+2. **The heartbeat file lied.** It was touched after every poll *return*,
+   including the returns of a consumer that owned nothing — so during the
+   whole outage the liveness file stayed seconds old. It is now refreshed
+   **only while partitions are owned**. The in-process watchdog thread that
+   read that same file is deleted outright: a watchdog whose evidence the
+   failing loop keeps writing cannot detect the loop failing, and it is the
+   reason nothing fired all night.
+
+3. **There was no way out.** The cure is not a cleverer in-process rejoin —
+   librdkafka's own rejoin is the thing that silently failed. An empty
+   assignment (or no successful poll) for longer than
+   `STAPEL_BUS_CONSUMER_STALL_SECONDS` **while the brokers are reachable**,
+   or a fatal client error, is now logged CRITICAL with the facts and the
+   process **exits 75**, so the supervisor (`restart: unless-stopped`, a k8s
+   restart) hands the client a fresh process that joins the group cleanly.
+
+Two conditions are deliberately not that. **Unreachable brokers** (a real
+metadata request, not an assumption) hold the exit back and log instead — an
+empty assignment is then the correct state of the world and a restart loop
+against a dead cluster is churn. **A handler slower than the window** is work
+in progress, not silence: its elapsed time is credited back to both
+baselines, so no worker is ever killed mid-message, and a handler that
+outruns `max.poll.interval.ms` is reported as itself, with its own fix (a
+shorter handler, or a larger interval). The poll timeout is also bounded at
+1s whatever the caller passes — a loop that can block forever can notice
+nothing, including this.
+
+### Added — `manage.py bus_consumer_alive`, for the supervisor
+
+`python manage.py bus_consumer_alive --max-age 90` exits 0/1 on the age of
+the heartbeat file. It is a **separate process** on purpose. As a Docker
+HEALTHCHECK it is also what covers the one case the in-loop rule refuses to
+act on, a handler that hangs forever, so pick `--max-age` above the longest
+handler in the service:
+
+```yaml
+  actions-consumer:
+    command: python manage.py consume_actions
+    restart: unless-stopped          # the exit is only useful with this
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "bus_consumer_alive", "--max-age", "90"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+### Added — liveness metrics and the alert nobody had
+
+`stapel_bus_consumer_assignment_size` and
+`stapel_bus_consumer_seconds_since_last_poll` (gauges, labelled by `group`)
+and `stapel_bus_consumer_stall_exits_total` (counter), on the exporter that
+already carries `bus_dlq_total`, and declared at startup so an alert has a
+subject before anything goes wrong. The rule worth alerting on is
+`stapel_bus_consumer_assignment_size == 0 for 2m`; MODULE.md carries the
+rule file.
+
+### Added — settings
+
+- `STAPEL_BUS_CONSUMER_STALL_SECONDS` (env, then Django setting; default
+  `120`, `0` disables the exit entirely).
+- `STAPEL_BUS_CONSUMER_HEARTBEAT_PATH` (default
+  `/tmp/stapel-bus-consumer-alive`). The old `KAFKA_CONSUMER_HEARTBEAT` is
+  still honoured, so a deployment already pointing a probe at that file keeps
+  working. `KAFKA_CONSUMER_HEARTBEAT_STALENESS_S` and
+  `KAFKA_CONSUMER_WATCHDOG_INTERVAL_S` are gone with the watchdog thread.
+
+### Verdict — the NATS backend gets the heartbeat, not the exit
+
+Read rather than assumed: a JetStream pull consumer *asks* for messages over
+a connection it owns, so a broken connection surfaces as an exception from
+`fetch` instead of as silence; nats-py reconnects indefinitely and now
+announces both halves in the log (`disconnected_cb`/`reconnected_cb`); and a
+durable that vanished server-side raises out of the loop, ending the process
+non-zero already. There is no equivalent "member of nothing while looking
+busy" state for a stall exit to fix, so `NatsJetStreamBus` takes the
+heartbeat (touched only while connected) and the gauges, with its stall
+window at `0`.
+
+### Fixed — a retry test that hoped instead of asking
+
+`test_retry_is_held_for_the_backoff_and_not_hammered` asserted `not_before >
+now` against a full-jitter draw uniform over `[0, 60)`: an occasional draw of
+almost zero failed a ladder that was working perfectly. `retry_delay` now
+takes a `jitter=` source (defaulting to the new `full_jitter`), and the test
+injects a deterministic one.
+
 ## [0.86.1] — 2026-09-19
 
 Patch: CI tested a copy of the repository, not the repository. Same contents

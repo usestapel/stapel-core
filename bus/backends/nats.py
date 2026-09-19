@@ -39,6 +39,7 @@ from typing import Callable
 
 from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
 from ..event import Event
+from ..liveness import ConsumerLiveness
 
 logger = logging.getLogger(__name__)
 
@@ -406,8 +407,22 @@ class NatsJetStreamBus(BusBackend):
 
         from .._config import NatsBusConfig
 
+        async def _disconnected():
+            logger.warning(
+                "NatsJetStreamBus consumer group=%s disconnected — reconnecting "
+                "indefinitely; the heartbeat file stops being touched until it "
+                "is back, so a supervisor probe can see this", group,
+            )
+
+        async def _reconnected():
+            logger.info("NatsJetStreamBus consumer group=%s reconnected", group)
+
         nc = await nats.connect(
-            NatsBusConfig.url(), max_reconnect_attempts=-1, reconnect_time_wait=1
+            NatsBusConfig.url(),
+            max_reconnect_attempts=-1,
+            reconnect_time_wait=1,
+            disconnected_cb=_disconnected,
+            reconnected_cb=_reconnected,
         )
         js = nc.jetstream()
         await self._ensure_stream(js)
@@ -441,6 +456,23 @@ class NatsJetStreamBus(BusBackend):
             durable, outcome, subjects,
         )
 
+        # Liveness, but only the reporting half — see the module docstring's
+        # verdict. The Kafka backend can be a group member of nothing while
+        # looking busy; this one cannot. A pull consumer ASKS for messages on
+        # a connection it owns, so a broken connection surfaces as an
+        # exception from `fetch` rather than as silence, nats-py reconnects
+        # indefinitely and announces both halves (`disconnected_cb` /
+        # `reconnected_cb`), and a durable that disappeared server-side makes
+        # `fetch` raise out of this loop, which ends the process non-zero
+        # already. So there is nothing here for a stall exit to fix
+        # (`stall_window=0`); what was missing was the heartbeat, and a
+        # heartbeat that stops while the connection is down.
+        liveness = ConsumerLiveness(
+            group=group, topics=topics, backend="nats", stall_window=0,
+        )
+        liveness.on_assign(subjects)
+        liveness.declare_metrics()
+
         stopping = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -450,6 +482,11 @@ class NatsJetStreamBus(BusBackend):
                 pass
 
         while not stopping.is_set():
+            liveness.record_poll(
+                len(subjects) if getattr(nc, "is_connected", True) else 0
+            )
+            liveness.touch_heartbeat()
+            liveness.check()
             try:
                 msgs = await sub.fetch(batch=10, timeout=5)
             except asyncio.TimeoutError:
@@ -457,9 +494,11 @@ class NatsJetStreamBus(BusBackend):
             except nats.errors.TimeoutError:
                 continue
             for msg in msgs:
-                outcome = await loop.run_in_executor(
-                    None, self._process, msg.data, handler
-                )
+                liveness.record_message()
+                with liveness.handling():
+                    outcome = await loop.run_in_executor(
+                        None, self._process, msg.data, handler
+                    )
                 if outcome is None:
                     await msg.ack()
                 else:

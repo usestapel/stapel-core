@@ -593,6 +593,91 @@ also declares the series at zero for its topics at startup, so an alert on
 `rate(bus_dlq_total[15m])` has a subject before the first failure rather than
 after it.
 
+**A consumer with no assignment is not alive** (`bus/liveness.py`). On a
+client host a Kafka consumer logged one `SESSTMOUT … revoking assignment and
+rejoining group`, never rejoined, and then sat in its poll loop for 16 hours:
+the container was `Up`, no healthcheck went red, the consumer group had ZERO
+members and nothing was processed until a human restarted it. Three things
+were wrong and all three are fixed:
+
+- **The loop watches the assignment, not just the poll.** `ConsumerLiveness`
+  tracks the last successful `poll()`, the last non-empty assignment, the
+  current assignment size (from librdkafka's rebalance callbacks — `on_assign`
+  / `on_revoke` / `on_lost` — cross-checked against `consumer.assignment()`)
+  and the client's `error_cb` (fatal errors, `_ALL_BROKERS_DOWN`,
+  `_MAX_POLL_EXCEEDED`). Those error classes never become a *message*, so a
+  loop that only looks at messages cannot see them at all.
+- **The rule.** An empty assignment (or no successful poll) for longer than
+  `STAPEL_BUS_CONSUMER_STALL_SECONDS` (default 120, `0` disables) **while the
+  brokers are reachable**, or a fatal client error, is logged CRITICAL with
+  the facts and the process **exits 75**. Exiting is the mechanism: the
+  supervisor (`restart: unless-stopped`, a k8s restart) hands the client a
+  fresh process that joins the group cleanly. An in-process rejoin loop is
+  exactly what silently failed, so there is none. Reachability is a real
+  metadata request — if the brokers are gone, an empty assignment is the
+  correct state of the world and restarting cannot help, so the exit is held
+  back (and logged).
+- **Not a stall:** a handler slower than the window. Handler time is credited
+  back to both baselines, so a worker is never killed mid-message. A handler
+  that outruns `max.poll.interval.ms` is a different condition with a
+  different fix and is reported as itself.
+- **The heartbeat means something now.** `touch_heartbeat()` refreshes the
+  file **only while partitions are owned** — the old code touched it after
+  every poll return, including the returns of a consumer that owned nothing,
+  which is precisely why a file seconds old kept a dead container green for
+  sixteen hours. Path: `STAPEL_BUS_CONSUMER_HEARTBEAT_PATH` (default
+  `/tmp/stapel-bus-consumer-alive`; the older `KAFKA_CONSUMER_HEARTBEAT` is
+  still honoured). The in-process watchdog thread that used to read this file
+  is gone: a watchdog whose evidence the failing loop keeps writing cannot
+  detect that loop failing.
+- **The probe is a separate process.** `manage.py bus_consumer_alive
+  --max-age 90` exits 0/1 on the heartbeat's age — for a Docker HEALTHCHECK
+  (and it is what covers a handler that hangs forever, which the in-loop rule
+  deliberately will not act on). Pick `--max-age` above the longest handler
+  in the service.
+
+```yaml
+  actions-consumer:
+    command: python manage.py consume_actions
+    restart: unless-stopped          # the exit is only useful with this
+    environment:
+      STAPEL_BUS_CONSUMER_STALL_SECONDS: "120"
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "bus_consumer_alive", "--max-age", "90"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+Metrics (on the same exporter as `bus_dlq_total`, declared at startup so an
+alert has a subject before the first failure):
+`stapel_bus_consumer_assignment_size`,
+`stapel_bus_consumer_seconds_since_last_poll` (gauges, labelled by `group`)
+and `stapel_bus_consumer_stall_exits_total` (counter). The alert worth having
+is the one nobody had:
+
+```yaml
+- alert: BusConsumerHasNoAssignment
+  expr: stapel_bus_consumer_assignment_size == 0
+  for: 2m
+  labels: {severity: critical}
+  annotations:
+    summary: "Consumer group {{ $labels.group }} owns no partitions"
+    description: "It is a member of nothing and consumes nothing. The process
+      exits itself after STAPEL_BUS_CONSUMER_STALL_SECONDS; if this alert
+      persists, the restarts are not helping — look at the brokers."
+```
+
+**NATS needs the heartbeat, not the exit.** The Kafka client can be a group
+member of nothing while looking busy; a JetStream pull consumer cannot. It
+*asks* for messages over a connection it owns, so a broken connection
+surfaces as an exception from `fetch` rather than as silence; nats-py
+reconnects indefinitely and announces both halves
+(`disconnected_cb`/`reconnected_cb`, logged); and a durable that disappeared
+server-side makes `fetch` raise out of the loop, which already ends the
+process non-zero. So `NatsJetStreamBus` gets the heartbeat (touched only
+while `nc.is_connected`) and the gauges, and its stall window is `0`.
+
 **NATS durables are reconciled on every boot.** A JetStream durable outlives
 the process that made it, and `js.pull_subscribe(durable=…)` binds to an
 existing consumer while discarding the `ConsumerConfig` it is handed — so

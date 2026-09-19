@@ -29,6 +29,7 @@ which is pure and is what tests assert on.
 from __future__ import annotations
 
 import random
+from typing import Callable
 
 #: Default first-retry ceiling, in seconds.
 DEFAULT_BASE_SECONDS = 2.0
@@ -62,11 +63,26 @@ def retry_ceiling(
     return float(min(cap, base * (2 ** (attempt - 1))))
 
 
+def full_jitter(ceiling: float) -> float:
+    """The default jitter source: a uniform draw from ``[0, ceiling)``.
+
+    Separated out so it can be REPLACED. A test that asserts "the retry is
+    held" against the undecorated source is asserting on a random draw: with
+    ``base=60`` the draw is uniform over a minute, so roughly one run in a
+    few thousand lands close enough to zero that the hold has already
+    expired by the time the assertion reads it, and the test fails for a
+    reason that has nothing to do with the code it covers. A flake like that
+    costs more than the seam does — pass ``jitter=`` and know the answer.
+    """
+    return random.uniform(0.0, ceiling)
+
+
 def retry_delay(
     attempt: int,
     *,
     base: float = DEFAULT_BASE_SECONDS,
     cap: float = DEFAULT_CAP_SECONDS,
+    jitter: Callable[[float], float] | None = None,
 ) -> float:
     """Seconds to wait before retry number *attempt*, with full jitter.
 
@@ -74,16 +90,20 @@ def retry_delay(
     disables the wait entirely and returns 0.0 — the configuration a
     test or a single-process script wants, and the reason the ladder is
     a setting rather than a constant.
+
+    *jitter* takes the ceiling and returns the delay; it defaults to
+    :func:`full_jitter` and exists so a caller can be deterministic.
     """
     ceiling = retry_ceiling(attempt, base=base, cap=cap)
     if ceiling <= 0:
         return 0.0
-    return random.uniform(0.0, ceiling)
+    return (jitter or full_jitter)(ceiling)
 
 
 __all__ = [
     "DEFAULT_BASE_SECONDS",
     "DEFAULT_CAP_SECONDS",
+    "full_jitter",
     "retry_ceiling",
     "retry_delay",
 ]

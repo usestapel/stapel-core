@@ -106,7 +106,7 @@ def test_retry_then_success(settings):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_retry_is_held_for_the_backoff_and_not_hammered(settings):
+def test_retry_is_held_for_the_backoff_and_not_hammered(settings, monkeypatch):
     """THE regression this ladder exists for.
 
     Measured on a client fleet's stand before it: 215 parked screening
@@ -114,7 +114,15 @@ def test_retry_is_held_for_the_backoff_and_not_hammered(settings):
     provider calls fired inside one second because the requeue
     re-announced instantly. With a ladder, the second attempt does not
     happen until its hold expires; the provider gets one call, not three.
+
+    The jitter source is INJECTED, not hoped for. Full jitter draws
+    uniformly from [0, 60) here, so an undecorated draw occasionally lands
+    within a millisecond of zero and `not_before > now` fails on a ladder
+    that is working perfectly — a flake that says nothing about the code.
     """
+    from stapel_core.comm import backoff
+
+    monkeypatch.setattr(backoff, "full_jitter", lambda ceiling: ceiling)
     settings.STAPEL_COMM = {
         **getattr(settings, "STAPEL_COMM", {}), "TASK_RETRY_BACKOFF_BASE": 60,
     }

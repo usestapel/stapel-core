@@ -7,7 +7,6 @@ Set in Django settings:
 from __future__ import annotations
 
 import logging
-import os
 import signal
 import threading
 import time
@@ -16,14 +15,19 @@ from typing import Callable
 from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
 from ..dlq import record_parked
 from ..event import Event
+from ..liveness import ConsumerLiveness
 
 logger = logging.getLogger(__name__)
 
-HEARTBEAT_PATH = os.environ.get("KAFKA_CONSUMER_HEARTBEAT", "/tmp/kafka_consumer_alive")
-HEARTBEAT_STALENESS_S = int(os.environ.get("KAFKA_CONSUMER_HEARTBEAT_STALENESS_S", "120"))
-WATCHDOG_INTERVAL_S = int(os.environ.get("KAFKA_CONSUMER_WATCHDOG_INTERVAL_S", "30"))
-
 DLQ_SUFFIX = ".dlq"
+
+#: Upper bound on one ``poll()`` call, whatever the caller passed. A loop
+#: that can block forever cannot notice anything, including that it has
+#: stopped being a member of its group.
+MAX_POLL_TIMEOUT = 1.0
+
+#: Bound on the metadata request that answers "are the brokers reachable?".
+BROKER_PROBE_TIMEOUT = 5.0
 
 
 def _dlq_topic(topic: str) -> str:
@@ -171,12 +175,24 @@ class KafkaBus(BusBackend):
     ) -> None:
         from confluent_kafka import Consumer, KafkaError
         from stapel_core.bus._config import KafkaBusConfig
-        from stapel_core.django.db import worker_db_lifecycle
 
         config = KafkaBusConfig.consumer_config(group)
         self._provision_topics(topics)
+
+        # Built before the Consumer, because the client's own error callback
+        # is wired into its config: `error_cb` is how librdkafka reports the
+        # things that never become a message — every broker down, the
+        # session timeout that opened the incident, a fatal client state.
+        liveness = ConsumerLiveness(
+            group=group,
+            topics=topics,
+            backend="kafka",
+            brokers_reachable=lambda: self._brokers_reachable(consumer),
+        )
+        config["error_cb"] = liveness.on_broker_error
         consumer = Consumer(config)
-        consumer.subscribe(topics)
+        self._subscribe(consumer, topics, liveness)
+        liveness.declare_metrics()
 
         running = threading.Event()
         running.set()
@@ -188,12 +204,18 @@ class KafkaBus(BusBackend):
         signal.signal(signal.SIGINT, _shutdown)
         signal.signal(signal.SIGTERM, _shutdown)
 
-        self._start_watchdog(running)
+        # A poll that can block forever is a loop that can notice nothing.
+        poll_timeout = min(max(float(poll_timeout), 0.0), MAX_POLL_TIMEOUT)
 
         try:
             while running.is_set():
                 msg = consumer.poll(timeout=poll_timeout)
-                self._touch_heartbeat()
+                liveness.record_poll(self._assignment_size(consumer))
+                liveness.touch_heartbeat()
+                # Between messages — never inside a handler — the loop asks
+                # whether it is still a member of anything. It exits the
+                # process when it is not; see stapel_core.bus.liveness.
+                liveness.check()
                 if msg is None:
                     continue
                 if msg.error():
@@ -212,6 +234,8 @@ class KafkaBus(BusBackend):
                     logger.error("KafkaBus consumer error: %s", msg.error())
                     continue
 
+                liveness.record_message()
+
                 try:
                     event = Event.from_bytes(msg.value())
                 except Exception:
@@ -222,30 +246,12 @@ class KafkaBus(BusBackend):
                         consumer.commit(msg)
                     continue
 
-                retries = 0
-                dlq_ok = True
-                while retries <= 3:
-                    try:
-                        # Each ATTEMPT starts from a connection known to
-                        # answer. Without this the retries below are
-                        # structurally incapable of helping the most common
-                        # failure a long-lived consumer has: the database
-                        # dropped the idle connection, so all four attempts
-                        # reuse the same dead socket and the event is DLQ'd
-                        # — and so is every event after it, forever, because
-                        # nothing ever resets it. (a client stand, 46h of lost
-                        # notifications, 2026-08-26.) The NATS backend and
-                        # the function server already did this; the Kafka
-                        # path was the one loop that did not.
-                        with worker_db_lifecycle():
-                            handler(event)
-                        break
-                    except Exception:
-                        retries += 1
-                        if retries > 3:
-                            dlq_ok = self._send_to_dlq(msg.topic(), event)
-                        else:
-                            time.sleep(2 ** retries)
+                # The whole attempt ladder — handler plus its backoff sleeps
+                # — is work in progress, not idleness. `handling()` credits
+                # that time back, so a slow message can never spend the
+                # stall window and get its own worker killed for it.
+                with liveness.handling():
+                    dlq_ok = self._deliver(msg, event, handler)
                 # Commit only when the message was handled or confirmed in
                 # the DLQ — otherwise the offset would advance past a
                 # message that exists nowhere else (silent loss).
@@ -253,6 +259,79 @@ class KafkaBus(BusBackend):
                     consumer.commit(msg)
         finally:
             consumer.close()
+
+    def _deliver(self, msg, event: Event, handler) -> bool:
+        """Run *handler* with the retry ladder; True when the offset may move."""
+        from stapel_core.django.db import worker_db_lifecycle
+
+        retries = 0
+        while retries <= 3:
+            try:
+                # Each ATTEMPT starts from a connection known to answer.
+                # Without this the retries below are structurally incapable
+                # of helping the most common failure a long-lived consumer
+                # has: the database dropped the idle connection, so all four
+                # attempts reuse the same dead socket and the event is DLQ'd
+                # — and so is every event after it, forever, because nothing
+                # ever resets it. (a client stand, 46h of lost notifications,
+                # 2026-08-26.) The NATS backend and the function server
+                # already did this; the Kafka path was the one loop that did
+                # not.
+                with worker_db_lifecycle():
+                    handler(event)
+                return True
+            except Exception:
+                retries += 1
+                if retries > 3:
+                    return self._send_to_dlq(msg.topic(), event)
+                time.sleep(2 ** retries)
+        return True  # pragma: no cover - the ladder always returns above
+
+    @staticmethod
+    def _subscribe(consumer, topics: list[str], liveness: ConsumerLiveness) -> None:
+        """Subscribe with rebalance callbacks — the assignment is the signal.
+
+        ``on_lost`` exists since confluent-kafka 1.6 and is what fires when
+        the group membership is lost rather than handed over cleanly, which
+        is the incident's exact shape; an older client reports the same thing
+        through ``on_revoke``.
+        """
+        callbacks = {
+            "on_assign": lambda _c, parts: liveness.on_assign(parts),
+            "on_revoke": lambda _c, parts: liveness.on_revoke(parts),
+            "on_lost": lambda _c, parts: liveness.on_revoke(parts),
+        }
+        try:
+            consumer.subscribe(topics, **callbacks)
+        except TypeError:  # pragma: no cover - confluent-kafka < 1.6
+            callbacks.pop("on_lost")
+            consumer.subscribe(topics, **callbacks)
+
+    @staticmethod
+    def _assignment_size(consumer) -> int | None:
+        """How many partitions the client thinks it owns, or None if it cannot say.
+
+        The rebalance callbacks above are the primary source; this is the
+        cross-check, so that a client which somehow never fires them is still
+        read correctly rather than declared stalled.
+        """
+        try:
+            return len(consumer.assignment())
+        except Exception:
+            return None
+
+    @staticmethod
+    def _brokers_reachable(consumer) -> bool:
+        """Is the cluster answering? A real metadata request, not a guess.
+
+        This is what separates "we fell out of the group" (a restart fixes
+        it) from "the brokers are gone" (a restart is pointless churn).
+        """
+        try:
+            metadata = consumer.list_topics(timeout=BROKER_PROBE_TIMEOUT)
+            return bool(getattr(metadata, "brokers", None))
+        except Exception:
+            return False
 
     def _send_to_dlq(self, original_topic: str, event: Event) -> bool:
         record_parked(original_topic, event)
@@ -278,26 +357,12 @@ class KafkaBus(BusBackend):
             logger.exception("KafkaBus failed to DLQ undecodable message")
             return False
 
-    @staticmethod
-    def _touch_heartbeat() -> None:
-        try:
-            open(HEARTBEAT_PATH, "w").close()
-        except OSError:
-            pass
-
-    def _start_watchdog(self, running: threading.Event) -> None:
-        def _watch():
-            while running.is_set():
-                time.sleep(WATCHDOG_INTERVAL_S)
-                try:
-                    mtime = os.path.getmtime(HEARTBEAT_PATH)
-                    age = time.time() - mtime
-                    if age > HEARTBEAT_STALENESS_S:
-                        logger.critical("KafkaBus heartbeat stale (%.0fs), exiting", age)
-                        running.clear()
-                        os.kill(os.getpid(), signal.SIGTERM)
-                except FileNotFoundError:
-                    pass
-
-        t = threading.Thread(target=_watch, daemon=True)
-        t.start()
+    # The in-process watchdog thread that used to live here is gone on
+    # purpose. It read the very heartbeat file the loop refreshed after every
+    # poll — including the polls of a consumer that owned nothing — so during
+    # the sixteen-hour outage it saw a file seconds old and did nothing, all
+    # night. A watchdog whose evidence the failing loop keeps writing cannot
+    # detect that loop failing. The heartbeat now means "assigned and
+    # polling" (stapel_core.bus.liveness), the loop itself decides to exit,
+    # and judging staleness is the supervisor's job through
+    # `manage.py bus_consumer_alive` — a process outside the one being judged.

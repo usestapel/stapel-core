@@ -164,8 +164,14 @@ class FakeConsumer:
         self.closed = False
         self._delivered = False
 
-    def subscribe(self, topics):
+    def subscribe(self, topics, **callbacks):
         self.topics = topics
+        # The loop watches the assignment now (stapel_core.bus.liveness), so
+        # a fake that never gets one would be declared stalled.
+        callbacks["on_assign"](self, [object()])
+
+    def assignment(self):
+        return [object()]
 
     def poll(self, timeout=None):
         if self._delivered:
@@ -203,10 +209,9 @@ def kafka(monkeypatch):
     monkeypatch.setitem(sys.modules, "confluent_kafka", package)
     monkeypatch.setitem(sys.modules, "confluent_kafka.admin", admin)
 
-    # The loop's own signal handlers and watchdog are irrelevant here and
-    # cannot run off the main thread.
+    # The loop's own signal handlers are irrelevant here and cannot run off
+    # the main thread.
     monkeypatch.setattr(kafka_module.signal, "signal", lambda *a, **kw: None)
-    monkeypatch.setattr(kafka_module.KafkaBus, "_start_watchdog", lambda self, running: None)
     monkeypatch.setattr(kafka_module.time, "sleep", lambda seconds: None)
 
     return kafka_module
