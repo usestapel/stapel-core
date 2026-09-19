@@ -43,7 +43,7 @@ import time
 from typing import Callable
 
 from ...django.db import worker_db_lifecycle
-from ..base import BusBackend
+from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
 from ..dlq import record_parked
 from ..event import Event
 
@@ -107,6 +107,10 @@ class RedisStreamsBus(BusBackend):
         kwargs = {"maxlen": maxlen, "approximate": True} if maxlen else {}
         client.xadd(topic, {"data": event.to_bytes()}, **kwargs)
         logger.debug("RedisStreamsBus published topic=%s id=%s", topic, event.event_id)
+
+    def flush(self, timeout: float = DEFAULT_FLUSH_TIMEOUT) -> int:
+        """Always 0 — ``XADD`` is a synchronous round-trip to the server."""
+        return 0
 
     # ------------------------------------------------------------------
     # Consume

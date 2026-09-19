@@ -27,7 +27,7 @@ import os
 import threading
 from typing import Callable
 
-from ..base import BusBackend
+from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
 from ..event import Event
 
 _ROUTES_NAME = "STAPEL_BUS_ROUTES"
@@ -117,6 +117,18 @@ class RoutingBus(BusBackend):
 
     def publish(self, topic: str, event: Event) -> None:
         self._backend_for(self._target_for(topic)).publish(topic, event)
+
+    def flush(self, timeout: float = DEFAULT_FLUSH_TIMEOUT) -> int:
+        """Flush every backend this process actually opened; sum what is left.
+
+        Only the live ones: a route that was never published to has no
+        connection, and flushing it would mean dialling a broker at exit.
+        The timeout is per backend, which is the same shape as the per-call
+        contract — the caller's bound is on the wait for one transport.
+        """
+        with self._lock:
+            backends = list(self._backends.values())
+        return sum(backend.flush(timeout) for backend in backends)
 
     def consume(
         self,

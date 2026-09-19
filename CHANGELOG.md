@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.86.0] — 2026-09-19
+
+Minor: the bus learns to be asked "is it actually out?", the outbox stops
+answering that question for it, and the emit guard becomes a gate that can
+fire under tests.
+
+### Fixed — the outbox marked a row sent before any broker had seen it
+
+`relay._deliver_row` set `dispatched_at` on the return of `deliver()`. For an
+asynchronous producer that return means nothing: `KafkaBus.publish` calls
+`producer.produce(...)` and `poll(0)` and comes straight back, with the
+message in a process-local queue that a background thread will deliver. The
+row then says *sent*, so no later sweep will ever touch it — and a process
+that exits before the queue drains takes the message with it. librdkafka
+narrates the loss on the way out, which is how it was seen on a client host:
+
+    Producer terminating with 1 message (464 bytes) still in queue
+
+A management command that emits after a commit and returns is the whole
+reproduction. The message was LOST, not delayed — the retrying relay cannot
+help a row that was marked delivered.
+
+`dispatched_at` now means the transport CONFIRMED the message: the publish
+and the mark are separate steps with `bus.flush()` between them, and anything
+unconfirmed stays unsent for the relay to send again (at-least-once, as
+everywhere else in that file). The relay sweep flushes once per batch rather
+than once per row, so its throughput is unchanged.
+
+### Added — `flush()` on the bus, and an `atexit` that calls it
+
+- `BusBackend.flush(timeout) -> int` waits for the transport's delivery
+  reports and returns how many messages are still undelivered. The default
+  implementation returns `0` — correct for every backend whose `publish()`
+  already returns on the broker's acknowledgement (memory, Redis Streams'
+  XADD, NATS JetStream's awaited PubAck; the NATS override round-trips the
+  connection anyway so a broken one surfaces where it was asked about).
+  `KafkaBus` forwards to `Producer.flush(timeout)`, `RoutingBus` sums over
+  the backends the process actually opened.
+- `stapel_core.bus.flush(timeout=None)` is the process-wide form. It never
+  creates a backend, and logs a WARNING naming the count of what stayed
+  behind. `STAPEL_BUS_FLUSH_TIMEOUT` (env, then Django setting, default 5s)
+  bounds the wait.
+- The first `get_bus()` in a process registers an `atexit` hook that flushes,
+  so no library author has to remember. `atexit` rather than a wrapper around
+  `BaseCommand.execute`: the process that loses the message is also a celery
+  task process — which never passes through `BaseCommand.execute` for the
+  code that publishes, since the task runs in a pool process long after the
+  worker command started — a `django.setup()` script, a one-shot container
+  entrypoint and a recycled gunicorn worker. One hook covers all of them,
+  registered from the place that knows a producer now exists, and it never
+  raises on the way out.
+
+### Added — `stapel_core.testing`'s emit gate, and the depth it measures
+
+`STAPEL_COMM["EMIT_OUTSIDE_ATOMIC"] = "error"` was how a library was supposed
+to gate in CI on "emit() outside transaction.atomic()". It could never fire
+there. The switch only runs with the outbox on, and pytest-django wraps every
+database test in a transaction — so `connection.in_atomic_block`, the
+guard's question, is True from the first line of every test body. A gate that
+cannot start: green in every suite that set it, proving nothing about any of
+them. (A consumer library noticed and re-implemented depth tracking in its own
+conftest; that is what moves here.)
+
+- `stapel_core.comm.atomic` measures atomic DEPTH (`connection.atomic_blocks`,
+  with a savepoint-based fallback) and, when a baseline is armed, answers
+  "did the caller open a block of its own" instead of "is a transaction
+  open". Nothing is armed in production, where the answer is unchanged.
+- `stapel_core.testing.emit_outside_atomic_gate` is an autouse fixture: it
+  records the depth each test starts at (after pytest-django's own db
+  fixture, or the baseline would be 0 and the gate inert again), and an
+  `emit()` at that depth raises `EmitOutsideAtomicError` whatever production
+  is configured for. Importing it into a conftest is the whole installation.
+  `emit_outside_atomic_allowed` opts a single test back out.
+- Live in core's own suite, with `tests/test_emit_atomic_gate.py` as its
+  self-test: an emit at baseline depth must raise, and the inert behaviour it
+  replaces is pinned beside it. It found three tests in core — the ones
+  exercising the production `warn`/`allow`/`on_commit` paths of the guard —
+  which now take the opt-out fixture and say why.
+
 ## [0.85.1] — 2026-09-18
 
 Patch: the provider bridge yields to a library that already answers for

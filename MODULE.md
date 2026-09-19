@@ -288,7 +288,13 @@ Mechanical guards behind it (they also protect plain `emit()`):
   without its event (the categories C1 bug class);
 - `emit()` outside any atomic block (mutation and outbox row in separate
   transactions — the listings L2 bug class; also emit inside `on_commit`
-  callbacks) is flagged per `EMIT_OUTSIDE_ATOMIC` above;
+  callbacks) is flagged per `EMIT_OUTSIDE_ATOMIC` above — and under tests
+  that question is asked against DEPTH, see the emit gate below;
+- a row is marked `dispatched_at` only once the transport has CONFIRMED the
+  message (`bus.flush()` came back clean), never on the strength of
+  `publish()` returning. The first-chance dispatch after commit and the relay
+  sweep both wait; anything unconfirmed stays unsent and is re-sent, which is
+  the difference between an at-least-once delivery and a lost one;
 - `python -m stapel_core.lint.emit_check .` — static CI gate for the same
   classes (EMIT001 emit in except, EMIT002 swallowed emit, EMIT003
   mutation+emit without shared atomic, EMIT004 emit in on_commit, EMIT005 a
@@ -297,6 +303,33 @@ Mechanical guards behind it (they also protect plain `emit()`):
   emit_listing_updated` defect). Lexical only; suppress a proven false
   positive with `# emit-check: ok — <reason>`. Module repos run it in
   pre-commit/CI next to ruff.
+
+**The emit gate under tests — `stapel_core.testing`.** `EMIT_OUTSIDE_ATOMIC =
+"error"` was supposed to be how a library gated on the rule above in CI, and
+it could never fire there: the switch only runs with the outbox on, and
+pytest-django wraps every database test in a transaction, so
+`connection.in_atomic_block` is True from the first line of every test body. A
+gate that cannot start — green in every suite that set it, proving nothing
+about any of them. What the rule really asks is whether the code under test
+opened a transaction of its OWN, which is measurable inside the test
+transaction as atomic DEPTH against the depth the test started at
+(`comm/atomic.py`). Install it in a suite with one import:
+
+```python
+# conftest.py
+from stapel_core.testing import (  # noqa: F401
+    emit_outside_atomic_allowed,   # the per-test opt-out
+    emit_outside_atomic_gate,      # autouse: the import IS the installation
+)
+```
+
+An `emit()` at baseline depth then raises `EmitOutsideAtomicError` whatever
+production's `EMIT_OUTSIDE_ATOMIC` says. A test that means to emit there —
+one exercising the production modes of the guard, or a test with no
+transaction to speak of — takes the `emit_outside_atomic_allowed` fixture and
+gets the production semantics back for its duration. The gate's own self-test
+is `tests/test_emit_atomic_gate.py`: an emit at baseline depth must raise, and
+the inert behaviour it replaces is pinned there too.
 
 Review checklist for data-holding modules: every emit is atomic with its
 mutation, and a `test_failing_emit_rolls_back`-class test exists (see
@@ -488,7 +521,7 @@ env-first then Django setting): `KAFKA_BOOTSTRAP_SERVERS`,
 (`stapel.evt`); `STAPEL_REDIS_BUS_URL` (falls back to `REDIS_URL`),
 `STAPEL_REDIS_BUS_CLAIM_IDLE_MS` (`60000` — XAUTOCLAIM staleness threshold),
 `STAPEL_REDIS_BUS_STREAM_MAXLEN` (`100000`, approximate XADD trim; `0`
-disables). `redis_streams` maps one topic to one Redis stream (XADD), one
+disables); `STAPEL_BUS_FLUSH_TIMEOUT` (`5`, seconds — see `flush()` below). `redis_streams` maps one topic to one Redis stream (XADD), one
 consumer group per subscriber (XREADGROUP+XACK, group name = the `group`
 passed to `consume()` — same convention as Kafka's `group.id` / NATS's
 durable name), and reclaims entries abandoned by a dead consumer via
@@ -504,6 +537,39 @@ database server turns into a permanent outage (every later event fails with
 all reuse the same dead socket). `close_stale_connections()` probes with
 `is_usable()` rather than trusting `close_old_connections()`, which by design
 only closes what already errored or aged out.
+
+**Publishing is not delivery — `flush()`.** `publish()` is fire-and-forget,
+and for an asynchronous producer that is literal: librdkafka accepts the
+message into a process-local queue and a background thread delivers it, so
+`publish()` returning says nothing about a broker having seen anything. A
+process that exits right afterwards takes the queue with it — librdkafka says
+so on the way out (`Producer terminating with 1 message (464 bytes) still in
+queue`), and that message is *lost*, not delayed. So:
+
+- `BusBackend.flush(timeout) -> int` waits for the transport's delivery
+  reports and returns how many messages are STILL undelivered; `0` is the
+  only answer that means nothing was lost. The default implementation returns
+  `0` — correct for every backend whose `publish()` already returns on the
+  broker's acknowledgement (memory, Redis Streams' XADD, NATS JetStream's
+  awaited PubAck). `KafkaBus` overrides it with `Producer.flush(timeout)`;
+  `RoutingBus` sums over the backends this process actually opened.
+- `stapel_core.bus.flush(timeout=None)` is the process-wide form. It never
+  *creates* a backend (a process that never published must not dial a broker
+  to learn it has nothing in flight) and logs a WARNING naming the count when
+  something is left behind. Timeout: `STAPEL_BUS_FLUSH_TIMEOUT` (env, then
+  Django setting), default 5s — bounded, because the wait is on the exit path
+  of a process that has already finished its work.
+- **It is automatic.** The first `get_bus()` in a process registers an
+  `atexit` hook that flushes, so no library author has to remember. `atexit`
+  rather than a wrapper around `BaseCommand.execute` because the process that
+  loses the message is not always a management command: it is also a celery
+  task process (which never passes through `BaseCommand.execute` for the code
+  that publishes — the task runs in a pool process long after the worker
+  command started), a script calling `django.setup()`, a one-shot container
+  entrypoint and a recycled gunicorn worker. One hook covers all of them,
+  registered from the place that knows a producer now exists.
+- The outbox relay waits for it *before* marking a row `dispatched_at`, which
+  is the whole point — see the outbox section below.
 
 Every backend must also call `stapel_core.bus.dlq.record_parked(topic, event)`
 at the moment it gives up on an event (and with `reason="undecodable"` for a

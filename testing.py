@@ -306,3 +306,113 @@ def assert_declared_paths_resolve(schema: dict, urlconf=None) -> None:
         "is wrong, not the recipes — fix the urlconf this test declares, or "
         "the emission it is meant to mirror:\n  " + "\n  ".join(unresolved)
     )
+
+
+# ---------------------------------------------------------------------------
+# The emit gate — a guard that can actually fire under tests
+# ---------------------------------------------------------------------------
+#
+# ``emit()`` outside ``transaction.atomic()`` writes an outbox row detached
+# from the mutation it describes: a crash in between leaves the world changed
+# and the event unsent, forever. ``STAPEL_COMM["EMIT_OUTSIDE_ATOMIC"] =
+# "error"`` was supposed to be how a library gated on that in CI.
+#
+# It could never fire there. The switch only runs with the outbox on, and
+# pytest-django wraps every database test in a transaction, so
+# ``connection.in_atomic_block`` is True from the first line of every test
+# body — a gate that cannot start, green in thirty libraries' suites and
+# proving nothing about any of them. (One consumer library noticed and
+# re-implemented depth tracking in its own conftest; this is that mechanism,
+# moved to where every library can have it.)
+#
+# What the gate really asks is whether the code under test opened a
+# transaction of ITS OWN. That is measurable inside the test transaction, as
+# depth against the baseline the test started at — see
+# ``stapel_core.comm.atomic``.
+#
+# Turn it on for a whole suite by importing the fixture into conftest.py:
+#
+#     from stapel_core.testing import (  # noqa: F401
+#         emit_outside_atomic_gate,
+#     )
+#
+# It is autouse, so the import is the whole installation. A test that means
+# to emit at baseline depth (one that exercises the guard itself, or a
+# service-shaped test with no transaction to speak of) asks for the
+# ``emit_outside_atomic_allowed`` fixture and gets the production semantics
+# back for its duration.
+
+try:  # pytest is a test-time dependency; stapel_core.testing is importable without it
+    import pytest as _pytest
+except ModuleNotFoundError:  # pragma: no cover
+    _pytest = None
+
+
+#: Fixtures that open pytest-django's test transaction. The gate must record
+#: its baseline AFTER whichever of them the test uses, or the baseline is 0,
+#: every emit looks nested, and the gate is inert again — the exact failure
+#: this replaces.
+_DB_FIXTURES = (
+    "_django_db_helper",
+    "transactional_db",
+    "django_db_reset_sequences",
+    "db",
+)
+
+
+class _EmitGate:
+    """Handle for the armed gate — the opt-out fixture disarms it."""
+
+    def __init__(self) -> None:
+        self.aliases: list[str] = []
+
+    def arm(self) -> None:
+        from django.db import connections
+
+        from stapel_core.comm.atomic import set_baseline
+
+        for alias in connections:
+            set_baseline(connections[alias])
+            self.aliases.append(alias)
+
+    def disarm(self) -> None:
+        from stapel_core.comm.atomic import clear_baseline
+
+        for alias in self.aliases:
+            clear_baseline(alias)
+        self.aliases = []
+
+
+if _pytest is not None:
+
+    @_pytest.fixture(autouse=True)
+    def emit_outside_atomic_gate(request) -> Iterator["_EmitGate"]:
+        """Make ``emit()`` outside an atomic block an ERROR in this suite.
+
+        Records the atomic depth each test starts at; an ``emit()`` at that
+        same depth opened no transaction of its own and raises
+        ``EmitOutsideAtomicError``, whatever mode production is configured
+        for. Yields the gate, so a fixture can disarm it.
+        """
+        for name in _DB_FIXTURES:
+            if name in request.fixturenames:
+                request.getfixturevalue(name)
+                break
+
+        gate = _EmitGate()
+        gate.arm()
+        try:
+            yield gate
+        finally:
+            gate.disarm()
+
+    @_pytest.fixture
+    def emit_outside_atomic_allowed(emit_outside_atomic_gate) -> Iterator[None]:
+        """Opt one test out of the gate: back to production semantics.
+
+        For the tests that exercise the guard itself — warn mode, allow mode,
+        the on_commit case — and for a test that genuinely has no transaction
+        to be inside.
+        """
+        emit_outside_atomic_gate.disarm()
+        yield

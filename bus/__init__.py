@@ -3,6 +3,7 @@ stapel_core.bus — transport-agnostic message bus.
 
 Public API:
     publish(topic, event)         — send an event
+    flush(timeout=None)           — wait for published events to be delivered
     get_bus()                     — get the configured backend instance
     reset_bus()                   — force re-init (tests)
     Event                         — message envelope dataclass
@@ -19,7 +20,7 @@ import logging
 from .base import BusBackend
 from .consumer import BaseBusConsumerCommand
 from .event import Event
-from .router import get_bus, reset_bus
+from .router import flush, get_bus, reset_bus
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ def publish(topic: str, event: Event) -> None:
 
 __all__ = [
     "publish",
+    "flush",
     "get_bus",
     "reset_bus",
     "Event",

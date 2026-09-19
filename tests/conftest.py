@@ -31,6 +31,16 @@ configure_django(
 import pytest  # noqa: E402
 from stapel_core.bus import reset_bus  # noqa: E402
 
+# The core's own suite runs the emit gate it ships (stapel_core.testing): an
+# emit() at the atomic depth a test started at raises instead of quietly
+# writing a detached outbox row. Autouse — importing it is the installation.
+# A test that means to emit at baseline depth asks for the sibling fixture
+# emit_outside_atomic_allowed.
+from stapel_core.testing import (  # noqa: E402,F401
+    emit_outside_atomic_allowed,
+    emit_outside_atomic_gate,
+)
+
 
 @pytest.fixture(autouse=True)
 def reset_bus_singleton():

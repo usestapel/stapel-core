@@ -8,6 +8,10 @@ from typing import Callable
 
 from .event import Event
 
+#: Seconds ``flush()`` waits by default; ``STAPEL_BUS_FLUSH_TIMEOUT`` (env or
+#: Django setting) overrides it for the process-wide entry points.
+DEFAULT_FLUSH_TIMEOUT = 5.0
+
 
 class BusBackend(ABC):
     """
@@ -40,3 +44,31 @@ class BusBackend(ABC):
         Block indefinitely, calling *handler* for each incoming event.
         Implementations are responsible for retry, DLQ, and graceful shutdown.
         """
+
+    def flush(self, timeout: float = DEFAULT_FLUSH_TIMEOUT) -> int:
+        """Wait up to *timeout* seconds for queued messages to be delivered.
+
+        Returns how many are STILL undelivered when the wait ends — 0 means
+        the transport confirmed every one of them.
+
+        ``publish()`` is fire-and-forget, and for an asynchronous producer
+        that is literally true: librdkafka accepts the message into a local
+        queue and a background thread delivers it, so ``publish()`` returning
+        says nothing about any broker having seen it. A process that exits
+        right afterwards takes the queue with it —
+
+            Producer terminating with 1 message (464 bytes) still in queue
+
+        — which is a message lost, not delayed, and the commonest shape of it
+        is a management command that emits after a commit and returns. So the
+        ack has to be waitable, and every caller that says "delivered" on the
+        strength of a publish (the outbox relay, first of all) has to wait for
+        it first.
+
+        The default is for backends whose ``publish()`` already returns on the
+        broker's acknowledgement (memory, Redis Streams, NATS JetStream's
+        awaited PubAck): nothing is in flight when it returns, so there is
+        nothing to wait for and the answer is 0. Asynchronous producers
+        override it.
+        """
+        return 0

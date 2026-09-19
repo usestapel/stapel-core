@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Callable
 
-from ..base import BusBackend
+from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
 from ..dlq import record_parked
 from ..event import Event
 
@@ -73,6 +73,21 @@ class KafkaBus(BusBackend):
             callback=self._delivery_callback,
         )
         producer.poll(0)
+
+    def flush(self, timeout: float = DEFAULT_FLUSH_TIMEOUT) -> int:
+        """Wait for librdkafka's queue to drain; return what is left in it.
+
+        ``Producer.flush(timeout)`` serves the delivery reports of everything
+        queued and returns the number of messages still pending, which is
+        exactly this method's contract. A producer that was never created has
+        nothing queued by construction — and must not be created here, since
+        that would open a broker connection on the way out of a process that
+        never published anything.
+        """
+        producer = self._producer
+        if producer is None:
+            return 0
+        return producer.flush(timeout)
 
     @staticmethod
     def _delivery_callback(err, msg):

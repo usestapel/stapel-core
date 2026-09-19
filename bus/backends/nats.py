@@ -37,7 +37,7 @@ import threading
 import time
 from typing import Callable
 
-from ..base import BusBackend
+from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
 from ..event import Event
 
 logger = logging.getLogger(__name__)
@@ -367,6 +367,25 @@ class NatsJetStreamBus(BusBackend):
 
         self._run(_publish())
         logger.debug("NatsJetStreamBus published subject=%s id=%s", subject, event.event_id)
+
+    def flush(self, timeout: float = DEFAULT_FLUSH_TIMEOUT) -> int:
+        """Nothing is ever in flight here — but round-trip the connection.
+
+        ``publish()`` above awaits the JetStream PubAck, so by the time it
+        returns the stream has the message on disk: unlike the Kafka backend
+        this one cannot lose a published event to a process that exits, and
+        the honest answer is always 0. The ``nc.flush()`` round-trip is kept
+        anyway because it is cheap and it makes a broken connection surface
+        here, at the point a caller asked "is everything out?", instead of on
+        the next publish in some later process.
+        """
+        if self._js is None or self._nc is None or self._nc.is_closed:
+            return 0
+        try:
+            self._run(self._nc.flush(), timeout=timeout)
+        except Exception:
+            logger.warning("NatsJetStreamBus flush failed", exc_info=True)
+        return 0
 
     # ------------------------------------------------------------------
     # Consume

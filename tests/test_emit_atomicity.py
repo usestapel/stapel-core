@@ -197,10 +197,16 @@ def test_emitter_leaked_out_of_block_refuses_to_emit():
 # ---------------------------------------------------------------------------
 # emit() outside transaction.atomic() — runtime guard
 # ---------------------------------------------------------------------------
+#
+# The tests below take `emit_outside_atomic_allowed`: they are the ones that
+# exercise the PRODUCTION modes of the guard (warn, allow, the on_commit
+# case), which the suite-wide gate in conftest.py would otherwise turn into
+# raises. Everything else in this repo runs under the gate — see
+# tests/test_emit_atomic_gate.py for why that gate had to exist at all.
 
 
 @pytest.mark.django_db(transaction=True)
-def test_emit_outside_atomic_warns_by_default(caplog):
+def test_emit_outside_atomic_warns_by_default(caplog, emit_outside_atomic_allowed):
     with caplog.at_level(logging.WARNING, logger="stapel_core.comm.actions"):
         emit("user.created", {"user_id": "u1"})
     assert "outside transaction.atomic()" in caplog.text
@@ -217,7 +223,7 @@ def test_emit_outside_atomic_error_mode_raises():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_emit_outside_atomic_allow_mode_is_silent(caplog):
+def test_emit_outside_atomic_allow_mode_is_silent(caplog, emit_outside_atomic_allowed):
     with override_settings(STAPEL_COMM={"EMIT_OUTSIDE_ATOMIC": "allow"}):
         with caplog.at_level(logging.WARNING, logger="stapel_core.comm.actions"):
             emit("user.created", {"user_id": "u1"})
@@ -234,7 +240,7 @@ def test_emit_inside_atomic_does_not_warn(caplog):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_emit_in_on_commit_callback_is_flagged(caplog):
+def test_emit_in_on_commit_callback_is_flagged(caplog, emit_outside_atomic_allowed):
     """Adversarial: emitting from on_commit runs after commit — outside any
     transaction — so a crash in between silently loses the event. The
     outside-atomic guard fires for it."""

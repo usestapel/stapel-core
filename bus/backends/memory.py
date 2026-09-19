@@ -15,7 +15,7 @@ import threading
 from collections import defaultdict
 from typing import Callable
 
-from ..base import BusBackend
+from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
 from ..event import Event
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,10 @@ class MemoryBus(BusBackend):
                     handler(event)
         except queue.Empty:
             pass
+
+    def flush(self, timeout: float = DEFAULT_FLUSH_TIMEOUT) -> int:
+        """Always 0 — ``publish()`` delivered before it returned."""
+        return 0
 
     # ------------------------------------------------------------------
     # Test helpers

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from typing import Callable
 
 from ..bus.event import Event
+from .atomic import in_own_atomic_block, is_armed
 from .config import comm_setting, service_name
 from .exceptions import ActionDeliveryError, EmitOutsideAtomicError
 from .registry import ActionHandler, action_registry
@@ -61,7 +62,10 @@ def emit(
       (default, logs with caller location), ``"error"`` (raises
       :class:`EmitOutsideAtomicError`), ``"allow"``. This also fires for
       emit inside an ``on_commit`` callback — an event written *after*
-      commit is lost if the process dies in between.
+      commit is lost if the process dies in between. Under tests the
+      question is asked against the DEPTH a test started at, not against
+      ``in_atomic_block`` — see :mod:`stapel_core.comm.atomic` and the
+      ``emit_outside_atomic_gate`` fixture in :mod:`stapel_core.testing`.
     - If emit fails inside an atomic block, the transaction is marked
       rollback-only before the exception propagates. Even a caller that
       swallows the exception (the categories C1 bug) cannot commit the
@@ -85,8 +89,8 @@ def emit(
     from django.db import transaction
 
     connection = transaction.get_connection()
-    if not connection.in_atomic_block:
-        _emit_outside_atomic(name)
+    if not in_own_atomic_block(connection):
+        _emit_outside_atomic(name, gated=is_armed(connection.alias))
     try:
         action_registry.validate(name, event.payload)
         _emit_via_outbox(event)
@@ -101,15 +105,26 @@ def emit(
     return event
 
 
-def _emit_outside_atomic(name: str) -> None:
-    mode = comm_setting("EMIT_OUTSIDE_ATOMIC", "warn")
-    if mode == "allow":
-        return
+def _emit_outside_atomic(name: str, *, gated: bool = False) -> None:
     message = (
         "emit(%r) called outside transaction.atomic(): the outbox row commits "
         "detached from the mutation it describes. Wrap mutation+emit in "
         "stapel_core.comm.mutate_and_emit() (or transaction.atomic())."
     )
+    if gated:
+        # A test suite armed stapel_core.testing's gate: the emit happened at
+        # the depth the test STARTED at, so nothing in the code under test
+        # opened a transaction — under the gate that is an error whatever
+        # EMIT_OUTSIDE_ATOMIC says in production. Opt a single test out with
+        # the emit_outside_atomic_allowed fixture.
+        raise EmitOutsideAtomicError(
+            (message % name)
+            + " (stapel_core.testing's emit gate: the emit ran at the atomic "
+            "depth this test began at)"
+        )
+    mode = comm_setting("EMIT_OUTSIDE_ATOMIC", "warn")
+    if mode == "allow":
+        return
     if mode == "error":
         raise EmitOutsideAtomicError(message % name)
     logger.warning(message, name, stack_info=True)
