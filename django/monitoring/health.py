@@ -417,6 +417,32 @@ def prometheus_metrics(request):
                     f'{1 if c["state"] is DEP_OK else 0}'
                 )
 
+    # Is this scrape the whole service, or one worker of it?
+    #
+    # The gauge exists because the difference is invisible from outside and
+    # catastrophic for anything reading these numbers. Under
+    # `gunicorn --workers 2` with no PROMETHEUS_MULTIPROC_DIR, every series
+    # below and every series a library recorded belongs to whichever worker
+    # the socket handed this connection to — a gauge set in the other worker
+    # is simply absent, and an instant query for it comes back empty while a
+    # range query over the same window shows it. 1 means the exposition is
+    # aggregated across every process writing to the multiprocess directory
+    # (see stapel_core.observability.multiprocess); 0 means it is one
+    # process's own memory, which is correct for a single-worker deployment
+    # and a lie for any other.
+    try:
+        from stapel_core.observability.multiprocess import multiprocess_dir
+
+        multiproc = 1 if multiprocess_dir() else 0
+    except Exception:  # pragma: no cover - an old/partial install
+        multiproc = 0
+    metrics.append(f'# HELP {mp}metrics_multiprocess Whether this exposition '
+                   f'aggregates every worker process of this service')
+    metrics.append(f'# TYPE {mp}metrics_multiprocess gauge')
+    metrics.append(
+        f'{mp}metrics_multiprocess{{service="{service_name}"}} {multiproc}'
+    )
+
     # Append custom metrics from registered exporters
     fragments = [('this endpoint', '\n'.join(metrics))]
     for exporter in _custom_metrics_exporters:

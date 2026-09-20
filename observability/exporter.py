@@ -14,7 +14,13 @@ wiring of its own.
 from __future__ import annotations
 
 import logging
-import os
+
+# The multiprocess half lives in its own module now (it grew a directory
+# wipe, a dead-process hook and a process-model probe). Re-exported here
+# because every caller in and out of the fleet imports it from this one.
+from .multiprocess import MULTIPROC_ENV as _MULTIPROC_ENV  # noqa: F401
+from .multiprocess import mark_process_dead  # noqa: F401
+from .multiprocess import multiprocess_dir, prepare_multiprocess_dir  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -25,30 +31,9 @@ __all__ = [
     "facade_exposition",
     "serve_metrics",
     "multiprocess_dir",
+    "prepare_multiprocess_dir",
+    "mark_process_dead",
 ]
-
-# prometheus_client renamed this in 0.4; both spellings are still read by the
-# library itself, so both are read here or the two halves would disagree
-# about whether this process is in multiprocess mode.
-_MULTIPROC_ENV = ("PROMETHEUS_MULTIPROC_DIR", "prometheus_multiproc_dir")
-
-
-def multiprocess_dir() -> str | None:
-    """The ``PROMETHEUS_MULTIPROC_DIR`` this process runs under, if any.
-
-    Set, ``prometheus_client`` backs every value with an mmap'd file instead
-    of process memory, so a counter incremented in a forked child (a Celery
-    prefork worker, a gunicorn worker) is readable from the parent that
-    serves the scrape. Read from the environment and not from settings on
-    purpose: ``prometheus_client`` decides which value class to use when
-    ``prometheus_client.values`` is first imported, so a value written from
-    Python is already too late to mean anything.
-    """
-    for name in _MULTIPROC_ENV:
-        value = os.environ.get(name)
-        if value:
-            return value
-    return None
 
 
 def facade_exposition() -> str:

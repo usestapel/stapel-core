@@ -21,8 +21,14 @@ W004 Observability is configured, but ``TraceContextMiddleware`` is in no
 W005 ``EXPORTER_PORT`` is set on a management command that opens no listener,
      so everything this process records is scrapable from nowhere — which
      reads on a dashboard exactly like a counter that never fires.
+W006 The process model forks WORKERS (gunicorn ``--workers 2``, a Celery
+     prefork pool) and ``PROMETHEUS_MULTIPROC_DIR`` is unset, so every
+     worker keeps its own registry and a scrape reports whichever one the
+     socket picked. Measured on a live host: an instant query for a gauge
+     one worker had set came back empty while a twenty-minute range showed
+     samples of 1.
 
-**All four are gated on evidence of intent** — a ``STAPEL_OBSERVABILITY``
+**All of them are gated on evidence of intent** — a ``STAPEL_OBSERVABILITY``
 block in the settings module (or a flat setting from the namespace). A
 service that never adopted the facade is not told that a backend it never
 asked for is not installed; the same rule ``stapel_core.netintel.W003``
@@ -35,6 +41,7 @@ W002_METRICS_UNAVAILABLE = "stapel_core.observability.W002"
 W003_ERROR_REPORTER = "stapel_core.observability.W003"
 W004_NO_TRACE_MIDDLEWARE = "stapel_core.observability.W004"
 W005_EXPORTER_NEVER_SERVED = "stapel_core.observability.W005"
+W006_MULTIPROCESS_NOT_CONFIGURED = "stapel_core.observability.W006"
 
 _MIDDLEWARE_PATH = (
     "stapel_core.observability.middleware.TraceContextMiddleware"
@@ -308,4 +315,67 @@ def check_exporter_port_is_served(app_configs=None, **kwargs):
              "its handle() and set `stapel_serves_metrics = True` on the "
              "Command class so this check knows.",
         id=W005_EXPORTER_NEVER_SERVED,
+    )]
+
+
+# ─── W006: several workers, one registry each ────────────────────────────
+#
+# The defect, as it was measured rather than as it is imagined: a service
+# runs `gunicorn --workers 2`, a gauge is set in one worker, and an instant
+# query for it returns EMPTY roughly half the time — the half where the
+# scrape landed on the other worker — while a range query over the same
+# twenty minutes shows samples of 1. Counters undercount by the share of
+# scrapes that miss the worker that owns them. Every alert rule written over
+# an application metric is a coin flip, and the dashboard looks fine.
+#
+# The check fires on the process model, which is knowable before a single
+# request: the worker count a container was given, or a prefork pool with
+# concurrency above one. It cannot fire on "the gauge you set is invisible",
+# because by then it is a production incident.
+
+
+@checks.register("stapel_observability")
+def check_multiprocess_metrics(app_configs=None, **kwargs):
+    from .backends import NoopMetricsBackend, StatsdMetricsBackend
+    from .metrics import get_backend
+    from .multiprocess import multiprocess_dir, process_model_workers
+
+    if not _adopted():
+        return []
+    if multiprocess_dir():
+        return []
+
+    model = process_model_workers()
+    if model is None:
+        return []
+
+    backend = get_backend()
+    # Only Prometheus keeps per-process registries. A statsd agent
+    # aggregates for us, and a no-op backend has nothing to split.
+    if isinstance(backend, (NoopMetricsBackend, StatsdMetricsBackend)):
+        return []
+    if not getattr(backend, "available", True):
+        # W002 already says every measurement goes nowhere; saying that they
+        # also go nowhere in N processes helps no one.
+        return []
+
+    what, count = model
+    return [checks.Warning(
+        f"This process runs {count} {what} workers and "
+        "PROMETHEUS_MULTIPROC_DIR is not set, so each worker keeps its own "
+        "prometheus_client registry and a scrape reports whichever worker "
+        f"answered it — roughly 1/{count} of what the service recorded. A "
+        "gauge set in one worker is missing from most instant queries, "
+        "counters undercount, and an alert rule over any application metric "
+        "cannot be trusted.",
+        hint="Set PROMETHEUS_MULTIPROC_DIR in this container's ENVIRONMENT "
+             "(a tmpfs directory of its own, e.g. /run/prometheus), wipe it "
+             "at container start — "
+             "stapel_core.observability.multiprocess.prepare_multiprocess_dir "
+             "— and retire dead workers: gunicorn's child_exit and Celery's "
+             "worker_process_shutdown, both provided by "
+             "stapel_core.observability.gunicorn and "
+             "stapel_core.observability.celery. Running a single worker is "
+             "the other valid answer.",
+        id=W006_MULTIPROCESS_NOT_CONFIGURED,
     )]

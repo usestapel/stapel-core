@@ -320,10 +320,23 @@ class ConsumerLiveness:
                 ASSIGNMENT_GAUGE, self.assignment_size, labels,
                 description="Partitions currently assigned to this consumer "
                             "(0 means it is in no group and receives nothing)",
+                # Each consumer process owns a DIFFERENT share of the group's
+                # partitions, so the question a deployment asks — "is this
+                # service consuming the whole topic?" — is the sum across the
+                # living processes. `max` would hide a worker that owns
+                # nothing, which is the exact failure the guard above exists
+                # for; `all` would emit one series per pid.
+                multiprocess_mode="livesum",
             )
             metrics.gauge(
                 LAST_POLL_GAUGE, max(0.0, now - self.last_poll_at), labels,
                 description="Seconds since this consumer's last successful poll",
+                # The alert is "has ANY consumer in this group stopped
+                # polling", so the interesting value is the stalest one.
+                # `live`: a process that has exited is not a stalled
+                # consumer, and letting its final staleness grow forever
+                # would be an alert that can never clear.
+                multiprocess_mode="livemax",
             )
         except Exception:  # pragma: no cover - the facade already guards itself
             logger.debug("bus: liveness gauges not recorded", exc_info=True)

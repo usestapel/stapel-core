@@ -1773,6 +1773,65 @@ A long-running command of your own joins this list by calling
 setting `stapel_serves_metrics = True` on the Command class — the declaration
 `W005` reads.
 
+#### Several workers, one set of numbers (`PROMETHEUS_MULTIPROC_DIR`)
+
+The web half of the same defect, measured on a client host. A service running
+`gunicorn` with 2 workers keeps a `prometheus_client` registry **per worker**,
+and a scrape reaches whichever one the listening socket picked: a gauge set in
+worker A was missing from roughly half the instant queries, while a range
+query over the same twenty minutes showed it. Counters undercount, gauges
+flap, and no alert rule over an application metric can be trusted. Nothing
+logs; a service recording into nowhere looks exactly like a healthy one.
+
+Four things make multiprocess mode correct, and all four ship here:
+
+| what | where | why it is not optional |
+|---|---|---|
+| `PROMETHEUS_MULTIPROC_DIR`, a per-container tmpfs directory, in the **environment** | the container's entrypoint / compose | `prometheus_client` picks its value class when `prometheus_client.values` is first imported; a value assigned from Python is already too late |
+| the directory is **empty at container start** | `multiprocess.prepare_multiprocess_dir()`, also gunicorn's `on_starting` | files are named by pid, a restarted container reuses small pids, and a leftover `.db` is adopted by an unrelated new worker |
+| a worker that exits **stops being counted** | `multiprocess.mark_process_dead()`, wired into gunicorn `child_exit` and Celery `worker_process_shutdown` | otherwise a recycled worker's last gauge value outlives it and an alert over it can never clear |
+| every gauge declares `multiprocess_mode=` | `metrics.gauge(..., multiprocess_mode=...)` | the library default is `all` — one series **per pid**, so a one-line panel becomes N lines labelled by a number that means nothing |
+
+The gunicorn half is a config module: run
+`gunicorn config.wsgi:application -c python:stapel_core.observability.gunicorn`,
+or import `on_starting` / `child_exit` into a config file you already have.
+
+Pick the mode from what the number means, not from what looks safe:
+`livesum` when each worker owns a *share* (partitions assigned, connections
+held), `livemax` for a *flag* any worker can raise about the outside world
+(a provider is refusing), `livemostrecent` when every worker reads the *same*
+fact from the same place (a count from the database) — summing that one would
+multiply it by the worker count. `livemostrecent` is also the default, because
+it is what a single-process gauge always meant.
+
+`stapel_metrics_multiprocess` on `/api/metrics/` says which regime a scrape is
+in: 1 = aggregated across every worker, 0 = one process's memory. With the
+variable unset everything above is inert and the exposition is byte-identical
+to a deployment that never heard of it — and check
+[`W006`](#stapel_coreobservabilityw006) fires when the process model forks
+workers and the variable is missing.
+
+#### One alert per fact per window, per SERVICE
+
+The same per-process split runs on the alerting path. "At most one ERROR per
+provider per hour" written as a module-level dict is per *worker*: six workers
+refusing produce six pages about one fact, and the answer to that is a filter
+rule, after which the real alert is filtered too.
+
+`stapel_core.observability.throttle.claim_slot(key, interval)` claims the
+window on the shared cache — `cache.add(key, 1, ttl)`, atomic on Redis and
+memcached — so exactly one process wins it; the losers `incr` a companion key
+and the next winner reports how many occurrences it stands for.
+`release_slot(key)` re-arms it when the condition clears, so a recurrence
+after a recovery is as loud as the first time.
+
+`locmem` and `dummy` are treated as **not shared** and fall back to the
+in-process slot. Dummy stores nothing, so `add()` would always succeed and
+every occurrence would be loud — a throttle that silently stopped throttling.
+The fallback is exactly the old behaviour: losing the rate limit turns one
+true alert into a storm, while losing the alert is the defect the throttle
+lives inside of.
+
 #### Correlation — what no off-the-shelf APM can do here
 
 A generic APM does not know about `stapel_core.comm`, so a request that fans

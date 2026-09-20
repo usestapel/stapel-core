@@ -71,7 +71,7 @@ one (:mod:`stapel_core.observability.exporter`).
 """
 from __future__ import annotations
 
-from . import backends, metrics
+from . import backends, metrics, multiprocess, throttle
 from .backends import (
     LoggingMetricsBackend,
     MetricsBackend,
@@ -109,6 +109,12 @@ from .logs import (
     configure_logging,
     logging_config,
 )
+from .multiprocess import (
+    mark_process_dead,
+    multiprocess_dir,
+    prepare_multiprocess_dir,
+)
+from .throttle import claim_slot, release_slot, slot_is_shared
 
 # Health/readiness live in stapel_core.django.monitoring.health, whose import
 # pulls in the whole stapel_core.django package (drf-spectacular included) and
@@ -181,6 +187,16 @@ __all__ = [
     "sanitize_id",
     "parse_traceparent",
     "format_traceparent",
+    # multi-worker metrics
+    "multiprocess",
+    "multiprocess_dir",
+    "prepare_multiprocess_dir",
+    "mark_process_dead",
+    # cross-process alert throttle
+    "throttle",
+    "claim_slot",
+    "release_slot",
+    "slot_is_shared",
     # settings namespace (lazy)
     "observability_settings",
     # health/readiness (lazy re-export)

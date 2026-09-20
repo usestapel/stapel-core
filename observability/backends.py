@@ -28,7 +28,37 @@ __all__ = [
     "LoggingMetricsBackend",
     "PrometheusMetricsBackend",
     "StatsdMetricsBackend",
+    "GAUGE_MULTIPROCESS_MODES",
+    "DEFAULT_GAUGE_MULTIPROCESS_MODE",
 ]
+
+#: How a gauge's per-process values combine when the fleet runs in
+#: ``PROMETHEUS_MULTIPROC_DIR`` mode. The set ``prometheus_client`` accepts,
+#: repeated here so a wrong mode is caught by us — with the metric's name in
+#: the message — rather than raising out of a collector constructor.
+GAUGE_MULTIPROCESS_MODES = frozenset({
+    "all", "liveall",
+    "min", "livemin",
+    "max", "livemax",
+    "sum", "livesum",
+    "mostrecent", "livemostrecent",
+})
+
+#: The mode a gauge gets when its call site names none.
+#:
+#: NOT ``prometheus_client``'s own default, which is ``all``: that emits one
+#: series per pid, so a panel that was one line becomes N lines labelled by a
+#: pid that means nothing and disappears on the next recycle, and every alert
+#: written against the metric silently changes shape the day a deployment
+#: adds a second worker.
+#:
+#: ``livemostrecent`` is the mode whose SINGLE-process behaviour is identical
+#: to the old one — the value the last writer set — so a call site that says
+#: nothing keeps the semantics it was written with, while a second worker
+#: appearing no longer splits the series in two. ``live`` because a worker
+#: that has exited must stop voting: the alternative is a recycled worker's
+#: last value outliving it forever.
+DEFAULT_GAUGE_MULTIPROCESS_MODE = "livemostrecent"
 
 
 def _label_items(labels: Mapping | None) -> tuple:
@@ -71,8 +101,17 @@ class MetricsBackend:
         labels: Mapping | None = None,
         *,
         description: str = "",
+        multiprocess_mode: str | None = None,
     ) -> None:
-        """Set a series to *value* (a level: queue depth, pool size)."""
+        """Set a series to *value* (a level: queue depth, pool size).
+
+        *multiprocess_mode* says how the per-process values of this gauge
+        combine when the deployment runs several workers under
+        ``PROMETHEUS_MULTIPROC_DIR`` — ``livesum`` for something each worker
+        owns a share of, ``livemax`` for a flag any worker can raise,
+        ``livemostrecent`` for a fact every worker reads from the same
+        place. Backends that are not Prometheus ignore it.
+        """
 
     def histogram(
         self,
@@ -128,7 +167,8 @@ class LoggingMetricsBackend(MetricsBackend):
     def counter(self, name, value=1.0, labels=None, *, description=""):
         self._emit("counter", name, value, labels)
 
-    def gauge(self, name, value, labels=None, *, description=""):
+    def gauge(self, name, value, labels=None, *, description="",
+              multiprocess_mode=None):
         self._emit("gauge", name, value, labels)
 
     def histogram(self, name, value, labels=None, *, description="", buckets=None):
@@ -161,6 +201,7 @@ class PrometheusMetricsBackend(MetricsBackend):
     def __init__(self, registry=None) -> None:
         self._lock = threading.Lock()
         self._collectors: dict = {}
+        self._modes: dict = {}
         self._warned: set = set()
         self._registry = registry
         self._client = None
@@ -182,11 +223,14 @@ class PrometheusMetricsBackend(MetricsBackend):
     def available(self) -> bool:  # type: ignore[override]
         return self._client is not None
 
-    def _collector(self, kind, name, label_names, description, buckets):
+    def _collector(self, kind, name, label_names, description, buckets,
+                   multiprocess_mode=None):
         key = (kind, name, label_names)
         with self._lock:
             existing = self._collectors.get(key)
             if existing is not None:
+                if kind == "gauge":
+                    self._check_mode_agrees(key, name, multiprocess_mode)
                 return existing
             client = self._client
             kwargs = {"registry": self._registry}
@@ -196,8 +240,11 @@ class PrometheusMetricsBackend(MetricsBackend):
                         name, description or name, label_names, **kwargs
                     )
                 elif kind == "gauge":
+                    mode = self._gauge_mode(name, multiprocess_mode)
+                    self._modes[key] = mode
                     collector = client.Gauge(
-                        name, description or name, label_names, **kwargs
+                        name, description or name, label_names,
+                        multiprocess_mode=mode, **kwargs
                     )
                 else:
                     if buckets:
@@ -215,6 +262,46 @@ class PrometheusMetricsBackend(MetricsBackend):
             self._collectors[key] = collector
             return collector
 
+    def _gauge_mode(self, name, multiprocess_mode):
+        """The validated ``multiprocess_mode`` this gauge is declared with.
+
+        An unknown mode is a typo in instrumentation, and the answer to a
+        typo is not a collector that refuses to exist: the metric is created
+        with the default and the name of the offending mode is logged once.
+        """
+        if not multiprocess_mode:
+            return DEFAULT_GAUGE_MULTIPROCESS_MODE
+        mode = str(multiprocess_mode)
+        if mode not in GAUGE_MULTIPROCESS_MODES:
+            self._warn_once(
+                ("mode", name, mode), name,
+                f"unknown multiprocess_mode {mode!r}; using "
+                f"{DEFAULT_GAUGE_MULTIPROCESS_MODE!r}. One of "
+                f"{sorted(GAUGE_MULTIPROCESS_MODES)}",
+            )
+            return DEFAULT_GAUGE_MULTIPROCESS_MODE
+        return mode
+
+    def _check_mode_agrees(self, key, name, multiprocess_mode):
+        """Two call sites, two answers about how one gauge aggregates.
+
+        The first one wins — the collector already exists and its mode is
+        baked into the files it writes — so the second is said out loud
+        rather than silently ignored. A gauge that one module treats as a
+        sum and another as a flag is a dashboard that is wrong in a way
+        nobody can see from either call site.
+        """
+        if not multiprocess_mode:
+            return
+        declared = self._modes.get(key)
+        if declared and str(multiprocess_mode) != declared:
+            self._warn_once(
+                ("mode-conflict", key), name,
+                f"already registered with multiprocess_mode={declared!r}; "
+                f"this call asked for {multiprocess_mode!r} and the first one "
+                f"stands",
+            )
+
     def _warn_once(self, key, name, exc):
         if key in self._warned:
             return
@@ -226,12 +313,15 @@ class PrometheusMetricsBackend(MetricsBackend):
             exc,
         )
 
-    def _record(self, kind, name, value, labels, description, buckets=None):
+    def _record(self, kind, name, value, labels, description, buckets=None,
+                multiprocess_mode=None):
         if self._client is None:
             return
         items = _label_items(labels)
         label_names = tuple(k for k, _ in items)
-        collector = self._collector(kind, name, label_names, description, buckets)
+        collector = self._collector(
+            kind, name, label_names, description, buckets, multiprocess_mode
+        )
         if collector is False:
             return
         try:
@@ -250,8 +340,12 @@ class PrometheusMetricsBackend(MetricsBackend):
     def counter(self, name, value=1.0, labels=None, *, description=""):
         self._record("counter", name, value, labels, description)
 
-    def gauge(self, name, value, labels=None, *, description=""):
-        self._record("gauge", name, value, labels, description)
+    def gauge(self, name, value, labels=None, *, description="",
+              multiprocess_mode=None):
+        self._record(
+            "gauge", name, value, labels, description,
+            multiprocess_mode=multiprocess_mode,
+        )
 
     def histogram(self, name, value, labels=None, *, description="", buckets=None):
         self._record("histogram", name, value, labels, description, buckets)
@@ -375,7 +469,10 @@ class StatsdMetricsBackend(MetricsBackend):
     def counter(self, name, value=1.0, labels=None, *, description=""):
         self._send(f"{name}:{value}|c{self._suffix(labels)}")
 
-    def gauge(self, name, value, labels=None, *, description=""):
+    def gauge(self, name, value, labels=None, *, description="",
+              multiprocess_mode=None):
+        # multiprocess_mode is a Prometheus aggregation rule; statsd already
+        # aggregates in the agent, so there is nothing here to honour.
         self._send(f"{name}:{value}|g{self._suffix(labels)}")
 
     def histogram(self, name, value, labels=None, *, description="", buckets=None):

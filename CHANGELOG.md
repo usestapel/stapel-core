@@ -1,5 +1,137 @@
 # Changelog
 
+## [0.88.0] — 2026-09-20
+
+Minor: one set of numbers per service, not one per worker. Multiprocess
+metrics, gauge aggregation modes, a cross-process alert throttle, check
+W006.
+
+### Fixed — the scrape reported whichever worker answered it
+
+Measured on a client host, not inferred. Services run their web container as
+`gunicorn` with 2 gthread workers and no `PROMETHEUS_MULTIPROC_DIR`. Every
+worker is a separate OS process, `prometheus_client` keeps its values in that
+process's memory, and a scrape reaches exactly one of them — whichever the
+listening socket handed the connection to.
+
+A gauge set in one worker (a provider out-of-credits flag) was therefore
+visible only on the scrapes that landed on that worker: an **instant query
+came back EMPTY while a twenty-minute range query showed samples of 1**.
+Counters undercount by the share of scrapes that miss the worker that owns
+them, gauges flap between their value and absence, and every Grafana rule
+written over an application metric is a coin flip. Celery's prefork pool has
+the same split the other way round: task bodies run in forked children, the
+exporter runs in the parent.
+
+The failure is silent in both directions. Nothing logs, nothing 500s, and a
+dashboard of a service that records nothing looks exactly like a dashboard of
+a service where everything is fine.
+
+### The mechanism, and why this one
+
+`prometheus_client`'s own multiprocess mode — mmap-backed values in a shared
+directory plus a `MultiProcessCollector` that reads them — wired properly
+rather than switched on. The facade's Prometheus backend has collected
+through a `MultiProcessCollector` since 0.36.0 when the env was set; what was
+missing was everything that makes setting it *correct*:
+
+* **`stapel_core.observability.multiprocess`** — the module the rest hangs
+  off. `prepare_multiprocess_dir()` creates the directory and removes every
+  `.db` file in it; `mark_process_dead(pid)` retires a worker's live-mode
+  gauges; `process_model_workers()` answers "does this process fork
+  workers?" for check W006.
+
+  The wipe is not hygiene. The files are named by pid, a restarted container
+  hands out the same small pids again, and a leftover `counter_9.db` from the
+  previous run is silently adopted by the new pid 9 — a counter that appears
+  to jump or go backwards, which Prometheus reads as a reset.
+
+* **`stapel_core.observability.gunicorn`** — a gunicorn config module.
+  `on_starting` (master, before any fork) prepares the directory; `child_exit`
+  (master, when a worker dies for any reason) calls `mark_process_dead`.
+  Usable whole — `-c python:stapel_core.observability.gunicorn` — or composed
+  into a deployment's own config by importing the two hooks, or by
+  `install(globals())`.
+
+* **Celery's `worker_process_shutdown`** now retires a finishing prefork
+  child, alongside the `celeryd_init`/`beat_init` handlers 0.60.7 added.
+  Without it a recycled child keeps contributing its last gauge value
+  forever, which is an alert that can never clear.
+
+* **`multiprocess_mode` on every gauge.** `metrics.gauge(...)` takes it and
+  the Prometheus backend passes it to the collector. This is the part a
+  deployment cannot add from outside, and the part that silently breaks
+  dashboards: `prometheus_client`'s default is `all`, which emits **one
+  series per pid** — a panel that was one line becomes N lines labelled by a
+  number that means nothing and disappears on the next recycle.
+
+  The facade's default is `livemostrecent`, chosen because its single-process
+  behaviour is identical to what a gauge always meant (the value the last
+  writer set), so a call site that says nothing keeps its semantics while a
+  second worker stops splitting the series in two. `live*` throughout: a
+  process that has exited must stop voting.
+
+  Core's own gauges now declare theirs:
+
+  | metric | mode | why |
+  |---|---|---|
+  | `stapel_bus_consumer_assignment_size` | `livesum` | each consumer process owns a DIFFERENT share of the group's partitions; the question is whether the service consumes the whole topic. `max` would hide a process that owns nothing — the exact failure 0.87.0 exists for. |
+  | `stapel_bus_consumer_seconds_since_last_poll` | `livemax` | the alert is "has ANY consumer stalled", so the stalest one is the answer. `live` because a process that exited is not a stalled consumer, and its final staleness would otherwise grow forever. |
+
+* **`stapel_metrics_multiprocess`** on `/api/metrics/` — 1 when the
+  exposition aggregates every worker of this service, 0 when it is one
+  process's own memory. The difference was invisible from outside, which is
+  why it went unnoticed; now a scrape states which of the two it is.
+
+**A deployment with the variable unset behaves byte-identically to 0.87.0.**
+Every function here answers "not in multiprocess mode" and returns, and a
+declared `multiprocess_mode` is inert in a single process (asserted:
+exposition text compared with and without one).
+
+### Added — `stapel_core.observability.W006`
+
+Fires when the process model forks workers (gunicorn `--workers`/
+`WEB_CONCURRENCY` > 1, or a Celery prefork pool with concurrency > 1) and
+`PROMETHEUS_MULTIPROC_DIR` is unset, naming the worker count and what
+fraction of the service a scrape therefore reports. Gated on the same
+evidence-of-intent as W001–W005, silent for statsd (the agent aggregates) and
+for an unavailable backend (W002 already says that). It fires on the process
+model, which is knowable at boot — not on "the gauge you set is invisible",
+which is knowable only as an incident.
+
+### Added — a throttle that holds per SERVICE
+
+`stapel_core.observability.throttle.claim_slot(key, interval)`.
+
+The same arithmetic, on the alerting path. "One ERROR per provider per hour"
+written as a module-level dict is per WORKER: six workers refusing produce
+six pages about one fact, and the operator's answer to that is a filter rule,
+after which the real alert is filtered too.
+
+A slot is `cache.add(key, 1, ttl)` — atomic on Redis (`SET NX EX`) and
+memcached — so exactly one process in the fleet wins the window; the losers
+`incr` a companion key and the next winner reports how many occurrences it
+stands for (the shape `stapel-notifications` proved in production).
+
+`locmem` and `dummy` are detected as NOT shared and fall back to the
+process-local dict: dummy stores nothing, so `add()` always succeeds and
+every occurrence would be loud — a throttle that silently stops throttling.
+The fallback is exactly today's behaviour, chosen over "no throttle", because
+losing the rate limit turns one true alert into a storm.
+
+Verified with two real interpreters over a file-based cache: 10 occurrences
+across 2 processes → **1** alert.
+
+### Compatibility
+
+* No API is removed. `exporter.multiprocess_dir` still resolves (the
+  multiprocess half moved to its own module and is re-exported).
+* A host's own `MetricsBackend` subclass written against the old `gauge()`
+  signature keeps working: the facade retries without the keyword and says
+  so once, rather than dropping every gauge over an argument it never had to
+  know about.
+* `prometheus-client>=0.19` already accepts every mode used here.
+
 ## [0.87.0] — 2026-09-19
 
 Minor: a consumer that is a member of no group stops being able to look

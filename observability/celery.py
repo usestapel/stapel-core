@@ -116,8 +116,34 @@ def install(force: bool = False) -> bool:
 
     signals.celeryd_init.connect(_on_worker_start, dispatch_uid=_UID, weak=False)
     signals.beat_init.connect(_on_beat_start, dispatch_uid=_UID, weak=False)
+    # The prefork half of multiprocess metrics: a pool child that exits must
+    # stop contributing its last live-mode gauge value, or a flag it raised
+    # outlives it and the alert over it can never clear. Connected always —
+    # with PROMETHEUS_MULTIPROC_DIR unset the handler returns immediately.
+    signals.worker_process_shutdown.connect(
+        _on_worker_process_shutdown, dispatch_uid=_UID, weak=False
+    )
     _installed = True
     return True
+
+
+def _on_worker_process_shutdown(pid=None, exitcode=None, **kwargs) -> None:
+    """``worker_process_shutdown``: one prefork CHILD is going away.
+
+    Celery sends this in the child itself, so ``os.getpid()`` and the ``pid``
+    argument are the same process; the argument is preferred and the call is
+    guarded, because a shutdown handler that raises turns a clean stop into
+    a traceback in the log of every worker recycle.
+    """
+    try:
+        from .multiprocess import mark_process_dead
+
+        mark_process_dead(pid)
+    except Exception:  # pragma: no cover - mark_process_dead guards itself
+        logger.debug(
+            "stapel_core.observability: could not retire the metrics of a "
+            "finished pool child", exc_info=True,
+        )
 
 
 def _on_worker_start(sender=None, conf=None, options=None, **kwargs) -> None:

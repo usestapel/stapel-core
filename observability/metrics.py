@@ -223,14 +223,75 @@ def gauge(
     labels: Mapping | None = None,
     *,
     description: str = "",
+    multiprocess_mode: str | None = None,
 ) -> None:
-    """Set the gauge *name* to *value*."""
+    """Set the gauge *name* to *value*.
+
+    ``multiprocess_mode`` is how the per-worker values of this gauge combine
+    into one series when the deployment runs several processes under
+    ``PROMETHEUS_MULTIPROC_DIR`` (gunicorn workers, a Celery prefork pool).
+    **Name it.** The three that cover almost everything:
+
+    ``livesum``
+        each worker owns a SHARE of the quantity and the answer is the total
+        — partitions assigned to this service, connections held, items this
+        worker has in flight.
+    ``livemax``
+        a FLAG any worker can raise about something outside the process —
+        "this provider is refusing", "the quota is exhausted". One worker
+        seeing it is the whole fact; the series is 1 while any living worker
+        says so.
+    ``livemostrecent``
+        every worker reads the SAME underlying fact (a count from the
+        database, a level from a provider's API) and the freshest reading is
+        the truth. Summing would multiply it by the worker count; this is
+        also the default, because it is what a single-process gauge always
+        meant.
+
+    ``live*`` throughout: a worker that has exited must stop voting, which
+    is what :func:`stapel_core.observability.multiprocess.mark_process_dead`
+    (wired into gunicorn's ``child_exit`` and Celery's
+    ``worker_process_shutdown``) makes true.
+
+    With the environment variable unset the argument is inert and this
+    behaves exactly as it did before it existed.
+    """
+    backend = None
     try:
-        get_backend().gauge(
-            metric_name(name), value, labels, description=description
+        backend = get_backend()
+        backend.gauge(
+            metric_name(name), value, labels, description=description,
+            multiprocess_mode=multiprocess_mode,
         )
+    except TypeError:
+        # A backend written against the older signature (a host's own
+        # MetricsBackend subclass predating multiprocess_mode). Dropping its
+        # measurements over an argument it never had to know about would be
+        # this facade breaking the instrumentation it exists to protect.
+        try:
+            backend.gauge(
+                metric_name(name), value, labels, description=description
+            )
+        except Exception as inner:
+            _guard("gauge", name, inner)
+        else:
+            _guard_once_mode(backend)
     except Exception as exc:
         _guard("gauge", name, exc)
+
+
+def _guard_once_mode(backend) -> None:
+    key = ("gauge-mode", type(backend).__name__)
+    if key in _warned:
+        return
+    _warned.add(key)
+    logger.info(
+        "stapel_core.observability: the metrics backend %s does not accept "
+        "multiprocess_mode, so gauges recorded through it keep whatever "
+        "aggregation it chooses. Add the keyword to its gauge() to control "
+        "how several workers' values combine.",
+        type(backend).__name__,
+    )
 
 
 def histogram(
