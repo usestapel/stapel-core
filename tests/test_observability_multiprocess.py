@@ -513,6 +513,41 @@ class TestCrossProcessThrottle:
 
         assert all(throttle.claim_slot("t-off", 0)[0] for _ in range(3))
 
+    def test_a_disabled_throttle_still_reports_what_was_swallowed(self):
+        """Turning the window off must not erase the count it holds.
+
+        A caller ends a window by setting the interval to 0, and the loud
+        line it then emits says how many occurrences it stands for. A flat
+        0 there is a line claiming to be the first of its kind while three
+        were swallowed behind it.
+        """
+        from stapel_core.observability import throttle
+
+        throttle.clear_slots()
+        assert throttle.claim_slot("t-drain", 3600) == (True, 0)
+        for _ in range(3):
+            throttle.claim_slot("t-drain", 3600)
+        assert throttle.claim_slot("t-drain", 0) == (True, 3)
+        # Drained, not merely read.
+        assert throttle.claim_slot("t-drain", 0) == (True, 0)
+
+    def test_the_shared_count_survives_the_window_being_turned_off(
+        self, settings, tmp_path
+    ):
+        from stapel_core.observability import throttle
+
+        settings.CACHES = {
+            "default": {
+                "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+                "LOCATION": str(tmp_path / "drain"),
+            }
+        }
+        throttle.clear_slots()
+        assert throttle.claim_slot("t-shared-drain", 3600) == (True, 0)
+        for _ in range(3):
+            throttle.claim_slot("t-shared-drain", 3600)
+        assert throttle.claim_slot("t-shared-drain", 0) == (True, 3)
+
     def test_a_shared_cache_reports_the_suppressed_count(self, settings, tmp_path):
         from stapel_core.observability import throttle
 

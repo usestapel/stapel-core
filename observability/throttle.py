@@ -108,7 +108,11 @@ def claim_slot(
     thing it is alerting about.
     """
     if interval is None or interval <= 0:
-        return True, 0
+        # The throttle is off, but occurrences already swallowed must still
+        # be reported. Returning a flat 0 made the first loud line after a
+        # window was disabled claim it stood for nothing — the count is the
+        # whole reason the suppressed figure is carried.
+        return True, _drain_suppressed(key, alias)
     cache = _cache(alias)
     if cache is None:
         return _claim_local(key, interval)
@@ -144,6 +148,32 @@ def _claim_shared(cache, key: str, interval: float) -> tuple[bool, int]:
         cache.set(count_key, 1, ttl * 2)
         suppressed = 1
     return False, int(suppressed)
+
+
+def _drain_suppressed(key: str, alias: str | None) -> int:
+    """Take (and forget) what has been swallowed for *key* so far.
+
+    Reads both halves — the shared counter and this process's own — and
+    answers with the larger: a deployment that switched a cache on or off
+    between two occurrences must not be told fewer than actually happened.
+    """
+    with _lock:
+        _, local = _slots.pop(key, (None, 0))
+    suppressed = int(local)
+    cache = _cache(alias)
+    if cache is None:
+        return suppressed
+    try:
+        shared = cache.get(f"{KEY_PREFIX}{key}:suppressed") or 0
+        cache.delete(f"{KEY_PREFIX}{key}:suppressed")
+        cache.delete(f"{KEY_PREFIX}{key}")
+        suppressed = max(suppressed, int(shared))
+    except Exception:
+        logger.debug(
+            "stapel_core.observability: could not read the suppressed count "
+            "for %r", key, exc_info=True,
+        )
+    return suppressed
 
 
 def _claim_local(key: str, interval: float) -> tuple[bool, int]:

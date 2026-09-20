@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.88.1] — 2026-09-20
+
+Patch: a disabled throttle window no longer erases the count it was holding.
+
+`throttle.claim_slot(key, 0)` — the shape a caller uses to END a window
+deliberately (a test, a deployment that turns the limit off) — returned
+`(True, 0)` flat, so the loud line that followed claimed to stand for one
+occurrence while three had been swallowed behind it. The suppressed figure is
+the whole reason the count is carried; dropping it at the one moment it is
+read is the bug wearing the feature's clothes. Caught by stapel-agent's suite
+moving onto the shared slot.
+
+`interval <= 0` now drains both halves of the count — this process's own and
+the shared counter — reports the larger, and clears them, so the next window
+starts from zero rather than from a leftover.
+
 ## [0.88.0] — 2026-09-20
 
 Minor: one set of numbers per service, not one per worker. Multiprocess
