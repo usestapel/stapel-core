@@ -608,18 +608,24 @@ def status(task_id: str) -> TaskStatus:
 def handle_task_requested(event) -> None:
     """Framework subscriber for ``task.requested`` (wired by the taskstore
     app). Kinds not registered in this process belong to another service —
-    silently skipped."""
+    silently skipped.
+
+    The announcer's service travels with the dispatch: a task row lives in
+    the taskstore of the service that started it, and on a shared bus every
+    service that registers the kind hears the announcement — including one
+    whose database has never held that row (see :func:`_no_such_row`).
+    """
     kind = event.payload.get("kind", "")
     task_id = event.payload.get("task_id", "")
     if not task_id or kind not in _handlers:
         return
-    _dispatch(task_id)
+    _dispatch(task_id, announced_by=getattr(event, "service", "") or "", kind=kind)
 
 
-def _dispatch(task_id: str) -> None:
+def _dispatch(task_id: str, *, announced_by: str = "", kind: str = "") -> None:
     executor = comm_setting("TASK_EXECUTOR", "inline")
     if executor == "inline":
-        execute(task_id)
+        execute(task_id, announced_by=announced_by, kind=kind)
         return
     if executor == "celery":
         if _celery_execute is None:
@@ -634,7 +640,7 @@ def _dispatch(task_id: str) -> None:
                 "installed in this process. Install it (or the host's "
                 "[celery] extra), or set TASK_EXECUTOR to 'inline'."
             )
-        _celery_execute.delay(task_id)
+        _celery_execute.delay(task_id, announced_by=announced_by, kind=kind)
         return
     from django.utils.module_loading import import_string
 
@@ -645,16 +651,77 @@ try:  # celery executor is optional
     from celery import shared_task
 
     @shared_task(name="stapel_core.comm.tasks.execute")
-    def _celery_execute(task_id: str) -> None:
-        execute(task_id)
+    def _celery_execute(task_id: str, announced_by: str = "", kind: str = "") -> None:
+        execute(task_id, announced_by=announced_by, kind=kind)
 
 except ImportError:  # pragma: no cover
     _celery_execute = None
 
 
-def execute(task_id: str) -> None:
+#: DLQ reason for an announcement this service made about a row it does
+#: not have. Alert on ``bus_dlq_total{reason="orphan"}``.
+REASON_ORPHAN = "orphan"
+
+
+def _no_such_row(task_id: str, *, announced_by: str, kind: str) -> None:
+    """An announcement arrived for a task id that matches NO ROW here.
+
+    Two situations produce it, and they must not share a log line:
+
+    * **Another service's task.** Services share one bus and separate
+      databases. A recordings service starts ``llm.transcribe`` in ITS
+      taskstore and executes it through a bridge; the agent service, which
+      registers the same kind, hears the same announcement and finds
+      nothing — because there is nothing to find. Measured on a client
+      fleet: 32 ERROR lines a week, one per transcription, every one of
+      them about a task that was running fine next door. That is not an
+      error in this service; it is the topology. Logged at INFO and
+      skipped: the announcer executes its own row.
+
+    * **This service's own announcement.** An announcement leaves the
+      outbox only after the row committed (``comm/actions.py``:
+      ``on_commit``), so a missing own row means it was deleted while in
+      flight, or this consumer is connected to a database other than the
+      one the announcer wrote to. Redelivery cannot repair either. Parked
+      in the DLQ series a deployment already alerts on, with its own
+      reason, and logged as the error it is.
+
+    An announcement with no service attribution (a hand-built event, an
+    ``execute()`` called directly) cannot be told apart from the second
+    case and is treated as it.
+    """
+    from .config import service_name
+
+    own = service_name()
+    if announced_by and own and announced_by != own:
+        logger.info(
+            "comm: task %s (%s) was announced by service %r and has no row in "
+            "this service's (%r) taskstore — it is that service's task, in "
+            "that service's database, and that service executes it. Skipped.",
+            task_id, kind or "?", announced_by, own,
+        )
+        return
+    logger.error(
+        "comm: task %s (%s) was announced by this service (%r) but no such "
+        "row exists in its taskstore — the announcement cannot be recovered "
+        "by redelivery: the outbox publishes only after the row committed, "
+        "so the row was deleted in flight or this consumer reads a database "
+        "the announcer did not write to. Parked: "
+        "bus_dlq_total{topic=\"task.%s\", reason=\"%s\"}.",
+        task_id, kind or "?", announced_by or own or "", kind or "unknown",
+        REASON_ORPHAN,
+    )
+    _park_in_dlq(kind or "unknown", REASON_ORPHAN)
+
+
+def execute(task_id: str, *, announced_by: str = "", kind: str = "") -> None:
     """Claim and run one task. Safe under at-least-once redelivery: only a
-    PENDING record whose backoff has expired can be claimed."""
+    PENDING record whose backoff has expired can be claimed.
+
+    *announced_by* / *kind* describe the announcement that led here (the
+    framework subscriber passes them); they matter only when no row
+    matches — see :func:`_no_such_row`.
+    """
     from django.core.exceptions import ValidationError
     from django.db import transaction
     from django.db.models import Q
@@ -675,18 +742,10 @@ def execute(task_id: str) -> None:
             # sweep re-announce it when it comes due. Sleeping here instead
             # would hold a worker hostage to a provider outage.
             #
-            # A task id that matches NO ROW is not ordinary. It is an
-            # announcement about work this service cannot account for, and
-            # until it was logged the only way to see one was to notice
-            # that nothing happened. Never silent.
+            # A task id that matches NO ROW is not ordinary — unless it is
+            # another service's row. Never silent either way.
             if not TaskRecord.objects.filter(pk=task_id).exists():
-                logger.error(
-                    "comm: task %s was announced but no such row exists in "
-                    "this service's taskstore — the announcement is being "
-                    "dropped. Either it belongs to another deployment's "
-                    "database, or the row was deleted while in flight.",
-                    task_id,
-                )
+                _no_such_row(task_id, announced_by=announced_by, kind=kind)
             return
         record.state = TaskRecord.RUNNING
         record.attempts += 1

@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.90.0] — 2026-09-22
+
+Minor: a task announcement that reaches a service whose database never
+held the row is classified by who announced it.
+
+### Fixed — "announced but no such row" was an ERROR about the topology
+
+Measured on a client fleet: 32 ERROR lines a week from the agent
+service's action consumer, one per transcription — every one of them about
+a task that was being executed, correctly, by the recordings service that
+had started it.
+
+Services share one bus and separate databases. A recordings service starts
+`llm.transcribe` in ITS taskstore and executes it through its bridge to
+the agent's Function; the agent service registers the same task kind, so
+its consumer hears the same `task.requested`, looks in ITS taskstore, finds
+nothing — because there is nothing to find — and logged the error 0.85.0
+introduced for a genuinely missing row. The announcement was never lost:
+the row lives in the announcer's database, and the announcer ran it. The
+log line said "dropped", which sent an on-call engineer hunting for a race
+that does not exist (the outbox publishes only after the row committed —
+`comm/actions.py` `on_commit`; `start()` joins the caller's transaction).
+
+`handle_task_requested` now passes the announcement's `service` to
+`execute()`, and a miss is classified:
+
+- announced by ANOTHER service → INFO, skipped: it is that service's task
+  in that service's database;
+- announced by THIS service (or unattributed) → still ERROR, and now also
+  parked in `bus_dlq_total{topic="task.<kind>", reason="orphan"}`, the
+  series a deployment already alerts on. Redelivery cannot repair it: the
+  row was deleted in flight, or the consumer reads a database the
+  announcer did not write to.
+
+A row that IS found is executed whoever announced it, so a fleet whose
+services share one database is unchanged.
+
+`execute(task_id, *, announced_by="", kind="")` — the keywords are
+optional; direct callers are unaffected. The Celery executor forwards them.
+
 ## [0.89.0] — 2026-09-21
 
 Minor: a Function reply that was produced is no longer lost because nobody

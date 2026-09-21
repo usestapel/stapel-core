@@ -99,7 +99,9 @@ def test_start_without_deadline_leaves_it_null():
 def test_dispatch_inline_executes_directly(settings, monkeypatch):
     settings.STAPEL_COMM = {"TASK_EXECUTOR": "inline"}
     ran = []
-    monkeypatch.setattr(tasks_mod, "execute", ran.append)
+    # The announcement's attribution rides along as keywords (see
+    # _no_such_row); the stub takes them the way execute() does.
+    monkeypatch.setattr(tasks_mod, "execute", lambda task_id, **kw: ran.append(task_id))
     tasks_mod._dispatch("task-1")
     assert ran == ["task-1"]
 
@@ -108,7 +110,8 @@ def test_dispatch_celery_uses_delay(settings, monkeypatch):
     settings.STAPEL_COMM = {"TASK_EXECUTOR": "celery"}
     delayed = []
     monkeypatch.setattr(
-        tasks_mod, "_celery_execute", SimpleNamespace(delay=delayed.append)
+        tasks_mod, "_celery_execute",
+        SimpleNamespace(delay=lambda task_id, **kw: delayed.append(task_id)),
     )
     tasks_mod._dispatch("task-2")
     assert delayed == ["task-2"]
@@ -126,7 +129,7 @@ def test_dispatch_dotted_path_executor(settings, monkeypatch):
 
 def test_celery_task_body_calls_execute(monkeypatch):
     ran = []
-    monkeypatch.setattr(tasks_mod, "execute", ran.append)
+    monkeypatch.setattr(tasks_mod, "execute", lambda task_id, **kw: ran.append(task_id))
     tasks_mod._celery_execute("task-4")  # direct call runs the body eagerly
     assert ran == ["task-4"]
 
