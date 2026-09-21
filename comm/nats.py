@@ -129,10 +129,76 @@ def reset_bridge() -> None:
         _bridge = None
 
 
-def nats_function_transport(name: str, payload: dict, *, timeout: float | None = None) -> Any:
-    """Client side: call *name* over NATS request-reply."""
+def _decode_reply(raw: bytes, name: str) -> Any:
+    """One reply frame → the value ``call()`` returns.
+
+    Shared by the wire path and the recovery path so a reply recovered from
+    the store is treated exactly like one that arrived: same reference
+    resolution, same error mapping, same result shape.
+    """
+    reply = json.loads(raw.decode() or "{}")
+
+    # THE ANSWER MAY BE A REFERENCE. Resolved here, so no caller ever learns
+    # that its result took a different road: call() returns the same object
+    # it would have returned on a smaller input. See comm/overflow.py.
+    ref = overflow.reference_in(reply)
+    if ref is not None:
+        raw = overflow.dereference(ref, function=name)
+        reply = json.loads(raw.decode() or "{}")
+
+    if isinstance(reply, dict) and reply.get("error"):
+        # The server ran the function fine but its answer did not fit the wire.
+        # It sends this small marker INSTEAD of the result so the caller gets a
+        # real error instead of sitting until timeout — see serve_functions.
+        if reply.get("error_code") == "payload_too_large":
+            raise FunctionPayloadTooLarge(
+                name,
+                int(reply.get("size") or 0),
+                int(reply.get("limit") or 0),
+                direction="reply",
+            )
+        raise FunctionCallError(f"function '{name}' failed remotely: {reply['error']}")
+    return reply.get("result") if isinstance(reply, dict) else reply
+
+
+def nats_function_transport(
+    name: str,
+    payload: dict,
+    *,
+    timeout: float | None = None,
+    reply_key: str = "",
+) -> Any:
+    """Client side: call *name* over NATS request-reply.
+
+    *reply_key* names this call for the provider. When it is set and the
+    deployment has an overflow store, the provider persists the finished
+    reply under a key derived from it BEFORE publishing, and this function
+    looks there both before issuing the request and after a failed one. The
+    effect is that a reply lost on the wire — an inbox that died with a
+    restarted process, a reconnect mid-request — costs a read instead of
+    the paid work that produced it. See comm/overflow.py.
+    """
     effective_timeout = timeout or comm_setting("FUNCTION_TIMEOUT", 5.0)
-    data = json.dumps({"payload": payload}, default=str).encode()
+
+    if reply_key:
+        # BEFORE THE WIRE. An earlier attempt of this same call may already
+        # have been answered — by a provider whose publish nobody heard.
+        # Paying the provider again to re-learn what is sitting in the
+        # bucket is the failure this whole path exists to stop.
+        stored = overflow.take_durable_reply(name, reply_key)
+        if stored is not None:
+            logger.info(
+                "function %s: an earlier attempt of this call was already "
+                "answered (reply_key=%s) — taking the stored reply instead of "
+                "calling the provider again",
+                name, reply_key,
+            )
+            return _decode_reply(stored, name)
+
+    envelope: dict[str, Any] = {"payload": payload}
+    if reply_key:
+        envelope["reply_key"] = reply_key
+    data = json.dumps(envelope, default=str).encode()
 
     # Refuse an oversized REQUEST here rather than at the wire: nats-py raises
     # a bare MaxPayloadError from publish(), which arrives as an opaque
@@ -177,28 +243,20 @@ def nats_function_transport(name: str, payload: dict, *, timeout: float | None =
                 f"no service is serving function '{name}' "
                 f"(subject {subject_for(name)!r}); is its serve_functions worker up?"
             ) from exc
+        # AFTER THE WIRE. A timeout here does not mean the provider did
+        # nothing — it means WE heard nothing. If it finished and persisted
+        # the answer, the work is on the shelf and the only thing that
+        # failed is the delivery.
+        if reply_key:
+            stored = overflow.take_durable_reply(name, reply_key)
+            if stored is not None:
+                logger.error(
+                    "function %s: no reply arrived (%r), but the provider had "
+                    "already finished and persisted one (reply_key=%s) — "
+                    "recovering it. The publish was lost, the work was not.",
+                    name, exc, reply_key,
+                )
+                return _decode_reply(stored, name)
         raise FunctionCallError(f"function '{name}' failed over NATS: {exc!r}") from exc
 
-    reply = json.loads(raw.decode() or "{}")
-
-    # THE ANSWER MAY BE A REFERENCE. Resolved here, so no caller ever learns
-    # that its result took a different road: call() returns the same object
-    # it would have returned on a smaller input. See comm/overflow.py.
-    ref = overflow.reference_in(reply)
-    if ref is not None:
-        raw = overflow.dereference(ref, function=name)
-        reply = json.loads(raw.decode() or "{}")
-
-    if isinstance(reply, dict) and reply.get("error"):
-        # The server ran the function fine but its answer did not fit the wire.
-        # It sends this small marker INSTEAD of the result so the caller gets a
-        # real error instead of sitting until timeout — see serve_functions.
-        if reply.get("error_code") == "payload_too_large":
-            raise FunctionPayloadTooLarge(
-                name,
-                int(reply.get("size") or 0),
-                int(reply.get("limit") or 0),
-                direction="reply",
-            )
-        raise FunctionCallError(f"function '{name}' failed remotely: {reply['error']}")
-    return reply.get("result") if isinstance(reply, dict) else reply
+    return _decode_reply(raw, name)

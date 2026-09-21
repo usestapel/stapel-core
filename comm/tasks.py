@@ -79,6 +79,17 @@ TASK_REQUESTED = "task.requested"
 TASK_COMPLETED = "task.completed"
 TASK_FAILED = "task.failed"
 
+#: Reserved ledger entry: the Function calls this task has made, as
+#: ``{reply_key: function}``. Not a checkpoint — a checkpoint says what a
+#: step PRODUCED, this says what a step ASKED FOR and where the answer will
+#: be if it was produced and never delivered. The ``$`` cannot collide with
+#: a handler's own checkpoint names for the same reason overflow chose it.
+CALLS_LEDGER = "$calls"
+
+#: Extra time a task past its deadline is given when a finished reply is
+#: found waiting for it. One more attempt, which now costs a read.
+DEFAULT_RECOVERY_GRACE_SECONDS = 300
+
 # ─── Metrics ──────────────────────────────────────────────────────────
 #
 # The Task primitive shipped with none, and the consequence is measurable:
@@ -199,10 +210,105 @@ class TaskContext:
             return default
         return _decode_checkpoint(entry, self.kind, name, default)
 
+    def name_call(self, function: str, payload: dict) -> str:
+        """The reply key for one Function call made inside this task.
+
+        Derived from the task id and the call itself, so every attempt of
+        the same call computes the SAME key — that is what lets attempt two
+        read the answer attempt one was never told about. Recorded on the
+        row as well, so a sweep that has only the task can still ask
+        whether a finished reply is waiting (see :func:`recoverable_replies`).
+
+        Never raises: a task whose ledger cannot be written behaves exactly
+        as it did before this existed.
+        """
+        import hashlib
+        import json
+
+        try:
+            fingerprint = json.dumps(
+                {"fn": function, "payload": payload}, sort_keys=True, default=str
+            ).encode()
+        except Exception:  # pragma: no cover - default=str takes everything
+            return ""
+        key = f"{self.id}.{hashlib.sha256(fingerprint).hexdigest()[:16]}"
+
+        ledger = dict(self.checkpoints.get(CALLS_LEDGER) or {})
+        if ledger.get(key) == function:
+            return key
+        ledger[key] = function
+        self.checkpoints[CALLS_LEDGER] = ledger
+        try:
+            from ..django.taskstore.models import TaskRecord
+
+            TaskRecord.objects.filter(pk=self.id).update(checkpoints=self.checkpoints)
+        except Exception:
+            # The call still gets its key — the provider will persist the
+            # reply and this attempt will read it back. Only the sweep's
+            # ability to find it later is lost.
+            logger.warning(
+                "task %s (%s): the call ledger for %s was not persisted; a "
+                "reply lost after this point will not be recoverable by the "
+                "deadline sweep", self.id, self.kind, function, exc_info=True,
+            )
+        return key
+
 
 def current_task() -> "TaskContext | None":
     """The task this thread is executing, or None outside a handler."""
     return _current_task.get()
+
+
+def reply_key_for(name: str, payload: dict) -> str:
+    """Name this Function call so a lost reply can be collected later.
+
+    Empty outside a task handler: a caller with no retry ladder has nothing
+    to come back with, and persisting an answer nobody will ask for again
+    would leave a copy of it in the bucket for the TTL.
+    """
+    task = _current_task.get()
+    if task is None:
+        return ""
+    return task.name_call(name, payload)
+
+
+def recoverable_replies(record) -> list[tuple[str, str]]:
+    """``(function, reply_key)`` of this task's calls that are ALREADY answered.
+
+    The question the deadline sweep has to ask before it buries paid work:
+    is there a finished result on the shelf that this task never heard
+    about? Never raises — a store that cannot be reached answers "no", and
+    the sweep proceeds as it always did.
+    """
+    ledger = (getattr(record, "checkpoints", None) or {}).get(CALLS_LEDGER) or {}
+    if not ledger:
+        return []
+    from . import overflow
+
+    waiting: list[tuple[str, str]] = []
+    for key, function in ledger.items():
+        try:
+            if overflow.durable_reply_exists(str(function), str(key)):
+                waiting.append((str(function), str(key)))
+        except Exception:  # pragma: no cover - the helper already guards itself
+            logger.debug("comm: durable reply probe failed", exc_info=True)
+    return waiting
+
+
+def discard_replies(record) -> None:
+    """Drop the persisted replies of a finished task. Best effort.
+
+    Same rule as the checkpoint objects: a completed task's answers have a
+    permanent home now, and a second verbatim copy under no row of any
+    table is a copy no erasure sweep would find.
+    """
+    ledger = (getattr(record, "checkpoints", None) or {}).get(CALLS_LEDGER) or {}
+    if not ledger:
+        return
+    from . import overflow
+
+    for key, function in ledger.items():
+        overflow.discard_durable_reply(str(function), str(key))
 
 
 def checkpoint(name: str, value: Any = True) -> None:
@@ -295,6 +401,7 @@ def _clear_checkpoints(record) -> None:
         return
     from . import overflow
 
+    discard_replies(record)
     store = None
     try:
         store = overflow.get_store()
@@ -567,6 +674,19 @@ def execute(task_id: str) -> None:
             # expired. Both are ordinary: leave the row PENDING and let the
             # sweep re-announce it when it comes due. Sleeping here instead
             # would hold a worker hostage to a provider outage.
+            #
+            # A task id that matches NO ROW is not ordinary. It is an
+            # announcement about work this service cannot account for, and
+            # until it was logged the only way to see one was to notice
+            # that nothing happened. Never silent.
+            if not TaskRecord.objects.filter(pk=task_id).exists():
+                logger.error(
+                    "comm: task %s was announced but no such row exists in "
+                    "this service's taskstore — the announcement is being "
+                    "dropped. Either it belongs to another deployment's "
+                    "database, or the row was deleted while in flight.",
+                    task_id,
+                )
             return
         record.state = TaskRecord.RUNNING
         record.attempts += 1
@@ -654,6 +774,12 @@ def execute(task_id: str) -> None:
         record.result = result
         record.error = ""
         record.finished_at = timezone.now()
+        # The handler wrote its ledger through the CONTEXT, with an UPDATE
+        # that this in-memory row never saw: `record` was loaded at claim
+        # time and has been stale ever since. Clearing from the stale copy
+        # emptied the column and left every object it referenced in the
+        # bucket — the exact leak the postbox rule exists to prevent.
+        record.checkpoints = context.checkpoints
         # The ledger's whole purpose was to get here without paying twice;
         # past here it is a second copy of values that now have a permanent
         # home (see _clear_checkpoints).

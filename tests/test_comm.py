@@ -586,7 +586,7 @@ def test_the_nats_transport_uses_the_named_timeout(settings, monkeypatch):
     }
     seen = {}
 
-    def fake_transport(name, payload, *, timeout=None):
+    def fake_transport(name, payload, *, timeout=None, reply_key=""):
         seen["timeout"] = timeout
         return {"allowed": True}
 

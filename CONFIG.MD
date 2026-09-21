@@ -78,6 +78,7 @@ it only fills in keys this file does not know about yet. See
 | KAFKA_CLIENT_USER | env | Kafka SASL username. | no | |
 | STAPEL_BUS_CONSUMER_STALL_SECONDS | env | Seconds a bus consumer may hold an EMPTY partition assignment (or make no successful poll) while the brokers answer, before it logs CRITICAL and exits 75 for the supervisor to restart; 0 disables the exit. | no | 120 |
 | STAPEL_BUS_CONSUMER_HEARTBEAT_PATH | env | Liveness file a consumer touches while it owns an assignment; read by `manage.py bus_consumer_alive` (legacy alias: KAFKA_CONSUMER_HEARTBEAT). | no | /tmp/stapel-bus-consumer-alive |
+| STAPEL_BUS_HANDLER_BUDGET_SECONDS | env | Seconds ONE message may legitimately occupy a bus consumer. The heartbeat records it while a handler runs, so `manage.py bus_consumer_alive` can tell a busy consumer from a hung one instead of restarting a working process mid-message. 0 = unstated, and the probe falls back to its own `--max-age`. | no | 0 |
 | STAPEL_REDIS_BUS_URL | env | Redis Streams bus connection URL. | no | REDIS_URL, else redis://redis:6379/0 |
 | STAPEL_REDIS_BUS_CLAIM_IDLE_MS | env | XAUTOCLAIM idle threshold (ms) before a pending entry is reclaimed from a presumed-dead consumer. | no | 60000 |
 | STAPEL_REDIS_BUS_STREAM_MAXLEN | env | Approximate XADD stream cap (MAXLEN ~); 0 disables trimming. | no | 100000 |

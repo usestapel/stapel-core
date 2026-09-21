@@ -304,6 +304,133 @@ def _new_key(prefix: str, function: str, direction: str) -> str:
     return f"{prefix}/{direction}/{safe}/{uuid.uuid4().hex}.json"
 
 
+# ─────────────────────────────────────────────────────────────────────
+# A reply the caller can come back for
+# ─────────────────────────────────────────────────────────────────────
+#
+# The reference above solves "the answer does not fit one message". It does
+# not solve "the answer fit, was published, and nobody was listening" — and
+# that is the same lost work with a different cause.
+#
+# Measured on the owner's host, 2026-09-20, twice in half an hour. The
+# caller runs its task executor inside a bus consumer whose HEALTHCHECK
+# budget is shorter than its own longest handler, so the supervisor restarts
+# a process that is merely busy. NATS core request-reply has no persistence:
+# the inbox subscription dies with the process, the provider publishes into
+# a subject nobody owns, and the broker drops it. One paid transcription of
+# a 148-minute meeting and one six-call summary were produced, charged, and
+# thrown away; both tasks sat RUNNING until their deadline and died
+# `deadline_exceeded`.
+#
+# The fix is not "make the publish reliable" — an at-most-once transport
+# cannot be talked into being anything else. It is to make the ANSWER
+# outlive the publish: when the caller names the call, the provider writes
+# the finished frame to the shared store under a key the caller can compute
+# on its own, BEFORE it publishes. Then a lost reply is a read away, from
+# this process or from the one that replaces it, and a retry returns the
+# paid result instead of buying it again.
+#
+# Only SUCCESSFUL frames are kept. An error is an answer worth retrying, and
+# a persisted one would turn a transient provider failure into a permanent
+# one for as long as the TTL lasts.
+
+#: Keys under this segment are addressed by the caller, not by chance.
+DURABLE_SEGMENT = "durable-reply"
+
+#: Longest caller-chosen key segment. It becomes part of an object key.
+MAX_REPLY_KEY_LENGTH = 200
+
+
+def durable_key(function: str, reply_key: str) -> str:
+    """The object key a provider writes and a caller reads for one call.
+
+    Deterministic on purpose: the caller must be able to compute it without
+    having received anything, which is the whole point on the path where
+    nothing was received.
+    """
+    settings_ = overflow_settings()
+    safe_fn = _SAFE_SEGMENT.sub("_", function or "unknown")[:80]
+    safe_key = _SAFE_SEGMENT.sub("_", str(reply_key or ""))[:MAX_REPLY_KEY_LENGTH]
+    return f"{settings_['PREFIX']}/{DURABLE_SEGMENT}/{safe_fn}/{safe_key}.json"
+
+
+def put_durable_reply(function: str, reply_key: str, frame: bytes) -> str | None:
+    """Persist one finished reply frame. Returns the key, or None.
+
+    Never raises: this runs on the provider's reply path, whose job is to
+    answer. A store that refuses means the old behaviour — a reply that is
+    only as durable as the publish — not a failed call.
+    """
+    if not reply_key:
+        return None
+    try:
+        store = get_store()
+        if store is None:
+            return None
+        key = durable_key(function, reply_key)
+        settings_ = overflow_settings()
+        store.put(key, frame, ttl_seconds=settings_["TTL_SECONDS"])
+    except Exception:
+        logger.warning(
+            "comm: function %s: the reply could not be persisted for "
+            "reply_key=%s — if the publish is lost the work is lost with it",
+            function, reply_key, exc_info=True,
+        )
+        return None
+    logger.debug(
+        "comm: function %s: reply persisted at %s (%d bytes)",
+        function, key, len(frame),
+    )
+    return key
+
+
+def take_durable_reply(
+    function: str, reply_key: str, *, consume: bool = True
+) -> bytes | None:
+    """The persisted frame for one call, or None. Never raises.
+
+    ``consume`` deletes it on the way out — the postbox rule of this module
+    applies here too: a second verbatim copy of a private payload under no
+    row of any table is a copy no erasure sweep would ever find.
+    """
+    if not reply_key:
+        return None
+    try:
+        store = get_store()
+        if store is None:
+            return None
+        key = durable_key(function, reply_key)
+        data = store.get(key)
+    except Exception:
+        # Absent is the ordinary case — every first attempt takes this path.
+        return None
+    if consume:
+        discard_durable_reply(function, reply_key)
+    return data
+
+
+def durable_reply_exists(function: str, reply_key: str) -> bool:
+    """Is there a finished reply waiting for this call? Never raises."""
+    return take_durable_reply(function, reply_key, consume=False) is not None
+
+
+def discard_durable_reply(function: str, reply_key: str) -> None:
+    """Remove a persisted reply. Best effort — no caller fails on this."""
+    if not reply_key:
+        return
+    try:
+        store = get_store()
+        if store is None:
+            return
+        store.delete(durable_key(function, reply_key))
+    except Exception:
+        logger.debug(
+            "comm: durable reply for %s/%s not discarded; the bucket's "
+            "lifecycle rule on the prefix is the backstop",
+            function, reply_key, exc_info=True,
+        )
+
+
 def no_store_hint(function: str, size: int, direction: str) -> str:
     return (
         f"function '{function}': the {direction} is {size} bytes, too large "

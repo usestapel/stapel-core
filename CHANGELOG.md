@@ -1,5 +1,91 @@
 # Changelog
 
+## [0.89.0] — 2026-09-21
+
+Minor: a Function reply that was produced is no longer lost because nobody
+was listening, and a healthcheck can tell a busy consumer from a hung one.
+
+### Fixed — the answer was published into a subject nobody owned
+
+Measured on a client host, twice inside half an hour, on paying work.
+
+A service runs its Task executor inside a bus consumer. The consumer's
+HEALTHCHECK budget was 90 seconds; its longest handler is a speech-to-text
+call over a two-and-a-half-hour recording. So the probe went red on a
+process that was merely busy, the supervisor restarted it — and 21 seconds
+later the provider published the finished transcript into an inbox that had
+died with the process. NATS core request-reply keeps nothing: the broker
+dropped it. The same thing happened to a six-call summary 26 minutes later.
+Both tasks sat RUNNING until their deadline and were buried
+`deadline_exceeded`; two paid results existed the whole time and were never
+read.
+
+Three hops, three mechanisms, none of which requires the transport to
+become something it is not:
+
+**The provider persists before it publishes.** When a caller NAMES a call —
+`call(..., reply_key=...)`, derived automatically from the task for any call
+made inside a task handler — `serve_functions` writes the finished frame to
+the shared overflow store under a key the caller can compute on its own, and
+only then answers. The ordering is the mechanism: everything after that line
+can fail without costing the work. Errors are never persisted — an error is
+an answer worth retrying, and a stored one would make a transient provider
+failure permanent for the length of the TTL.
+
+**The caller comes back for it.** `nats_function_transport` looks on the
+shelf before it issues a named request (an earlier attempt may already have
+been answered) and again after one fails. A reply lost to a reconnect, a
+restart or a dead inbox now costs a read instead of the provider's price.
+
+**A deadline does not bury paid work.** `sweep_tasks` asks the store whether
+any of an expired task's calls has already been answered, and if one has it
+returns the attempt and grants a grace window instead of writing an epitaph —
+the re-run resolves the call from the store and touches no provider. Only
+when nothing is waiting, or the ladder is exhausted, is the task failed, and
+now with an ERROR line naming the task. `STAPEL_COMM["TASK_RECOVERY_GRACE_SECONDS"]`
+(default 300) sizes the window.
+
+### Fixed — the probe caused the outage it exists to detect
+
+`bus_consumer_alive` could only read the heartbeat file's mtime, and while a
+handler runs the loop does not poll and the file is not refreshed. So "idle
+and polling" and "four minutes into a legitimate handler" aged identically,
+and the documented advice was to size `--max-age` above the longest handler
+and hope. The deployment above had not.
+
+The consumer knows which state it is in, so it now writes it down:
+`ConsumerLiveness.handling()` stamps the file with the fact that a handler is
+running and the budget it has. The probe judges work in progress against that
+budget (`--max-handler-age`, else `STAPEL_BUS_HANDLER_BUDGET_SECONDS` as the
+consumer recorded it, else `--max-age` — today's behaviour when nothing is
+stated), and a handler past its budget is still red, because that one is a
+hang. A failure while a handler is in flight now says in words what
+restarting the container is about to cost.
+
+### Fixed — two silent drops
+
+* A `task.requested` naming a task id that matches no row was a bare
+  `return`. It is an ERROR now: an announcement about work this service
+  cannot account for is not a thing to notice by its absence.
+* A task cleared its checkpoint ledger from a row that had been stale since
+  the claim, so the column emptied but every overflow object it referenced
+  stayed in the bucket — a second verbatim copy of a private payload under
+  no row of any table, which is exactly what the postbox rule exists to
+  prevent. The clear now runs against the ledger the handler actually wrote.
+
+### Added
+
+* `comm.overflow.durable_key` / `put_durable_reply` / `take_durable_reply` /
+  `durable_reply_exists` / `discard_durable_reply`.
+* `comm.tasks.reply_key_for`, `TaskContext.name_call`,
+  `recoverable_replies`, `discard_replies`.
+* `bus.liveness.heartbeat_state`, `handler_budget_seconds`,
+  `HEARTBEAT_POLL` / `HEARTBEAT_HANDLING`.
+* `comm_task_reply_recovered_total` — tasks whose deadline was extended
+  because a finished reply was waiting. A rising line is a transport
+  dropping answers, which the task table alone cannot show: a recovery
+  looks exactly like an ordinary retry.
+
 ## [0.88.1] — 2026-09-20
 
 Patch: a disabled throttle window no longer erases the count it was holding.

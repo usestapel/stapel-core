@@ -78,6 +78,28 @@ DEFAULT_STALL_SECONDS = 120.0
 
 DEFAULT_HEARTBEAT_PATH = "/tmp/stapel-bus-consumer-alive"
 
+#: What the heartbeat file SAYS, not only when it was last touched.
+#:
+#: The file used to be empty, so the probe could only read its mtime, and
+#: an mtime cannot tell "this consumer is polling an assignment and idle"
+#: apart from "this consumer is inside a handler that has legitimately run
+#: for four minutes". The docstring of ``bus_consumer_alive`` admitted as
+#: much and told operators to size ``--max-age`` above the longest handler.
+#:
+#: On 2026-09-20 a deployment had not, and the consequence was not a red
+#: dashboard: the supervisor restarted a WORKING process, twice, each time
+#: exactly while a provider was publishing the answer to the request that
+#: process was waiting on. NATS core request-reply has no persistence, so
+#: both answers — both paid for — were dropped by the broker. The probe was
+#: the trigger of the outage it was supposed to detect.
+#:
+#: The process knows which of the two states it is in. Now it writes it
+#: down, and the probe can stop guessing: work in progress is judged
+#: against the handler's own budget, and a handler that outruns that budget
+#: is still red, because that one really is hung.
+HEARTBEAT_POLL = "poll"
+HEARTBEAT_HANDLING = "handling"
+
 ASSIGNMENT_GAUGE = "stapel_bus_consumer_assignment_size"
 LAST_POLL_GAUGE = "stapel_bus_consumer_seconds_since_last_poll"
 STALL_EXITS_COUNTER = "stapel_bus_consumer_stall_exits_total"
@@ -103,6 +125,31 @@ def stall_seconds() -> float:
             raw, DEFAULT_STALL_SECONDS,
         )
         return DEFAULT_STALL_SECONDS
+
+
+def handler_budget_seconds() -> float:
+    """``STAPEL_BUS_HANDLER_BUDGET_SECONDS`` — how long a handler may run.
+
+    The longest one message may legitimately occupy this consumer. It is
+    the number a healthcheck needs and never had: without it the probe has
+    to treat every slow handler as a hang, and a deployment whose handler
+    waits on a provider for minutes has to choose between a probe that
+    kills working processes and one that never fires.
+
+    0 (the default) means unstated, and the probe falls back to its own
+    ``--max-age`` — exactly the behaviour every existing deployment has.
+    """
+    raw = _get("STAPEL_BUS_HANDLER_BUDGET_SECONDS", "")
+    if raw == "":
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "bus: STAPEL_BUS_HANDLER_BUDGET_SECONDS=%r is not a number — "
+            "treating it as unstated", raw,
+        )
+        return 0.0
 
 
 def heartbeat_path() -> str:
@@ -264,15 +311,25 @@ class ConsumerLiveness:
         logger.warning("bus: consumer group=%s client error: %s", self.group, text)
 
     @contextmanager
-    def handling(self):
+    def handling(self, budget: float | None = None):
         """Wrap one handler call. Handler time is not idle time.
 
         The elapsed time is credited back to both baselines on the way out,
         so a handler slower than the stall window cannot spend it. Credited
         on failure too — a handler that raised still ran.
+
+        The heartbeat file is also STAMPED, on the way in, with the fact
+        that a handler is running and how long it is allowed to take. That
+        is the half an external probe could not see: while a handler runs
+        the loop does not poll and the file is not refreshed, so a busy
+        consumer and a hung one aged identically and a supervisor had to
+        treat them identically. *budget* defaults to
+        ``STAPEL_BUS_HANDLER_BUDGET_SECONDS``.
         """
         started = self._clock()
         self._handler_started_at = started
+        budget = handler_budget_seconds() if budget is None else max(0.0, float(budget))
+        self._write_heartbeat(HEARTBEAT_HANDLING, budget)
         try:
             yield
         finally:
@@ -282,10 +339,30 @@ class ConsumerLiveness:
                 now = self._clock()
                 self.last_poll_at = min(now, self.last_poll_at + elapsed)
                 self.last_assignment_at = min(now, self.last_assignment_at + elapsed)
+            # Back to "polling" the moment the handler returns, so the next
+            # probe judges the loop and not the message that just finished.
+            self.touch_heartbeat()
 
     # ------------------------------------------------------------------
     # What we tell the world
     # ------------------------------------------------------------------
+
+    def _write_heartbeat(self, state: str, budget: float = 0.0) -> bool:
+        """Write the liveness file — only while partitions are owned.
+
+        One line: ``<state> <wall clock> <budget>``. Wall clock, not the
+        injected monotonic clock, because the reader is a DIFFERENT PROCESS
+        and has no access to this one's monotonic baseline.
+        """
+        if self.assignment_size <= 0:
+            return False
+        try:
+            with open(self.heartbeat, "w") as fh:
+                fh.write(f"{state} {time.time():.3f} {budget:.3f}\n")
+        except OSError:
+            logger.debug("bus: heartbeat %s not writable", self.heartbeat, exc_info=True)
+            return False
+        return True
 
     def touch_heartbeat(self) -> bool:
         """Refresh the liveness file — only while partitions are owned.
@@ -295,15 +372,7 @@ class ConsumerLiveness:
         consumer with nothing assigned kept a container green for sixteen
         hours.
         """
-        if self.assignment_size <= 0:
-            return False
-        try:
-            with open(self.heartbeat, "w"):
-                pass
-        except OSError:
-            logger.debug("bus: heartbeat %s not writable", self.heartbeat, exc_info=True)
-            return False
-        return True
+        return self._write_heartbeat(HEARTBEAT_POLL)
 
     def publish_metrics(self, *, force: bool = False) -> None:
         """Set the liveness gauges (rate-limited; never raises)."""
@@ -473,15 +542,54 @@ def heartbeat_age(path: str | None = None) -> float | None:
         return None
 
 
+def heartbeat_state(path: str | None = None) -> dict | None:
+    """What the heartbeat file says, or None if there is none.
+
+    ``{"state": "poll"|"handling", "age": seconds, "budget": seconds}``.
+
+    A file written before this existed is empty; it reads as ``poll`` with
+    its mtime age, so an old consumer and a new probe agree.
+    """
+    target = path or heartbeat_path()
+    age = heartbeat_age(target)
+    if age is None:
+        return None
+    state, budget = HEARTBEAT_POLL, 0.0
+    try:
+        with open(target) as fh:
+            parts = fh.read(200).split()
+    except OSError:
+        parts = []
+    if parts and parts[0] in (HEARTBEAT_POLL, HEARTBEAT_HANDLING):
+        state = parts[0]
+        # The written timestamp beats the mtime: a filesystem whose mtime
+        # granularity is a second would round a fresh handler into the past.
+        if len(parts) > 1:
+            try:
+                age = max(0.0, time.time() - float(parts[1]))
+            except ValueError:
+                pass
+        if len(parts) > 2:
+            try:
+                budget = max(0.0, float(parts[2]))
+            except ValueError:
+                pass
+    return {"state": state, "age": age, "budget": budget}
+
+
 __all__ = [
     "ASSIGNMENT_GAUGE",
     "ConsumerLiveness",
     "DEFAULT_HEARTBEAT_PATH",
     "DEFAULT_STALL_SECONDS",
+    "HEARTBEAT_HANDLING",
+    "HEARTBEAT_POLL",
     "LAST_POLL_GAUGE",
     "STALL_EXITS_COUNTER",
     "STALL_EXIT_CODE",
+    "handler_budget_seconds",
     "heartbeat_age",
     "heartbeat_path",
+    "heartbeat_state",
     "stall_seconds",
 ]

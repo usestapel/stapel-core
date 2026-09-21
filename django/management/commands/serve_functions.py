@@ -155,8 +155,8 @@ def fit_reply(data: bytes, max_payload: int, name: str) -> bytes:
     }).encode()
 
 
-def decode_request(data: bytes, name: str) -> dict:
-    """The payload carried by one request frame.
+def decode_envelope(data: bytes, name: str) -> tuple[dict, str]:
+    """The payload carried by one request frame, and the caller's reply key.
 
     A caller whose ARGUMENT outgrew the broker sends the same reference
     envelope the reply path uses, in the other direction (comm/nats.py), so
@@ -164,6 +164,11 @@ def decode_request(data: bytes, name: str) -> dict:
     run it off the event loop. Raises FunctionReferenceError if the
     reference cannot be resolved; the caller is told rather than left to
     time out.
+
+    ``reply_key`` is the caller naming this call so the answer can be
+    persisted under a key it can compute again after losing the reply. Empty
+    for a caller that did not ask for that, which is every caller that was
+    written before it existed.
     """
     from stapel_core.comm import overflow
 
@@ -171,7 +176,40 @@ def decode_request(data: bytes, name: str) -> dict:
     ref = overflow.reference_in(body)
     if ref is not None:
         body = json.loads(overflow.dereference(ref, function=name).decode() or "{}")
-    return body.get("payload") or {}
+    return body.get("payload") or {}, str(body.get("reply_key") or "")
+
+
+def decode_request(data: bytes, name: str) -> dict:
+    """The payload carried by one request frame. See :func:`decode_envelope`."""
+    return decode_envelope(data, name)[0]
+
+
+def persist_reply(data: bytes, name: str, reply_key: str) -> None:
+    """Put a finished reply on the shelf before it goes on the wire.
+
+    BEFORE, not after, and that ordering is the mechanism: a publish this
+    process never completes — because the caller's inbox died with a
+    restarted container, because the connection was reconnecting — leaves
+    the answer readable by whoever comes back for it. Measured, 2026-09-20:
+    two paid results published into subjects nobody owned any more and lost
+    outright, while both callers sat RUNNING until their deadline.
+
+    Errors are NOT persisted. An error is an answer worth retrying, and a
+    stored one would make a transient provider failure permanent for as
+    long as the TTL lasts.
+    """
+    if not reply_key:
+        return
+    try:
+        frame = json.loads(data.decode() or "{}")
+    except Exception:  # pragma: no cover - we serialized it ourselves
+        return
+    if not isinstance(frame, dict) or frame.get("error"):
+        return
+
+    from stapel_core.comm import overflow
+
+    overflow.put_durable_reply(name, reply_key, data)
 
 
 class Command(BaseCommand):
@@ -230,7 +268,7 @@ class Command(BaseCommand):
         # The broker's per-message cap, as this server announced it on connect.
         max_payload = int(getattr(nc, "max_payload", 0) or 0)
 
-        async def _reply(msg, data: bytes, full_name: str) -> None:
+        async def _reply(msg, data: bytes, full_name: str, reply_key: str = "") -> None:
             """Answer, or say WHY there is no answer — never nothing.
 
             The defect this exists for: an oversized reply made
@@ -246,6 +284,13 @@ class Command(BaseCommand):
             coroutine raise — an exception here is, again, a caller that hears
             nothing at all.
             """
+            # The shelf copy goes down FIRST, while we still hold the only
+            # copy of the answer. Everything after this line can fail
+            # without costing the work.
+            if reply_key:
+                await loop.run_in_executor(
+                    None, persist_reply, data, full_name, reply_key
+                )
             # fit_reply can WRITE to the object store (an oversized answer
             # travels by reference), which is blocking I/O — never on the
             # event loop that also has to answer everyone else.
@@ -267,9 +312,10 @@ class Command(BaseCommand):
             full_name = msg.subject[len(prefix):] if msg.subject.startswith(prefix) else name
             from stapel_core.comm.exceptions import FunctionReferenceError
 
+            reply_key = ""
             try:
-                payload = await loop.run_in_executor(
-                    None, decode_request, msg.data, full_name
+                payload, reply_key = await loop.run_in_executor(
+                    None, decode_envelope, msg.data, full_name
                 )
             except FunctionReferenceError as exc:
                 # The request travelled by reference and we could not fetch
@@ -284,7 +330,7 @@ class Command(BaseCommand):
                 )
                 return
             reply = await loop.run_in_executor(None, _execute, full_name, payload)
-            await _reply(msg, reply, full_name)
+            await _reply(msg, reply, full_name, reply_key)
 
         for name in names:
             await nc.subscribe(subject_for(name), queue=queue, cb=_handler)

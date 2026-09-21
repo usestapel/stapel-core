@@ -61,16 +61,38 @@ def resolve_timeout(name: str, timeout: float | None) -> float:
     return float(comm_setting("FUNCTION_TIMEOUT", 5.0))
 
 
-def call(name: str, payload: dict | None = None, *, timeout: float | None = None) -> Any:
+def call(
+    name: str,
+    payload: dict | None = None,
+    *,
+    timeout: float | None = None,
+    reply_key: str | None = None,
+) -> Any:
     """Invoke function *name* and return its result.
 
     Raises FunctionNotRegistered / FunctionRouteNotConfigured on wiring
     errors and FunctionCallError when the provider fails. Callers decide
     whether a failure is fatal — never swallow it into a fail-open default
     on security-relevant paths.
+
+    *reply_key* names this call so its answer survives a lost reply: the
+    provider persists the finished frame under a key derived from it before
+    publishing, and a later attempt of the same call reads it back instead
+    of paying for the work twice (comm/overflow.py). Inside a task handler
+    it is derived automatically from the task — pass ``""`` to opt out,
+    a string of your own to opt in elsewhere.
     """
     payload = payload or {}
     function_registry.validate(name, payload)
+
+    if reply_key is None:
+        # A call made by a task is a call that can be retried, by a ladder
+        # that already exists, and whose expensive half is usually the
+        # provider. That is exactly the call worth naming, and the handler
+        # should not have to remember to name it.
+        from .tasks import reply_key_for
+
+        reply_key = reply_key_for(name, payload)
 
     transport = comm_setting("FUNCTION_TRANSPORT", "inprocess")
     if transport == "inprocess":
@@ -98,7 +120,9 @@ def call(name: str, payload: dict | None = None, *, timeout: float | None = None
     if transport == "nats":
         from .nats import nats_function_transport
 
-        return nats_function_transport(name, payload, timeout=effective)
+        return nats_function_transport(
+            name, payload, timeout=effective, reply_key=reply_key
+        )
 
     if transport == "http":
         return _call_http(name, payload, timeout=effective)
