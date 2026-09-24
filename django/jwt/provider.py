@@ -25,6 +25,32 @@ from typing import Optional, Tuple, Dict, Any
 logger = logging.getLogger(__name__)
 
 
+#: Session authorities consulted before an access token is minted from a
+#: refresh token. See :func:`register_refresh_check`.
+_refresh_checks: list = []
+
+
+def register_refresh_check(check) -> None:
+    """Let the service that owns sessions veto a mint-from-refresh.
+
+    ``check(payload) -> bool`` receives the VERIFIED refresh token's claims
+    and answers whether that token is still honoured (its session is live
+    and the jti is its current one). Without it, core minted access tokens
+    from any validly signed, non-blacklisted refresh token — including one
+    whose session the refresh endpoint already refused (superseded by a
+    rotation, or revoked). The two answers disagreed, and a browser holding
+    such a token stayed half signed in for days. Idempotent.
+    """
+    if check not in _refresh_checks:
+        _refresh_checks.append(check)
+
+
+def unregister_refresh_check(check) -> None:
+    """Remove a check registered with :func:`register_refresh_check`."""
+    if check in _refresh_checks:
+        _refresh_checks.remove(check)
+
+
 class _LoaderDefault:
     """Sentinel: "caller said nothing", which is NOT the same as "caller said None".
 
@@ -232,6 +258,15 @@ class JWTProvider:
         user_data = self._manager.validate_refresh_token(refresh_token)
         if not user_data or self._user_banned(user_data):
             return None
+        if _refresh_checks:
+            payload = self.handler.decode_token(refresh_token) or {}
+            for check in list(_refresh_checks):
+                if not check(payload):
+                    logger.info(
+                        "refresh refused by the session authority (user %s)",
+                        payload.get("user_id"),
+                    )
+                    return None
         return self._manager.refresh_access_token(refresh_token, load_user_data)
 
     def is_blacklisted(self, token: str) -> bool:

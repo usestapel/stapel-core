@@ -175,7 +175,8 @@ class JWTAuthMiddleware(MiddlewareMixin):
                     self._login_user(request, user_data)
                     request._jwt_refreshed = True
                     request._new_access_token = new_access_token
-                    logger.info(f"Token refreshed for {user_data.get('email')}")
+                    # The id, never the e-mail: addresses do not go in logs.
+                    logger.info("Token refreshed for user %s", uid)
                     return None
 
         # No valid tokens

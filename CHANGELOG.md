@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.91.0] — 2026-09-25
+
+Minor: the middleware's mint-from-refresh asks the session authority, and
+the refresh log names a user id instead of an e-mail.
+
+### Fixed — two refresh paths, two answers
+
+Measured on a client fleet (2026-09-19..24): one browser's explicit
+`/token/refresh/` was refused 27 times in five days (its refresh jti was no
+longer its session's current one), while `JWTAuthMiddleware` minted 25
+access tokens from the same refresh token on expired requests to the auth
+service. The client saw "refresh 401, /me 200", bounced to sign-in with
+`session_revoked=1`, and a 7.1 GB upload was lost at its `complete` call.
+The middleware only knew the blacklist; the session table lives in the
+auth module, which core cannot import.
+
+New: `stapel_core.django.jwt.provider.register_refresh_check(check)`.
+`check(payload) -> bool` receives the verified refresh claims; any `False`
+and `jwt_provider.refresh_access_token` mints nothing. It is the one choke
+point every mint-from-refresh goes through — the middleware's expired and
+proactive paths, the Channels cookie handshake, and the auth module's own
+view — so they can no longer disagree. With no check registered nothing
+changes. stapel-auth registers its session check from 0.45.0.
+
+### Fixed — e-mail addresses in logs
+
+`JWTAuthMiddleware` logged `Token refreshed for <email>` and
+`django.groups` logged the address of every user added to the staff group.
+Both now log the user id.
+
 ## [0.90.0] — 2026-09-22
 
 Minor: a task announcement that reaches a service whose database never

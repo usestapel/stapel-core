@@ -120,7 +120,7 @@ def add_user_to_staff_group(user) -> bool:
 
     if not user.groups.filter(pk=group.pk).exists():
         user.groups.add(group)
-        logger.info(f"Added user '{user.email}' to '{STAFF_GROUP_NAME}' group")
+        logger.info("Added user %s to '%s' group", user.pk, STAFF_GROUP_NAME)
         return True
 
     return False
