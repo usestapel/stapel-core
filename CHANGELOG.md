@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.91.1] — 2026-09-25
+
+### Fixed — an idle task sweep was a warning a minute
+
+`sweep_tasks` wrote its summary line to stdout on every run, and Celery
+re-logs a task's stdout at WARNING: on a client fleet three workers logged
+4320 "failed 0 expired task(s), recovered 0 …, re-announced 0 …" warnings in
+72 hours, burying real ones. The line is now written only when the sweep
+failed, recovered or re-announced something, or at `-v 2`; an idle run logs
+it at DEBUG.
+
 ## [0.91.0] — 2026-09-25
 
 Minor: the middleware's mint-from-refresh asks the session authority, and

@@ -195,8 +195,15 @@ class Command(BaseCommand):
                 )
             woken += 1
 
-        self.stdout.write(
+        line = (
             f"sweep_tasks: failed {count} expired task(s), "
             f"recovered {recovered} with a reply waiting, "
             f"re-announced {woken} due retry(ies)"
         )
+        # A beat runs this every minute, and Celery re-logs a task's stdout
+        # at WARNING: an idle sweep was 1440 warnings a day per worker. Say
+        # it only when the sweep did something, or when asked (-v 2).
+        if count or recovered or woken or int(options.get("verbosity", 1)) >= 2:
+            self.stdout.write(line)
+        else:
+            logger.debug(line)

@@ -69,3 +69,21 @@ def test_the_callable_runs_the_command():
     # shared_task-wrapped when celery is installed; both shapes are callable.
     runner = getattr(sweep_tasks, "run", sweep_tasks)
     runner()
+
+
+@pytest.mark.django_db
+def test_an_idle_sweep_writes_nothing_a_worker_would_log_as_a_warning():
+    """Production (ironmemo, 2026-09-25): Celery re-logs task stdout at
+    WARNING, so the idle per-minute sweep was 4320 warnings in 72 h across
+    three workers, each saying "failed 0 ... 0 ... 0"."""
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    out = StringIO()
+    call_command("sweep_tasks", stdout=out)
+    assert out.getvalue() == ""
+
+    out = StringIO()
+    call_command("sweep_tasks", stdout=out, verbosity=2)
+    assert "sweep_tasks: failed 0" in out.getvalue()
