@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.92.1] — 2026-10-15
+
+### Fixed — `settings` rows crashed `manage.py check`
+
+Libraries declare keys that live in Django settings with a default as
+`| KEY | settings | … |` in their CONFIG.MD; the project manifest aggregates
+those rows, and `parse_config_md` accepted only `env|vault`, so
+`check_required_config` raised `ConfigManifestError` for any project that
+selected such a lib. `settings` is now a third source: it is read from the
+owner's `STAPEL_<MOD>` dict, then a flat setting, then the row default, never
+from env or vault. A required `settings` row that resolves to none of those is
+`stapel_core.config.E002`, with a hint naming the manifest row.
+
 ## [0.92.0] — 2026-10-15
 
 Minor: `invalidate_membership_cache(workspace_id, user_id, *,

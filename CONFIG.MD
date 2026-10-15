@@ -2,13 +2,18 @@
 
 Config registry for **stapel-core** (`static-scaffold-and-config.md` §2). One
 row per configuration key core reads, its **source** (`env` = the process
-environment; `vault` = the secret-provider seam, `stapel_core.secrets`), what
-it is for, whether it is required, and its default.
+environment; `vault` = the secret-provider seam, `stapel_core.secrets`;
+`settings` = a Django setting with a default, never required from env or
+vault), what it is for, whether it is required, and its default.
 
 `get_config(key)` (`stapel_core.config`) routes each read here: `env` keys are
 read from `os.environ`; `vault` keys are delegated to `get_secret` (which is
 the environment too, until a project points `STAPEL_SECRETS_PROVIDER` at
-OpenBao/Vault). This file is a **library registry**: at scaffold time
+OpenBao/Vault); `settings` keys (0.92.1+) are read from the owning lib's
+`STAPEL_<MOD>` dict (`## stapel-cdn` → `STAPEL_CDN`), then a flat Django
+setting of the same name, then the row's default — a required `settings` row
+that resolves to none of those fails `manage.py check` with
+`stapel_core.config.E002`, whose hint names the row. This file is a **library registry**: at scaffold time
 `assemble_scaffold` aggregates it (under the `## stapel-core` owner heading
 below) with the CONFIG.MD of every other selected lib into the project's own
 root CONFIG.MD, and the `config-lint` gate (CFG001–CFG003) checks the result.

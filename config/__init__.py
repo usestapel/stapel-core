@@ -11,7 +11,11 @@ provider seam), not a second store:
 - a key whose source is ``vault`` is delegated to ``get_secret`` — the
   provider seam decides whether that is really OpenBao/Vault or (the default
   ``EnvSecretProvider``) the environment. A bare project therefore behaves
-  exactly as before: both sources end up reading ``os.environ``.
+  exactly as before: both sources end up reading ``os.environ``;
+- a key whose source is ``settings`` is declared in Django settings with a
+  default — never required from env or vault. It is read from the owning
+  lib's ``STAPEL_<MOD>`` namespace dict (``## stapel-cdn`` → ``STAPEL_CDN``),
+  then a flat Django setting of the same name, then the row's default.
 
 The routing table is a **CONFIG.MD manifest** — a markdown registry checked in
 at the project root (and one shipped by every stapel lib, aggregated at
@@ -64,7 +68,8 @@ CONFIG_MD = "CONFIG.MD"
 
 SOURCE_ENV = "env"
 SOURCE_VAULT = "vault"
-_SOURCES = (SOURCE_ENV, SOURCE_VAULT)
+SOURCE_SETTINGS = "settings"
+_SOURCES = (SOURCE_ENV, SOURCE_VAULT, SOURCE_SETTINGS)
 
 _TRUTHY = {"yes", "y", "true", "1", "да", "required", "req"}
 _FALSY = {"no", "n", "false", "0", "нет", "optional", "opt", ""}
@@ -123,7 +128,7 @@ class ConfigEntry:
     """One declared config key."""
 
     key: str
-    source: str          # "env" | "vault"
+    source: str          # "env" | "vault" | "settings"
     purpose: str = ""
     required: bool = False
     default: Optional[str] = None
@@ -166,9 +171,10 @@ def parse_config_md(source: str | Path, *, path_label: str | None = None) -> dic
     Recognizes any GitHub-flavored markdown table whose header contains a
     ``key`` and a ``source`` column (case-insensitive); ``purpose`` /
     ``required`` / ``default`` columns are optional. ``## <owner>`` headings
-    tag the rows beneath them. A row with an unknown source is a
-    :class:`ConfigManifestError` — a value that can be routed to neither env
-    nor vault is not lintable and must fail loudly at parse time.
+    tag the rows beneath them. Known sources are ``env``, ``vault`` and
+    ``settings``; a row with any other source is a
+    :class:`ConfigManifestError` — a value that cannot be routed is not
+    lintable and must fail loudly at parse time.
     """
     if isinstance(source, Path) or (isinstance(source, str) and "\n" not in source and source.endswith(".MD")):
         p = Path(source)
@@ -358,6 +364,43 @@ def clear_declared_config() -> None:
         _declared.clear()
 
 
+# --- settings-source resolution ---------------------------------------------
+
+
+def settings_namespace(owner: Optional[str]) -> Optional[str]:
+    """The ``STAPEL_<MOD>`` settings dict a lib-owned row lives in.
+
+    ``"stapel-cdn"`` → ``"STAPEL_CDN"``; a project-owned (or unowned) row has
+    no namespace and is read as a flat Django setting only.
+    """
+    if not owner or not owner.startswith("stapel-"):
+        return None
+    return owner.upper().replace("-", "_")
+
+
+def resolve_settings_value(key: str, owner: Optional[str] = None) -> tuple[bool, object]:
+    """Look *key* up in Django settings: ``(found, value)``.
+
+    Order mirrors the libraries' ``AppSettings``: the owner's ``STAPEL_<MOD>``
+    dict first, then a flat setting of the same name. Never reads the
+    environment. Unconfigured Django settings resolve to not-found.
+    """
+    try:
+        from django.conf import settings
+        if not settings.configured:
+            return False, None
+        namespace = settings_namespace(owner)
+        if namespace:
+            mapping = getattr(settings, namespace, None)
+            if isinstance(mapping, dict) and key in mapping:
+                return True, mapping[key]
+        if hasattr(settings, key):
+            return True, getattr(settings, key)
+    except ImportError:
+        pass
+    return False, None
+
+
 # --- the entry point --------------------------------------------------------
 
 
@@ -372,7 +415,9 @@ def get_config(
     """Resolve config *key* through the CONFIG.MD manifest.
 
     Routing: ``env`` source reads ``os.environ``; ``vault`` source delegates to
-    :func:`stapel_core.secrets.get_secret` (provider seam). The effective
+    :func:`stapel_core.secrets.get_secret` (provider seam); ``settings``
+    source reads Django settings (:func:`resolve_settings_value`) and returns
+    the object found there as-is. The effective
     default is the caller's *default* if given, else the manifest row's
     default. A required key that resolves to nothing with no effective default
     raises :class:`ConfigUnavailable`.
@@ -419,6 +464,16 @@ def get_config(
     else:
         eff_default = _UNSET
 
+    if entry.source == SOURCE_SETTINGS:
+        found, setting = resolve_settings_value(key, entry.owner)
+        if found:
+            return setting  # type: ignore[return-value]
+        if eff_default is not _UNSET:
+            return eff_default  # type: ignore[return-value]
+        if entry.required:
+            raise ConfigUnavailable(key, SOURCE_SETTINGS)
+        return None
+
     if entry.source == SOURCE_VAULT:
         if eff_default is not _UNSET:
             # get_secret honors the default for any provider (fail-open).
@@ -443,6 +498,7 @@ __all__ = [
     "CONFIG_MD",
     "MANIFEST_ENV",
     "SOURCE_ENV",
+    "SOURCE_SETTINGS",
     "SOURCE_VAULT",
     "ConfigEntry",
     "ConfigError",
@@ -455,6 +511,8 @@ __all__ = [
     "load_manifest",
     "parse_config_md",
     "reset_manifest_cache",
+    "resolve_settings_value",
+    "settings_namespace",
     "declare_config",
     "declared_config_entries",
     "clear_declared_config",

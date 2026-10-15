@@ -262,3 +262,61 @@ def test_get_config_declares_even_when_key_unknown(monkeypatch):
     monkeypatch.setenv("BRAND_NEW_KEY", "v")
     get_config("BRAND_NEW_KEY", purpose="A new thing", required=True, manifest={})
     assert declared_config_entries()["BRAND_NEW_KEY"].purpose == "A new thing"
+
+
+# --- settings source --------------------------------------------------------
+
+SETTINGS_ROWS = """\
+## stapel-cdn
+| Key | Source | Purpose | Required | Default |
+|-----|--------|---------|----------|---------|
+| WATERMARKS | settings | per-site watermarks | no | `{}` |
+| WATERMARK_PROFILE | settings | profile | yes | |
+| OPTIONAL_KNOB | settings | knob | no | |
+
+## project
+| Key | Source | Purpose | Required | Default |
+|-----|--------|---------|----------|---------|
+| PROJECT_KNOB | settings | knob | no | off |
+"""
+
+
+def test_parse_accepts_settings_source():
+    entries = parse_config_md(SETTINGS_ROWS)
+    assert entries["WATERMARKS"].source == "settings"
+    assert entries["WATERMARKS"].default == "{}"
+    assert entries["WATERMARKS"].owner == "stapel-cdn"
+
+
+def test_settings_namespace_from_owner():
+    from stapel_core.config import settings_namespace
+
+    assert settings_namespace("stapel-cdn") == "STAPEL_CDN"
+    assert settings_namespace("project") is None
+    assert settings_namespace(None) is None
+
+
+def test_get_config_settings_source_reads_namespace_then_flat(monkeypatch):
+    from django.test import override_settings
+
+    manifest = parse_config_md(SETTINGS_ROWS)
+    monkeypatch.setenv("WATERMARKS", "from-env")
+    with override_settings(STAPEL_CDN={"WATERMARKS": {"a": 1}}, WATERMARKS={"b": 2}):
+        assert get_config("WATERMARKS", manifest=manifest) == {"a": 1}
+    with override_settings(WATERMARKS={"b": 2}):
+        assert get_config("WATERMARKS", manifest=manifest) == {"b": 2}
+    # Neither defined: the row default, never the environment.
+    assert get_config("WATERMARKS", manifest=manifest) == "{}"
+    assert get_config("PROJECT_KNOB", manifest=manifest) == "off"
+    assert get_config("OPTIONAL_KNOB", manifest=manifest) is None
+
+
+def test_get_config_settings_source_required_missing_raises():
+    manifest = parse_config_md(SETTINGS_ROWS)
+    with pytest.raises(ConfigUnavailable):
+        get_config("WATERMARK_PROFILE", manifest=manifest)
+
+
+def test_declare_config_accepts_settings_source():
+    declare_config("SETTINGS_DECLARED", source="settings")
+    assert declared_config_entries()["SETTINGS_DECLARED"].source == "settings"
