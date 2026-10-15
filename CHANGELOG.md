@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.92.0] — 2026-10-15
+
+Minor: `invalidate_membership_cache(workspace_id, user_id, *,
+absence_is_normal=False)`. The membership authority drops the key on every
+member change and almost never holds a cached verdict itself, so a miss
+there logged a warning per change (126 a day on a client fleet once guest
+smoke runs joined). With `absence_is_normal=True` the miss is DEBUG; every
+other caller keeps the warning. Also ships the 0.91.1 fix below, which was
+never published on its own.
+
 ## [0.91.1] — 2026-09-25
 
 ### Fixed — an idle task sweep was a warning a minute

@@ -383,7 +383,9 @@ def require_capability(
     return None
 
 
-def invalidate_membership_cache(workspace_id, user_id) -> DropReport:
+def invalidate_membership_cache(
+    workspace_id, user_id, *, absence_is_normal: bool = False
+) -> DropReport:
     """Forget this service's cached membership verdict; reports what it did.
 
     Same shape as the drops fixed in 0.47.0, found in the same sweep: it
@@ -391,6 +393,11 @@ def invalidate_membership_cache(workspace_id, user_id) -> DropReport:
     is per-service (``namespace`` on the report says so), so a ``DROPPED``
     here is a measurement about this process only — a peer keeps its own copy
     until its own :data:`CACHE_TTL_SECONDS` runs out.
+
+    *absence_is_normal* is for the membership AUTHORITY dropping on every
+    write (join, provision, role change, suspension): it rarely holds a
+    cached verdict of its own, so a miss there is the ordinary case and is
+    logged at DEBUG instead of a warning per membership change.
     """
     return drop_cache_key(
         cache,
@@ -402,6 +409,7 @@ def invalidate_membership_cache(workspace_id, user_id) -> DropReport:
             "this cache is per-service and short-lived; a peer holds its own "
             "copy for up to CACHE_TTL_SECONDS"
         ),
+        absence_is_normal=absence_is_normal,
     )
 
 

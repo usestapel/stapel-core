@@ -512,6 +512,23 @@ class TestMembershipInvalidationMeasures:
             )
 
 
+def test_the_membership_authority_drops_quietly_when_it_holds_nothing(caplog):
+    """A client fleet: the workspaces service drops the membership key on
+    every member change, almost never holds one itself, and logged a
+    warning per change (126 a day once guest smoke runs joined)."""
+    import logging
+
+    ws_id, user_id = uuid.uuid4(), uuid.uuid4()
+    with override_settings(CACHES=AUTH_SERVICE):
+        with caplog.at_level(logging.DEBUG, logger="stapel_core.django.workspaces"):
+            report = invalidate_membership_cache(ws_id, user_id, absence_is_normal=True)
+            assert report.outcome is DropOutcome.NOT_FOUND
+            assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+            caplog.clear()
+            invalidate_membership_cache(ws_id, user_id)
+            assert [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
 # ---------------------------------------------------------------------------
 # One vocabulary, not one per module.
 # ---------------------------------------------------------------------------

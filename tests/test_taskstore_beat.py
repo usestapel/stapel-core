@@ -73,7 +73,7 @@ def test_the_callable_runs_the_command():
 
 @pytest.mark.django_db
 def test_an_idle_sweep_writes_nothing_a_worker_would_log_as_a_warning():
-    """Production (ironmemo, 2026-09-25): Celery re-logs task stdout at
+    """A client fleet (2026-09-25): Celery re-logs task stdout at
     WARNING, so the idle per-minute sweep was 4320 warnings in 72 h across
     three workers, each saying "failed 0 ... 0 ... 0"."""
     from io import StringIO
