@@ -1619,7 +1619,7 @@ account's first call to this particular service comes later, if ever. So every
 handler that inserts a row keyed on `users.id` in reaction to an event races a
 writer it does not control, and loses as the common case:
 
-* iron-recordings, 2026-09-13 — `workspace.personal.created` arrived before the
+* A recordings service, 2026-09-13 — `workspace.personal.created` arrived before the
   shadow row and `ZoomIngestSettings.objects.get_or_create(user_id=…)` died on
   `ForeignKeyViolation … Key (user_id)=(13484e5c-…) is not present in table
   "users"`. 3 events, 22 failed attempts, all three parked in the DLQ; the
@@ -4148,10 +4148,10 @@ Measured on a deployed fleet at 0.41.0. `is_active=False` set at the issuer,
 same unexpired access token, immediately after:
 
 ```
-iron-auth       /auth/api/v1/sessions/   -> 401   (issuer mode, correct)
-iron-profiles   /profiles/api/v1/me      -> 200   <-- still served
-iron-workspaces                          -> 200   <-- still served
-iron-billing                             -> 200   <-- still served
+auth-svc        /auth/api/v1/sessions/   -> 401   (issuer mode, correct)
+profiles-svc    /profiles/api/v1/me      -> 200   <-- still served
+workspaces-svc                           -> 200   <-- still served
+billing-svc                              -> 200   <-- still served
 ```
 
 Two independent causes, either one sufficient.
