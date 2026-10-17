@@ -26,6 +26,7 @@ import logging
 import threading
 from typing import Any
 
+from ..net.nats_log import ConnectionLog
 from . import overflow
 from .config import comm_setting
 from .exceptions import (
@@ -55,6 +56,7 @@ class NatsBridge:
     def __init__(self, url: str):
         self._url = url
         self._nc = None
+        self._conn_log = ConnectionLog("functions client")
         self._connect_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
@@ -64,7 +66,13 @@ class NatsBridge:
 
     def _run(self, coro, timeout: float):
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout)
+        try:
+            return future.result(timeout)
+        except TimeoutError:
+            # Otherwise the coroutine outlives the caller: a first connect
+            # with max_reconnect_attempts=-1 retries for ever.
+            future.cancel()
+            raise
 
     def _connection(self, timeout: float):
         if self._nc is None or self._nc.is_closed:
@@ -82,6 +90,7 @@ class NatsBridge:
                             self._url,
                             max_reconnect_attempts=-1,
                             reconnect_time_wait=1,
+                            **self._conn_log.callbacks(),
                         ),
                         timeout,
                     )
@@ -101,6 +110,7 @@ class NatsBridge:
 
     def close(self) -> None:
         if self._nc is not None and not self._nc.is_closed:
+            self._conn_log.mark_closing()
             try:
                 self._run(self._nc.drain(), 5)
             except Exception:  # pragma: no cover

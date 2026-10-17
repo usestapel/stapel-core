@@ -38,6 +38,7 @@ import time
 from typing import Callable
 
 from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
+from ...net.nats_log import ConnectionLog
 from ..event import Event
 from ..liveness import ConsumerLiveness
 
@@ -306,7 +307,14 @@ class NatsJetStreamBus(BusBackend):
     # ------------------------------------------------------------------
 
     def _run(self, coro, timeout: float = 30.0):
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return future.result(timeout)
+        except TimeoutError:
+            # Otherwise the coroutine outlives the caller: a first connect
+            # with max_reconnect_attempts=-1 retries for ever.
+            future.cancel()
+            raise
 
     def _ensure_connected(self):
         if self._js is not None and not self._nc.is_closed:
@@ -329,6 +337,7 @@ class NatsJetStreamBus(BusBackend):
                     NatsBusConfig.url(),
                     max_reconnect_attempts=-1,
                     reconnect_time_wait=1,
+                    **ConnectionLog("bus publisher").callbacks(),
                 )
                 js = nc.jetstream()
                 await self._ensure_stream(js)
@@ -415,12 +424,16 @@ class NatsJetStreamBus(BusBackend):
             )
 
         async def _reconnected():
+            await conn_log.reconnected_cb()
             logger.info("NatsJetStreamBus consumer group=%s reconnected", group)
 
+        conn_log = ConnectionLog(f"bus consumer group={group}")
         nc = await nats.connect(
             NatsBusConfig.url(),
             max_reconnect_attempts=-1,
             reconnect_time_wait=1,
+            error_cb=conn_log.error_cb,
+            closed_cb=conn_log.closed_cb,
             disconnected_cb=_disconnected,
             reconnected_cb=_reconnected,
         )
@@ -521,6 +534,7 @@ class NatsJetStreamBus(BusBackend):
                         )
                         await msg.nak(delay=5)
 
+        conn_log.mark_closing()
         await nc.drain()
 
     def _process(self, data: bytes, handler) -> tuple[str, bytes] | None:

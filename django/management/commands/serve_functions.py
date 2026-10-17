@@ -244,7 +244,12 @@ class Command(BaseCommand):
         from stapel_core.comm.nats import subject_for
         from stapel_core.comm.registry import function_registry
 
-        nc = await nats.connect(url, max_reconnect_attempts=-1, reconnect_time_wait=1)
+        from stapel_core.net.nats_log import ConnectionLog
+
+        conn_log = ConnectionLog("functions server")
+        nc = await nats.connect(
+            url, max_reconnect_attempts=-1, reconnect_time_wait=1, **conn_log.callbacks()
+        )
         queue = service_name() or "stapel"
         loop = asyncio.get_running_loop()
 
@@ -342,4 +347,5 @@ class Command(BaseCommand):
         except (KeyboardInterrupt, asyncio.CancelledError):  # pragma: no cover
             pass
         finally:
+            conn_log.mark_closing()
             await nc.drain()

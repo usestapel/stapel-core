@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.92.2] — 2026-10-17
+
+### Fixed — a broker restart logged ERROR with a traceback from every process
+
+No NATS connection passed an `error_cb`, so nats-py's fallback logged each
+`UnexpectedEOF`, refused connect and failed name lookup as
+`ERROR nats: encountered error`, once per reconnect attempt. Every connect
+site (functions client and server, bus publisher and consumer) now takes its
+callbacks from `stapel_core.net.nats_log.ConnectionLog`: a transient error is
+one WARNING per outage without a traceback (repeats are DEBUG), disconnect is
+WARNING, reconnect INFO, a close nobody asked for is ERROR, and any other
+error stays ERROR. A filter on the `nats.aio.client` logger downgrades the
+same transient classes when nats-py logs them itself.
+
+### Fixed — a timed-out bridge call left its coroutine running
+
+`NatsBridge._run` and the JetStream bus's `_run` gave up on the future but
+never cancelled it. A first connect retries for ever with
+`max_reconnect_attempts=-1`, so each call made while the broker was
+unreachable left one more connect loop behind. The future is now cancelled
+on timeout.
+
 ## [0.92.1] — 2026-10-15
 
 ### Fixed — `settings` rows crashed `manage.py check`
