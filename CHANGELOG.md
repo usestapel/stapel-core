@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.92.4] — 2026-10-22
+
+### Fixed — a module's nav link pointed at its own idea of its mount
+
+A module registered its admin-menu link as a literal path
+(`/translate/admin/dashboard/`), so a host that mounted it elsewhere — under
+`URL_PREFIX`, inside an `api/` include — rendered a link to a 404.
+`register_nav_link(..., url_name=...)` (and the `NAV_LINKS` overlay key
+`url_name`) is reversed against the host's URLconf at render time; `url`
+stays the fallback for a name this URLconf does not serve (a sibling
+service), and a link with neither is hidden. `nav.link_url(link)` is the one
+resolver `nav_sections` and `current_dashboard_url` use. New system check
+`stapel_core.nav.W007`: an internal nav link whose path nothing serves,
+unless its first segment is a declared sibling service.
+
 ## [0.92.3] — 2026-10-22
 
 ### Fixed — an anonymous request for the schema answered 500 instead of 401

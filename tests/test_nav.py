@@ -541,3 +541,88 @@ class TestSplitDeploymentServicesCheck:
             e.id == E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT for e in errors
         ), errors
         assert "payments/" in errors[0].msg
+
+
+# ─── url_name: links follow the host's mount (BACKLOG §37 (a)) ──────────────
+
+
+@pytest.fixture
+def _prefixed_urls(settings):
+    from django.urls import clear_url_caches
+
+    settings.ROOT_URLCONF = "stapel_core.tests.nav_prefix_urls"
+    clear_url_caches()
+    yield
+    clear_url_caches()
+
+
+class TestUrlName:
+    def test_a_named_link_follows_the_hosts_mount(self, _prefixed_urls):
+        register_nav_link(
+            "mod.dashboard", section="dashboards", title="Mod",
+            url="/mod/admin/dashboard/", url_name="navtest-mod-dashboard",
+            service_dashboard=True,
+        )
+        sections = nav_sections(_User())
+        assert sections["dashboards"][0]["url"] == "/shop/api/mod/admin/dashboard/"
+        assert current_dashboard_url(_User()) == "/shop/api/mod/admin/dashboard/"
+
+    def test_an_unserved_name_falls_back_to_the_literal_url(self, _prefixed_urls):
+        register_nav_link(
+            "sib.dashboard", section="dashboards", title="Sibling",
+            url="/sib/admin/dashboard/", url_name="no-such-name",
+        )
+        assert nav_sections(_User())["dashboards"][0]["url"] == "/sib/admin/dashboard/"
+
+    def test_an_unserved_name_without_url_hides_the_link(self, _prefixed_urls):
+        register_nav_link(
+            "ghost", section="tools", title="Ghost", url="", url_name="no-such-name",
+        )
+        assert nav_sections(_User()) == {}
+
+    def test_an_overlay_url_replaces_the_name(self, _prefixed_urls, settings):
+        register_nav_link(
+            "mod.dashboard", section="dashboards", title="Mod",
+            url="/mod/admin/dashboard/", url_name="navtest-mod-dashboard",
+        )
+        settings.STAPEL_ADMIN = {"NAV_LINKS": {"mod.dashboard": {"url": "/elsewhere/"}}}
+        (link,) = get_nav_links()
+        assert link.url_name == ""
+        assert nav_sections(_User())["dashboards"][0]["url"] == "/elsewhere/"
+
+
+class TestW007:
+    def _ids(self):
+        from stapel_core.django.nav_checks import check_nav_links_resolve
+
+        return [finding.id for finding in check_nav_links_resolve()]
+
+    def test_a_literal_url_the_host_does_not_serve_is_reported(self, _prefixed_urls):
+        register_nav_link(
+            "mod.dashboard", section="dashboards", title="Mod",
+            url="/mod/admin/dashboard/",
+        )
+        assert self._ids() == ["stapel_core.nav.W007"]
+
+    def test_a_named_link_is_silent(self, _prefixed_urls):
+        register_nav_link(
+            "mod.dashboard", section="dashboards", title="Mod",
+            url="/mod/admin/dashboard/", url_name="navtest-mod-dashboard",
+        )
+        assert self._ids() == []
+
+    def test_a_declared_sibling_service_is_silent(self, _prefixed_urls, settings):
+        settings.STAPEL_SERVICES = [{"name": "Mod", "prefix": "mod"},
+                                    {"name": "Shop", "prefix": "shop"}]
+        register_nav_link(
+            "mod.dashboard", section="dashboards", title="Mod",
+            url="/mod/admin/dashboard/",
+        )
+        assert self._ids() == []
+
+    def test_external_links_are_not_judged(self, _prefixed_urls):
+        register_nav_link(
+            "grafana", section="monitoring", title="Grafana",
+            url="https://grafana.example/", external=True,
+        )
+        assert self._ids() == []

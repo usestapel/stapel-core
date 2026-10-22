@@ -318,6 +318,11 @@ class NavLink:
     #: :func:`current_dashboard_url`. Set by the owning module at
     #: registration time; never inferred.
     service_dashboard: bool = False
+    #: A URL pattern name, reversed at render time, so the link follows
+    #: wherever the host mounted the module (a ``URL_PREFIX``, an ``api/``
+    #: include). ``url`` is then the fallback for a URLconf that does not
+    #: serve the name (the module lives in a sibling service).
+    url_name: str = ""
 
 
 #: Channel 1 — links registered in code by modules' AppConfig.ready().
@@ -350,8 +355,14 @@ def register_nav_link(
     requires: str = "staff",
     external: bool = False,
     service_dashboard: bool = False,
+    url_name: str = "",
 ) -> None:
     """Register a module's own nav link (channel 1, called from ready()).
+
+    Prefer ``url_name`` for a page the module itself serves: a literal
+    ``url`` is the module's own idea of its mount and breaks when the host
+    mounts it elsewhere (under ``URL_PREFIX``, inside an ``api/`` include);
+    the name is reversed against the host's URLconf at render time.
 
     Idempotent per key (re-import / repeated ready() is safe). The project
     overrides or removes it via ``STAPEL_ADMIN["NAV_LINKS"][key]`` (channel 2).
@@ -372,6 +383,7 @@ def register_nav_link(
         requires=requires,
         external=bool(external),
         service_dashboard=bool(service_dashboard),
+        url_name=str(url_name or ""),
     )
 
 
@@ -394,6 +406,7 @@ def _coerce_link(key: str, entry: Any, base: Optional[NavLink]) -> NavLink:
         )
     unknown = set(entry) - {
         "section", "title", "url", "requires", "external", "service_dashboard",
+        "url_name",
     }
     if unknown:
         raise NavConfigError(f"{source}: unknown keys {sorted(unknown)}")
@@ -423,6 +436,11 @@ def _coerce_link(key: str, entry: Any, base: Optional[NavLink]) -> NavLink:
                 "service_dashboard", base.service_dashboard if base else False
             )
         ),
+        # An overlay that sets a literal url without a name means that url.
+        url_name=str(entry.get(
+            "url_name",
+            "" if "url" in entry else (base.url_name if base else ""),
+        ) or ""),
     )
 
 
@@ -506,6 +524,30 @@ def _prefix_url(root: str, url: str, external: bool) -> str:
     return url
 
 
+def link_url(link: NavLink, root: Optional[str] = None) -> Optional[str]:
+    """The href *link* renders with, or ``None`` when it has none here.
+
+    ``url_name`` is reversed against this URLconf (``reverse`` already
+    carries the script prefix); a name this URLconf does not serve falls
+    back to the literal ``url`` — script-prefixed — or hides the link.
+    """
+    if link.url_name and not link.external:
+        from django.urls import NoReverseMatch, reverse
+
+        try:
+            return reverse(link.url_name)
+        except NoReverseMatch:
+            if not link.url:
+                return None
+    if not link.url:
+        return None
+    if root is None:
+        from django.urls import get_script_prefix
+
+        root = get_script_prefix()
+    return _prefix_url(root, link.url, link.external)
+
+
 def nav_sections(user) -> Dict[str, List[dict]]:
     """Render-ready links grouped by section, filtered by *user* admission.
 
@@ -519,10 +561,13 @@ def nav_sections(user) -> Dict[str, List[dict]]:
     for link in get_nav_links():
         if not _viewer_allowed(user, link.requires):
             continue
+        url = link_url(link, root)
+        if url is None:
+            continue
         result[link.section].append(
             {
                 "title": link.title,
-                "url": _prefix_url(root, link.url, link.external),
+                "url": url,
                 "external": link.external,
             }
         )
@@ -556,7 +601,9 @@ def current_dashboard_url(user) -> Optional[str]:
             continue
         if link.external or not _viewer_allowed(user, link.requires):
             continue
-        return _prefix_url(root, link.url, link.external)
+        url = link_url(link, root)
+        if url is not None:
+            return url
 
     # Fallback — legacy prefix-matching heuristic (pre-flag behavior).
     for link in links:
@@ -730,6 +777,7 @@ __all__ = [
     "swagger_mounted",
     "build_services",
     "current_swagger_url",
+    "link_url",
     "register_nav_link",
     "unregister_nav_link",
     "clear_nav_links",

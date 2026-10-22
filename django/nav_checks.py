@@ -17,6 +17,7 @@ W003_DUPLICATE_SERVICE_DASHBOARD = "stapel_core.nav.W003"
 E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT = "stapel_core.nav.E004"
 E005_PICKER_TEMPLATE_SHADOWED = "stapel_core.nav.E005"
 E006_NAV_CONTEXT_PROCESSOR_MISSING = "stapel_core.nav.E006"
+W007_NAV_LINK_UNSERVED = "stapel_core.nav.W007"
 
 
 @checks.register("stapel_nav")
@@ -247,6 +248,71 @@ def check_picker_renders(app_configs=None, **kwargs):
     return findings
 
 
+@checks.register("stapel_nav")
+def check_nav_links_resolve(app_configs=None, **kwargs):
+    """W007 — every internal nav link lands on a path something serves.
+
+    A module that registers a literal ``url`` states its own idea of where
+    it is mounted; a host that mounts it elsewhere (under ``URL_PREFIX``,
+    inside an ``api/`` include) renders a link to a 404 and nothing says so.
+    A link whose path this URLconf does not resolve is reported, unless its
+    first segment is a sibling service the deployment declares (the page
+    lives behind the same proxy, not here).
+
+    Blind spot: a path that resolves to a catch-all route (an SPA fallback)
+    counts as served.
+    """
+    from django.urls import Resolver404, get_script_prefix, resolve
+
+    from stapel_core.django.nav import (
+        NavConfigError, get_nav_links, get_services, link_url,
+    )
+
+    try:
+        links = get_nav_links()
+        services = {service.prefix for service in get_services() if service.prefix}
+    except NavConfigError:
+        return []  # E001 / E002 own that story
+    try:
+        from stapel_core.django.nav import sibling_prefixes
+
+        services |= {p.strip("/") for p in sibling_prefixes()}
+    except Exception:
+        pass
+    root = get_script_prefix()
+    findings = []
+    for link in links:
+        if link.external:
+            continue
+        try:
+            url = link_url(link, root)
+        except Exception:  # a URLconf that will not load is not ours to judge
+            return []
+        if not url or "://" in url or url.startswith("//") or not url.startswith("/"):
+            continue
+        path = url.split("?", 1)[0].split("#", 1)[0]
+        local = "/" + path[len(root):] if path.startswith(root) else path
+        try:
+            resolve(local)
+            continue
+        except Resolver404:
+            pass
+        except Exception:
+            return []
+        first = local.strip("/").split("/", 1)[0]
+        if first in services:
+            continue
+        findings.append(checks.Warning(
+            f"Nav link {link.key!r} points at {url}, which this URLconf does "
+            f"not serve — the admin renders a link to a 404.",
+            hint="Register the link with url_name=<the page's URL name> so it "
+                 "is reversed wherever the host mounted the module, or fix its "
+                 "url via STAPEL_ADMIN['NAV_LINKS'][key] = {'url': ...}.",
+            id=W007_NAV_LINK_UNSERVED,
+        ))
+    return findings
+
+
 __all__ = [
     "E001_BAD_SERVICES",
     "E002_BAD_NAV_LINKS",
@@ -254,6 +320,8 @@ __all__ = [
     "E004_SERVICES_UNSET_IN_SPLIT_DEPLOYMENT",
     "E005_PICKER_TEMPLATE_SHADOWED",
     "E006_NAV_CONTEXT_PROCESSOR_MISSING",
+    "W007_NAV_LINK_UNSERVED",
+    "check_nav_links_resolve",
     "check_services",
     "check_nav_links",
     "check_service_dashboard_duplicates",
