@@ -51,6 +51,16 @@ they are charged to that library and not to ``stapel_core``. The rules live in
 :mod:`stapel_core.comm.attribution`; the GDPR provider bridge asks the same
 question.
 
+``user.deletion_initiated`` pairs with ``user.deletion_cancelled`` for the
+same reason: the grace period is cancellable, and an app that acts at its start
+and does not listen for the cancel keeps acting on a live account. An
+irreversible action (purging media nothing references) answers the cancel with
+an explicit no-op that says so.
+
+What it cannot see: consumers that read the topic through a bus command only
+(no ``on_action`` subscription), and handlers in apps not installed in this
+process.
+
 Checks
 ------
 E001  an app handles a lifecycle event whose companion event has no handler
@@ -66,10 +76,11 @@ from .attribution import owning_app as _owner_of
 E001_LIFECYCLE_PAIR_UNHANDLED = "stapel_core.lifecycle.E001"
 
 #: cause action -> the companion action a subscriber of the cause must also
-#: answer. One entry today; the table is the extension point (a future
-#: ``user.anonymized`` pairs the same way).
+#: answer. The table is the extension point (a future ``user.anonymized``
+#: pairs the same way).
 LIFECYCLE_PAIRS: dict[str, str] = {
     "user.deleted": "user.merged",
+    "user.deletion_initiated": "user.deletion_cancelled",
 }
 
 _WHY = {
@@ -78,6 +89,11 @@ _WHY = {
         "knows deletion strands them — the merged user's rows keep pointing "
         "at an id that can no longer sign in, and no erasure is ever "
         "requested for it."
+    ),
+    "user.deletion_cancelled": (
+        "the grace period is cancellable; whatever the app paused when the "
+        "closure started stays paused after the person cancels it (contacts "
+        "silenced, listings hidden), with nothing raised anywhere."
     ),
 }
 

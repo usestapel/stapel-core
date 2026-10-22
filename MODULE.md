@@ -538,6 +538,19 @@ durable name), and reclaims entries abandoned by a dead consumer via
 XAUTOCLAIM once idle past the claim threshold. Consumers subclass
 `BaseBusConsumerCommand`.
 
+**In-process consumers** (`bus/subscriptions.py`, 0.94.0). On an in-process
+bus no consumer command can run (core refuses to start one), so a library
+subscribes the same handler from `AppConfig.ready()` with
+`stapel_core.bus.subscribe_in_process(topic, handler)`. The registry is
+module-level: it survives `reset_bus()` and `MemoryBus.clear()`, only
+in-process backends deliver to it (synchronously, inside `publish()`), and a
+`RoutingBus` delivers through the backend that owns the topic.
+`carries_in_process(topic)` answers "is this topic delivered in this process"
+via `BusBackend.backend_for(topic)` (a plain backend answers itself; a
+`RoutingBus` answers its route). Users: stapel-cdn (ref sync), stapel-notifications
+(`notification.requested`). A handler defers to `on_commit` or wraps itself in
+a savepoint when it must not see or break the publisher's transaction.
+
 Every broker backend wraps each handler attempt in
 `stapel_core.django.db.worker_db_lifecycle()` — a custom backend must do the
 same. A consumer loop has no request lifecycle, so without it the connection
@@ -3126,7 +3139,7 @@ a seam defect, invisible to every isolated suite that straddles it.
 
 | id | level | meaning |
 |---|---|---|
-| `stapel_core.lifecycle.E001` | Error | an app handles a lifecycle action whose companion action has no handler anywhere in that app (today: `user.deleted` without `user.merged`) |
+| `stapel_core.lifecycle.E001` | Error | an app handles a lifecycle action whose companion action has no handler anywhere in that app (today: `user.deleted` without `user.merged`; `user.deletion_initiated` without `user.deletion_cancelled`, 0.94.0) |
 
 ```python
 @on_action("user.merged")

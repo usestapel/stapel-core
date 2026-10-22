@@ -6,6 +6,10 @@ Public API:
     flush(timeout=None)           — wait for published events to be delivered
     get_bus()                     — get the configured backend instance
     reset_bus()                   — force re-init (tests)
+    subscribe_in_process(topic, handler)
+                                  — consume a topic in this process when the
+                                    bus is in-process (survives reset_bus())
+    carries_in_process(topic)     — is *topic* delivered in-process?
     Event                         — message envelope dataclass
     BusBackend                    — ABC for custom backends
     BaseBusConsumerCommand        — base Django management command for consumers
@@ -21,6 +25,12 @@ from .base import BusBackend
 from .consumer import BaseBusConsumerCommand
 from .event import Event
 from .router import flush, get_bus, reset_bus
+from .subscriptions import (
+    carries_in_process,
+    in_process_subscribers,
+    subscribe_in_process,
+    unsubscribe_in_process,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,4 +69,8 @@ __all__ = [
     "Event",
     "BusBackend",
     "BaseBusConsumerCommand",
+    "carries_in_process",
+    "in_process_subscribers",
+    "subscribe_in_process",
+    "unsubscribe_in_process",
 ]

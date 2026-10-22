@@ -165,8 +165,26 @@ def _parse_default(value: str) -> Optional[str]:
     return token
 
 
+#: A manifest row's identity: two libraries may each declare a knob of one
+#: name (``## stapel-cdn`` and ``## stapel-listings`` both own ``MAX_SIZE``).
+RowKey = tuple[Optional[str], str]
+
+
 def parse_config_md(source: str | Path, *, path_label: str | None = None) -> dict[str, ConfigEntry]:
-    """Parse a CONFIG.MD (path or text) into ``{key: ConfigEntry}``.
+    """Parse a CONFIG.MD into ``{key: ConfigEntry}`` — the resolution view.
+
+    One entry per key name: when two owners declare the same key, the later
+    row wins here, as ``get_config(key)`` without ``owner=`` resolves it.
+    Every row, keyed by ``(owner, key)``, is :func:`parse_config_rows`.
+    """
+    return {
+        key: entry
+        for (_owner, key), entry in parse_config_rows(source, path_label=path_label).items()
+    }
+
+
+def parse_config_rows(source: str | Path, *, path_label: str | None = None) -> dict[RowKey, ConfigEntry]:
+    """Parse a CONFIG.MD (path or text) into ``{(owner, key): ConfigEntry}``.
 
     Recognizes any GitHub-flavored markdown table whose header contains a
     ``key`` and a ``source`` column (case-insensitive); ``purpose`` /
@@ -184,7 +202,7 @@ def parse_config_md(source: str | Path, *, path_label: str | None = None) -> dic
         text = str(source)
         label = path_label or "<config.md>"
 
-    entries: dict[str, ConfigEntry] = {}
+    entries: dict[RowKey, ConfigEntry] = {}
     owner: Optional[str] = None
     header: Optional[list[str]] = None
     col: dict[str, int] = {}
@@ -231,7 +249,7 @@ def parse_config_md(source: str | Path, *, path_label: str | None = None) -> dic
                 f"{label}:{lineno}: config key {key!r} has source "
                 f"{source_val!r}; expected one of {', '.join(_SOURCES)}."
             )
-        entries[key] = ConfigEntry(
+        entries[(owner, key)] = ConfigEntry(
             key=key,
             source=source_val,
             purpose=_cell(_get("purpose")),
@@ -262,7 +280,7 @@ def _is_separator_row(cells: list[str]) -> bool:
 # --- manifest discovery + cache ---------------------------------------------
 
 _cache_lock = threading.Lock()
-_manifest_cache: dict[str, dict[str, ConfigEntry]] = {}
+_manifest_cache: dict[str, dict[RowKey, ConfigEntry]] = {}
 
 
 def discover_manifest_path(start: Path | None = None) -> Optional[Path]:
@@ -281,12 +299,17 @@ def discover_manifest_path(start: Path | None = None) -> Optional[Path]:
 
 
 def load_manifest(path: Path | None = None) -> dict[str, ConfigEntry]:
-    """Parse and cache the CONFIG.MD manifest.
+    """The CONFIG.MD manifest's resolution view, ``{key: ConfigEntry}``.
 
     Without *path*, discovers it (see :func:`discover_manifest_path`). A
     missing manifest resolves to an empty mapping — ``get_config`` then falls
     back to caller defaults and treats every undeclared key as unknown.
     """
+    return {key: entry for (_owner, key), entry in load_manifest_rows(path).items()}
+
+
+def load_manifest_rows(path: Path | None = None) -> dict[RowKey, ConfigEntry]:
+    """Parse and cache every manifest row, keyed by ``(owner, key)``."""
     resolved = path or discover_manifest_path()
     if resolved is None:
         return {}
@@ -295,7 +318,7 @@ def load_manifest(path: Path | None = None) -> dict[str, ConfigEntry]:
         cached = _manifest_cache.get(key)
         if cached is not None:
             return cached
-    parsed = parse_config_md(Path(resolved))
+    parsed = parse_config_rows(Path(resolved))
     with _cache_lock:
         _manifest_cache[key] = parsed
     return parsed
@@ -410,7 +433,8 @@ def get_config(
     *,
     purpose: str = "",
     required: bool | None = None,
-    manifest: dict[str, ConfigEntry] | None = None,
+    manifest: dict | None = None,
+    owner: object = _UNSET,
 ) -> str | None:
     """Resolve config *key* through the CONFIG.MD manifest.
 
@@ -436,12 +460,21 @@ def get_config(
     ``declare_swap``. They never change resolution when a manifest row
     already exists (the table stays authoritative); passing them is free
     metadata, not a second source of truth to reconcile by hand.
+
+    ``owner=`` picks the row of that ``## <owner>`` section (``None``: the
+    rows above any owner heading) when two owners declare the same key;
+    *manifest* is then a :func:`parse_config_rows` mapping (a key view is
+    looked up by key alone).
     """
     if purpose or required is not None:
         declare_config(key, purpose=purpose, required=bool(required), default=None)
 
-    table = load_manifest() if manifest is None else manifest
-    entry = table.get(key)
+    if owner is not _UNSET:
+        table = load_manifest_rows() if manifest is None else manifest
+        entry = table.get((owner, key)) or table.get(key)
+    else:
+        table = load_manifest() if manifest is None else manifest
+        entry = table.get(key)
 
     if entry is None:
         if default is not _UNSET:
@@ -509,7 +542,9 @@ __all__ = [
     "discover_manifest_path",
     "get_config",
     "load_manifest",
+    "load_manifest_rows",
     "parse_config_md",
+    "parse_config_rows",
     "reset_manifest_cache",
     "resolve_settings_value",
     "settings_namespace",

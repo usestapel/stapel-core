@@ -17,6 +17,7 @@ from typing import Callable
 
 from ..base import DEFAULT_FLUSH_TIMEOUT, BusBackend
 from ..event import Event
+from ..subscriptions import in_process_subscribers
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,11 @@ logger = logging.getLogger(__name__)
 class MemoryBus(BusBackend):
     """
     Thread-safe in-memory bus. Subscribers are registered per topic.
-    ``publish()`` delivers synchronously to all registered handlers,
-    then appends to ``self.events`` for test introspection.
+    ``publish()`` delivers synchronously to the persistent in-process
+    subscriptions (``stapel_core.bus.subscribe_in_process``, which outlive
+    ``clear()`` and ``reset_bus()``) and to handlers registered on this
+    instance with ``subscribe()``, then appends to ``self.events`` for test
+    introspection.
     """
 
     # Publisher and consumer share one process by construction.
@@ -45,7 +49,9 @@ class MemoryBus(BusBackend):
         logger.debug("MemoryBus.publish topic=%s event_id=%s", topic, event.event_id)
         with self._lock:
             self.events.append(event)
-        for handler in self._subscribers.get(topic, []):
+        handlers = list(in_process_subscribers(topic))
+        handlers += [h for h in self._subscribers.get(topic, []) if h not in handlers]
+        for handler in handlers:
             try:
                 handler(event)
             except Exception:
@@ -79,11 +85,15 @@ class MemoryBus(BusBackend):
     # ------------------------------------------------------------------
 
     def subscribe(self, topic: str, handler: Callable[[Event], None]) -> None:
-        """Register a synchronous handler called on every publish to *topic*."""
+        """Register a synchronous handler on this instance (tests).
+
+        Dropped by ``clear()`` and lost with the instance on ``reset_bus()``;
+        a library consumer uses ``stapel_core.bus.subscribe_in_process``.
+        """
         self._subscribers[topic].append(handler)
 
     def clear(self) -> None:
-        """Reset state between tests."""
+        """Reset state between tests (persistent subscriptions stay)."""
         with self._lock:
             self.events.clear()
             self._subscribers.clear()

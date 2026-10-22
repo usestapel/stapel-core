@@ -6,9 +6,11 @@ asynchronously. If CDN is temporarily down, events accumulate in Kafka and
 CDN catches up when it restarts.
 
 On an in-process bus (the shipped MemoryBus default) no consumer process can
-exist, so the claim is applied through the ``cdn.refs_sync`` comm Function as
-well: in a monolith that is stapel-cdn in this process, in a split deployment
-whatever FUNCTION_TRANSPORT routes it to.
+exist; stapel-cdn subscribes its consumer handler with
+``stapel_core.bus.subscribe_in_process`` and the publish itself delivers the
+claim. A stapel-cdn too old to subscribe (< 0.30.0) leaves the topic without
+an in-process subscriber; only then is the claim applied through the
+``cdn.refs_sync`` comm Function instead.
 
 For synchronous existence checks (read-only) use check_cdn_media_exists().
 """
@@ -65,12 +67,13 @@ def sync_cdn_refs(service, entity_type, entity_id, old_refs, new_refs) -> RefSyn
         "old_hashes": sorted(old_set),
         "new_hashes": sorted(new_set),
     }
+    topic = get_ref_sync_topic()
     try:
-        from stapel_core.bus import get_bus
+        from stapel_core.bus import carries_in_process, in_process_subscribers
 
-        in_process = bool(getattr(get_bus(), "in_process", False))
+        unconsumed = carries_in_process(topic) and not in_process_subscribers(topic)
         publish(
-            get_ref_sync_topic(),
+            topic,
             Event(
                 event_type="cdn.ref.sync",
                 service=service,
@@ -78,7 +81,7 @@ def sync_cdn_refs(service, entity_type, entity_id, old_refs, new_refs) -> RefSyn
                 key=str(entity_id),
             ),
         )
-        if in_process:
+        if unconsumed:
             return _apply_through_function(payload)
         return RefSyncResult(ok=True)
     except Exception as e:
@@ -93,7 +96,7 @@ def sync_cdn_refs(service, entity_type, entity_id, old_refs, new_refs) -> RefSyn
 
 
 def _apply_through_function(payload: dict) -> RefSyncResult:
-    """Apply a claim via ``cdn.refs_sync`` when no bus consumer can exist."""
+    """Apply a claim via ``cdn.refs_sync`` when nothing in-process consumes it."""
     from stapel_core.comm import call
     from stapel_core.comm.exceptions import CommError
 

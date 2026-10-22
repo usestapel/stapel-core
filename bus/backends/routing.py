@@ -111,12 +111,16 @@ class RoutingBus(BusBackend):
                 self._backends[dotted] = backend
         return backend
 
+    def backend_for(self, topic: str) -> BusBackend:
+        """The backend instance that carries *topic* (created on first use)."""
+        return self._backend_for(self._target_for(topic))
+
     # ------------------------------------------------------------------
     # BusBackend interface
     # ------------------------------------------------------------------
 
     def publish(self, topic: str, event: Event) -> None:
-        self._backend_for(self._target_for(topic)).publish(topic, event)
+        self.backend_for(topic).publish(topic, event)
 
     def flush(self, timeout: float = DEFAULT_FLUSH_TIMEOUT) -> int:
         """Flush every backend this process actually opened; sum what is left.

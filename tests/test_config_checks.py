@@ -251,3 +251,76 @@ def test_settings_source_declared_at_call_site_is_gated(settings_manifest):
     errors = _settings_errors()
 
     assert any("CALL_SITE_SETTING" in e.msg and "declare_config" in e.hint for e in errors)
+
+
+# --- two owners, one key name (CORE-15) ------------------------------------
+
+TWO_OWNERS_TEXT = """\
+# CONFIG.MD — testproj
+
+## stapel-cdn
+| Key | Source | Purpose | Required | Default |
+|-----|--------|---------|----------|---------|
+| MAX_ITEMS | settings | cdn batch size | yes | |
+
+## stapel-listings
+| Key | Source | Purpose | Required | Default |
+|-----|--------|---------|----------|---------|
+| MAX_ITEMS | settings | photos per listing | yes | |
+"""
+
+
+@pytest.fixture
+def two_owners_manifest(tmp_path, monkeypatch):
+    md = tmp_path / "CONFIG.MD"
+    md.write_text(TWO_OWNERS_TEXT, encoding="utf-8")
+    monkeypatch.setenv("STAPEL_CONFIG_MANIFEST", str(md))
+    reset_manifest_cache()
+    return md
+
+
+def test_each_owner_of_a_shared_key_name_is_checked(two_owners_manifest):
+    """The earlier owner's required row was dropped: only the last was checked."""
+    from django.test import override_settings
+
+    with override_settings(STAPEL_LISTINGS={"MAX_ITEMS": 10}):
+        errors = _settings_errors()
+
+    assert len(errors) == 1
+    assert "STAPEL_CDN['MAX_ITEMS']" in errors[0].hint
+
+
+def test_both_owners_resolved_is_clean(two_owners_manifest):
+    from django.test import override_settings
+
+    with override_settings(STAPEL_LISTINGS={"MAX_ITEMS": 10}, STAPEL_CDN={"MAX_ITEMS": 5}):
+        assert _settings_errors() == []
+
+
+def test_get_config_reads_the_named_owners_row(two_owners_manifest):
+    from django.test import override_settings
+
+    from stapel_core.config import get_config, load_manifest_rows
+
+    rows = load_manifest_rows()
+    assert set(rows) == {("stapel-cdn", "MAX_ITEMS"), ("stapel-listings", "MAX_ITEMS")}
+    with override_settings(STAPEL_LISTINGS={"MAX_ITEMS": 10}, STAPEL_CDN={"MAX_ITEMS": 5}):
+        assert get_config("MAX_ITEMS", owner="stapel-cdn") == 5
+        assert get_config("MAX_ITEMS", owner="stapel-listings") == 10
+        assert get_config("MAX_ITEMS") == 10  # the key view: last row wins
+
+
+def test_one_env_key_declared_by_two_owners_is_reported_once(tmp_path, monkeypatch):
+    md = tmp_path / "CONFIG.MD"
+    md.write_text(
+        "## stapel-a\n| Key | Source | Required |\n|--|--|--|\n| SHARED_URL | env | yes |\n\n"
+        "## stapel-b\n| Key | Source | Required |\n|--|--|--|\n| SHARED_URL | env | yes |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STAPEL_CONFIG_MANIFEST", str(md))
+    monkeypatch.delenv("SHARED_URL", raising=False)
+    reset_manifest_cache()
+
+    errors = [e for e in check_required_config() if "SHARED_URL" in e.msg]
+
+    assert len(errors) == 1

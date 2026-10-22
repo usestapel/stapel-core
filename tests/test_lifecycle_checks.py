@@ -149,3 +149,21 @@ def test_register_gdpr_owner_stamps_the_calling_library():
 
     assert registration.handle_user_deleted.stapel_handler_module == "stapel_billing.apps"
     assert registration.handle_erasure_requested.stapel_handler_module == "stapel_billing.apps"
+
+
+def test_deletion_initiated_without_cancelled_is_an_error():
+    """The grace period is cancellable; acting at its start owes the cancel."""
+    _subscribe("user.deletion_initiated", "stapel_cdn.actions", "purge")
+
+    errors = check_lifecycle_pairs()
+
+    assert _ids(errors) == [E001_LIFECYCLE_PAIR_UNHANDLED]
+    assert "'stapel_cdn'" in errors[0].msg
+    assert "user.deletion_cancelled" in errors[0].msg
+
+
+def test_deletion_initiated_with_cancelled_is_clean():
+    _subscribe("user.deletion_initiated", "stapel_notifications.actions", "pause")
+    _subscribe("user.deletion_cancelled", "stapel_notifications.actions", "resume")
+
+    assert check_lifecycle_pairs() == []

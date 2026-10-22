@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.94.0] — 2026-10-22
+
+### Added — in-process bus subscriptions that survive a bus reset
+
+`stapel_core.bus.subscribe_in_process(topic, handler)` is the public way for a
+library to consume a topic in this process when the bus is in-process (no
+consumer command can run there). The registry outlives `reset_bus()` and
+`MemoryBus.clear()`; `MemoryBus.publish` delivers to it, and a `RoutingBus`
+delivers through the backend that owns the topic. `carries_in_process(topic)`
+and the public `BusBackend.backend_for(topic)` (`RoutingBus`: the route's
+backend) answer whether a topic is delivered in-process; a routing bus with a
+`memory` route used to be read as "not in-process" by `sync_cdn_refs`, and the
+claim was lost. `sync_cdn_refs` now relies on stapel-cdn's subscription (cdn
+0.30.0) and calls `cdn.refs_sync` only when nothing in-process consumes the
+topic (an older stapel-cdn).
+
+### Added — `user.deletion_initiated` pairs with `user.deletion_cancelled`
+
+`stapel_core.lifecycle.E001` now also reports an app that handles
+`user.deletion_initiated` and registers no `user.deletion_cancelled` handler:
+the grace period is cancellable, and what was paused at its start stayed paused.
+An explicit no-op handler is a green answer. stapel-cdn < 0.30.0 is reported.
+
+### Fixed — two owners' required config rows of one name are both checked
+
+The CONFIG.MD manifest kept one row per key name, so when two libraries each
+declared a required knob of the same name only the later was checked by
+`stapel_core.config.E001/E002`. Rows are now keyed by `(owner, key)`:
+`parse_config_rows()` / `load_manifest_rows()`, and `get_config(key,
+owner=...)` reads a named owner's row. `parse_config_md()` / `load_manifest()`
+keep their key view (the later row of a name, as before). One environment
+variable declared by two owners is reported once.
+
 ## [0.93.1] — 2026-10-22
 
 ### Fixed — an unanswered function call no longer fails a single-attempt Task

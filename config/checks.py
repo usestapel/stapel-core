@@ -45,17 +45,25 @@ def _defined_in_settings(key: str) -> bool:
 
 
 def _required_entries():
-    """Manifest rows ∪ call-site declarations marked required.
+    """Required manifest rows ∪ call-site declarations, keyed by (owner, key).
 
-    The CONFIG.MD manifest wins on a key present in both — it is the
+    Every row counts: two owners may each declare a required knob of one
+    name, and each resolves in its own ``STAPEL_<MOD>`` namespace. The
+    CONFIG.MD manifest wins on a key present in both — it is the
     authoritative, human-reviewed source; a call-site declaration only fills
     in keys the table does not know about yet.
     """
-    from . import declared_config_entries, load_manifest
+    from . import declared_config_entries, load_manifest_rows
 
-    merged = dict(declared_config_entries())
-    merged.update(load_manifest())  # manifest overrides declared on overlap
-    return {key: entry for key, entry in merged.items() if entry.required}
+    rows = load_manifest_rows()
+    in_table = {key for _owner, key in rows}
+    merged = {
+        (None, key): entry
+        for key, entry in declared_config_entries().items()
+        if key not in in_table
+    }
+    merged.update(rows)
+    return {row: entry for row, entry in merged.items() if entry.required}
 
 
 @checks.register("stapel_config")
@@ -72,7 +80,9 @@ def check_required_config(app_configs=None, **kwargs):
     )
 
     errors = []
-    for key, entry in sorted(_required_entries().items()):
+    reported_env: set[str] = set()
+    entries = sorted(_required_entries().items(), key=lambda item: (item[0][1], item[0][0] or ""))
+    for (_owner, key), entry in entries:
         if entry.source == SOURCE_SETTINGS:
             found, _ = resolve_settings_value(key, entry.owner)
             if found or entry.default is not None:
@@ -104,11 +114,15 @@ def check_required_config(app_configs=None, **kwargs):
         kwargs: dict = {"required": True}
         if entry.default is not None:
             kwargs["default"] = entry.default
+        if entry.line:  # a manifest row, not a call-site declaration
+            kwargs["owner"] = entry.owner
         try:
             get_config(key, **kwargs)
         except (ConfigUnavailable, ConfigNotDeclared):
-            if _defined_in_settings(key):
+            if _defined_in_settings(key) or key in reported_env:
                 continue
+            # One environment variable, however many owners declare it.
+            reported_env.add(key)
             purpose = f" — needed for: {entry.purpose}" if entry.purpose else ""
             errors.append(
                 checks.Error(

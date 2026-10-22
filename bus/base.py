@@ -45,6 +45,15 @@ class BusBackend(ABC):
         Implementations are responsible for retry, DLQ, and graceful shutdown.
         """
 
+    def backend_for(self, topic: str) -> "BusBackend":
+        """The backend that carries *topic*: this one, unless it delegates.
+
+        ``RoutingBus`` answers with the backend of the topic's route, so a
+        question about a topic (is it delivered in-process?) is asked of the
+        transport that actually carries it.
+        """
+        return self
+
     def flush(self, timeout: float = DEFAULT_FLUSH_TIMEOUT) -> int:
         """Wait up to *timeout* seconds for queued messages to be delivered.
 
