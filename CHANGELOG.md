@@ -21,6 +21,15 @@ still failed `manage.py check`. A required key defined in Django settings with
 a non-empty value now passes; whether it is a placeholder stays
 `stapel_prodguard`'s question.
 
+### Added — a provider's `LookupError` survives `call()`
+
+In-process `call()` wrapped every provider exception in a bare
+`FunctionCallError`, so a caller written against a provider's documented
+`LookupError` (`categories.features` for an unknown category) never caught it
+and answered 500. The new `comm.FunctionLookupError` is both a
+`FunctionCallError` and a `LookupError`; the remote function view answers it
+as `422 {"kind": "lookup"}` and the HTTP transport re-raises it.
+
 ### Fixed — CDN ref claims were dropped on the in-process bus
 
 `sync_cdn_refs` only published on the bus. On the shipped default

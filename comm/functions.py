@@ -8,6 +8,7 @@ from typing import Any, Callable
 from .config import comm_setting
 from .exceptions import (
     FunctionCallError,
+    FunctionLookupError,
     FunctionNotRegistered,
     FunctionRouteNotConfigured,
 )
@@ -109,6 +110,8 @@ def call(
             # carries the sizes and the setting to change; only the type was
             # being thrown away.
             raise
+        except LookupError as exc:
+            raise FunctionLookupError(f"function '{name}': {exc}") from exc
         except Exception as exc:
             raise FunctionCallError(f"function '{name}' failed: {exc!r}") from exc
 
@@ -270,6 +273,14 @@ def reset_http_session() -> None:
         _session = None
 
 
+def _is_lookup_answer(resp) -> bool:
+    try:
+        data = resp.json()
+    except ValueError:
+        return False
+    return isinstance(data, dict) and data.get("kind") == "lookup"
+
+
 def _call_http(name: str, payload: dict, *, timeout: float | None) -> Any:
     import requests
     from django.conf import settings
@@ -314,6 +325,8 @@ def _call_http(name: str, payload: dict, *, timeout: float | None) -> Any:
             f"(404 from the URL resolver, not the view). Check FUNCTION_ROUTES "
             f"and that the remote service mounts get_function_urls()."
         )
+    if resp.status_code == 422 and _is_lookup_answer(resp):
+        raise FunctionLookupError(f"function '{name}': {resp.json().get('error')}")
     if resp.status_code >= 400:
         raise FunctionCallError(
             f"function '{name}' returned HTTP {resp.status_code}: {resp.text[:500]}"

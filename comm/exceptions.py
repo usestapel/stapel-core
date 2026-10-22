@@ -18,6 +18,15 @@ class FunctionCallError(CommError):
     """The provider raised / the remote call failed."""
 
 
+class FunctionLookupError(FunctionCallError, LookupError):
+    """The provider answered "no such entity" (it raised ``LookupError``).
+
+    A ``LookupError`` as well as a ``FunctionCallError``, so a caller written
+    against the provider's documented ``LookupError`` catches it through
+    ``call()``, and one that catches every call failure still does.
+    """
+
+
 class FunctionPayloadTooLarge(FunctionCallError):
     """A request or reply exceeds the transport's per-message size limit.
 

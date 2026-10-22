@@ -42,6 +42,13 @@ class FunctionCallView(APIView):
         try:
             function_registry.validate(name, payload)
             result = handler(payload)
+        except LookupError as exc:
+            # The provider's answer, not a failure: the caller re-raises it as
+            # FunctionLookupError (see functions._call_http).
+            return Response(
+                {"error": str(exc), "kind": "lookup"},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
         except Exception as exc:
             logger.exception("function %s failed", name)
             return Response(
