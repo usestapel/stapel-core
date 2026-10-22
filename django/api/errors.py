@@ -489,9 +489,37 @@ class StapelError:
     error_language: str = ""
 
 
+def plain_json(value):
+    """*value* as plain JSON types, recursively.
+
+    An error envelope's ``params`` carries what DRF and Django hand over:
+    ``ErrorDetail`` (a ``str`` subclass), ``ReturnDict``/``ReturnList``, lazy
+    translation strings, tuples. ``JSONRenderer`` copes with all of them;
+    ``yaml.safe_dump`` (the schema view's YAML renderer) represents none, so
+    an anonymous 401 on ``schema/`` answered 500. Plain types render under
+    every renderer.
+    """
+    from django.utils.functional import Promise
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, (str, Promise)):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): plain_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [plain_json(v) for v in value]
+    return str(value)
+
+
 class StapelErrorSerializer(StapelDataclassSerializer):
     class Meta:
         dataclass = StapelError
+
+    @property
+    def data(self):
+        # Plain dict, not DRF's ReturnDict: safe_dump represents neither.
+        return plain_json(super().data)
 
 
 # =============================================================================

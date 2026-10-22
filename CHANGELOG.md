@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.92.3] — 2026-10-22
+
+### Fixed — an anonymous request for the schema answered 500 instead of 401
+
+The 401 envelope carried DRF's `ErrorDetail` in `params.detail`, wrapped in a
+`ReturnDict`, and the schema view's YAML renderer (`yaml.safe_dump`) can
+represent neither, so the staff-only schema crashed for every caller without
+credentials. `StapelErrorSerializer.data` now returns plain JSON types
+(`errors.plain_json`: `ErrorDetail` and lazy strings to `str`, DRF return
+containers to `dict`/`list`), so every error envelope renders under every
+renderer. Tested across all exception-handler tiers with the JSON, OpenAPI
+JSON and OpenAPI YAML renderers, and on the schema view itself.
+
 ## [0.92.2] — 2026-10-17
 
 ### Fixed — a broker restart logged ERROR with a traceback from every process
