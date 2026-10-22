@@ -76,7 +76,7 @@ def test_scalar_keys_still_read_from_the_environment(owners, monkeypatch):
     monkeypatch.setenv("DATA_OWNERS_VERSION", "2026-08-13.1")
     monkeypatch.setenv("OWNER_TIMEOUT_HOURS", "6")
     assert owners.DATA_OWNERS_VERSION == "2026-08-13.1"
-    assert owners.OWNER_TIMEOUT_HOURS == "6"
+    assert owners.OWNER_TIMEOUT_HOURS == 6  # read in the default's type
 
 
 def test_the_settings_dict_is_the_way_in(owners, monkeypatch):

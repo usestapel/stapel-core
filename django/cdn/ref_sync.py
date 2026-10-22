@@ -5,6 +5,11 @@ Publishes ref-sync events to the message bus so CDN can update its ref table
 asynchronously. If CDN is temporarily down, events accumulate in Kafka and
 CDN catches up when it restarts.
 
+On an in-process bus (the shipped MemoryBus default) no consumer process can
+exist, so the claim is applied through the ``cdn.refs_sync`` comm Function as
+well: in a monolith that is stapel-cdn in this process, in a split deployment
+whatever FUNCTION_TRANSPORT routes it to.
+
 For synchronous existence checks (read-only) use check_cdn_media_exists().
 """
 
@@ -53,22 +58,28 @@ def sync_cdn_refs(service, entity_type, entity_id, old_refs, new_refs) -> RefSyn
     if old_set == new_set:
         return RefSyncResult()
 
+    payload = {
+        "service": service,
+        "entity_type": entity_type,
+        "entity_id": str(entity_id),
+        "old_hashes": sorted(old_set),
+        "new_hashes": sorted(new_set),
+    }
     try:
+        from stapel_core.bus import get_bus
+
+        in_process = bool(getattr(get_bus(), "in_process", False))
         publish(
             get_ref_sync_topic(),
             Event(
                 event_type="cdn.ref.sync",
                 service=service,
-                payload={
-                    "service": service,
-                    "entity_type": entity_type,
-                    "entity_id": str(entity_id),
-                    "old_hashes": list(old_set),
-                    "new_hashes": list(new_set),
-                },
+                payload=payload,
                 key=str(entity_id),
             ),
         )
+        if in_process:
+            return _apply_through_function(payload)
         return RefSyncResult(ok=True)
     except Exception as e:
         logger.warning(
@@ -79,6 +90,25 @@ def sync_cdn_refs(service, entity_type, entity_id, old_refs, new_refs) -> RefSyn
             entity_id,
         )
         return RefSyncResult(ok=False)
+
+
+def _apply_through_function(payload: dict) -> RefSyncResult:
+    """Apply a claim via ``cdn.refs_sync`` when no bus consumer can exist."""
+    from stapel_core.comm import call
+    from stapel_core.comm.exceptions import CommError
+
+    try:
+        result = call("cdn.refs_sync", payload)
+    except CommError as exc:
+        logger.warning(
+            "CDN ref sync: the bus is in-process, so no consumer can receive "
+            "%s/%s/%s, and the cdn.refs_sync function failed (%s). The media "
+            "stays unclaimed and is swept after UNCLAIMED_TTL_HOURS.",
+            payload["service"], payload["entity_type"], payload["entity_id"], exc,
+        )
+        return RefSyncResult(ok=False, errors=[str(exc)])
+    errors = list((result or {}).get("errors") or []) if isinstance(result, dict) else []
+    return RefSyncResult(ok=True, errors=errors)
 
 
 def check_cdn_media_exists(ref_str: str) -> bool:

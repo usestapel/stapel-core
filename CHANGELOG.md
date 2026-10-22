@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.93.0] — 2026-10-22
+
+### Changed — an environment value arrives in its default's type
+
+`AppSettings` returned an environment variable as the raw string, so
+`MAX_IMAGE_SIZE=5242880` compared a str with an int (a 500 on every upload)
+and `REQUIRE_DECODER=False` stayed truthy. A key with a `bool`/`int`/`float`
+default is now read from the environment in that type. A value that does not
+parse passes through unchanged and is reported by the new warning
+`stapel_core.conf.W002`; `AppSettings(..., env_raw=("KEY",))` declares a key
+whose library parses the string itself. Settings-dict and flat-setting values
+are untouched.
+
+### Fixed — `config.E001` ignored the settings the process runs on
+
+An `env`/`vault` row resolved only from `os.environ` and the secrets provider,
+so a `SECRET_KEY` written in `dev.py` (or core's own `get_secret` fallback)
+still failed `manage.py check`. A required key defined in Django settings with
+a non-empty value now passes; whether it is a placeholder stays
+`stapel_prodguard`'s question.
+
+### Fixed — CDN ref claims were dropped on the in-process bus
+
+`sync_cdn_refs` only published on the bus. On the shipped default
+(`MemoryBus`) no consumer process can exist, so listing, profile and chat media
+stayed unclaimed and `sweep_unclaimed` deleted it after `UNCLAIMED_TTL_HOURS`.
+On an in-process bus the claim is now also applied through the `cdn.refs_sync`
+comm Function; a failure returns `ok=False` with a warning naming the sweep.
+`BaseBusConsumerCommand.get_topics()` resolves a consumer's topics at start,
+so a consumer can read the same setting its producer reads.
+
 ## [0.92.4] — 2026-10-22
 
 ### Fixed — a module's nav link pointed at its own idea of its mount

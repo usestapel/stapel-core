@@ -306,7 +306,23 @@ def test_sync_cdn_refs_no_change_is_noop():
     assert result == RefSyncResult(ok=True, errors=[])
 
 
-def test_sync_cdn_refs_publishes_event():
+@pytest.fixture
+def cdn_refs_function():
+    """A stand-in for stapel-cdn's ``cdn.refs_sync`` provider in this process."""
+    from stapel_core.comm.registry import function_registry
+
+    calls = []
+
+    def provider(payload):
+        calls.append(payload)
+        return {"added": len(payload["new_hashes"]), "removed": 0, "errors": []}
+
+    function_registry._providers["cdn.refs_sync"] = provider
+    yield calls
+    function_registry._providers.pop("cdn.refs_sync", None)
+
+
+def test_sync_cdn_refs_publishes_event(cdn_refs_function):
     from stapel_core.bus import get_bus
 
     result = sync_cdn_refs(
@@ -323,7 +339,7 @@ def test_sync_cdn_refs_publishes_event():
     assert set(event.payload["new_hashes"]) == {"product/new1", "product/new2"}
 
 
-def test_sync_cdn_refs_handles_none_ref_lists():
+def test_sync_cdn_refs_handles_none_ref_lists(cdn_refs_function):
     from stapel_core.bus import get_bus
 
     result = sync_cdn_refs("profiles", "ad", "x1", None, ["product/n"])
@@ -340,6 +356,48 @@ def test_sync_cdn_refs_publish_failure_returns_not_ok(monkeypatch):
     monkeypatch.setattr(bus_pkg, "publish", boom)
     result = sync_cdn_refs("profiles", "ad", 1, [], ["product/n"])
     assert result.ok is False
+
+
+def test_in_process_bus_applies_the_claim_through_the_function(cdn_refs_function):
+    """On the in-process bus no consumer process can exist; the claim must
+    reach cdn.refs_sync or the media is swept as unclaimed."""
+    result = sync_cdn_refs("listings", "listing", 7, [], ["product/b", "product/a"])
+    assert result.ok is True
+    assert cdn_refs_function == [{
+        "service": "listings",
+        "entity_type": "listing",
+        "entity_id": "7",
+        "old_hashes": [],
+        "new_hashes": ["product/a", "product/b"],
+    }]
+
+
+def test_in_process_bus_without_a_provider_reports_not_ok(caplog):
+    result = sync_cdn_refs("listings", "listing", 7, [], ["product/a"])
+    assert result.ok is False
+    assert "stays unclaimed" in caplog.text
+
+
+def test_a_broker_bus_does_not_call_the_function(cdn_refs_function, monkeypatch):
+    import stapel_core.bus as bus_pkg
+    from stapel_core.bus import router
+
+    class BrokerBus:
+        in_process = False
+        published = []
+
+        def publish(self, topic, event):
+            self.published.append((topic, event))
+
+    broker = BrokerBus()
+    monkeypatch.setattr(router, "get_bus", lambda: broker)
+    monkeypatch.setattr(bus_pkg, "get_bus", lambda: broker)
+    monkeypatch.setattr(bus_pkg, "publish", lambda topic, event: broker.publish(topic, event))
+
+    result = sync_cdn_refs("listings", "listing", 7, [], ["product/a"])
+    assert result.ok is True
+    assert cdn_refs_function == []
+    assert broker.published and broker.published[0][0] == "stapel.cdn.ref-sync"
 
 
 # ---------------------------------------------------------------------------

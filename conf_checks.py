@@ -3,6 +3,7 @@
 W001 — an environment variable that is set and silently ignored.
 E002 — an environment variable supplying a container-shaped setting.
 E003 — an environment variable outside its key's declared vocabulary.
+W002 — an environment variable that does not parse as its key's scalar type.
 
 
 A key in ``import_strings`` names the class the process imports and runs, so
@@ -26,6 +27,7 @@ from django.core import checks
 W001_ENV_VAR_IGNORED = "stapel_core.conf.W001"
 E002_STRUCTURED_ENV_VAR = "stapel_core.conf.E002"
 E003_ENV_ENUM_REJECTED = "stapel_core.conf.E003"
+W002_SCALAR_ENV_VAR = "stapel_core.conf.W002"
 
 
 #: Why the key is closed, in the two vocabularies the rule actually has.
@@ -177,8 +179,44 @@ def check_env_enum_values(app_configs=None, **kwargs):
     return errors
 
 
+@checks.register("stapel_conf")
+def check_scalar_env_vars(app_configs=None, **kwargs):
+    """W002 — an env var for a bool/int/float key that does not parse as one.
+
+    ``AppSettings._raw`` reads such a variable in the default's type; a value
+    that does not parse reaches the library as a bare string, where an int
+    comparison raises and the string "False" is truthy. Warning, not error:
+    keys a library parses itself are declared ``env_raw`` and never reported,
+    and an undeclared word may still be one the library understands.
+    """
+    from .conf import registered_settings
+
+    warnings = []
+    seen: set[tuple[str, str]] = set()
+    for app_settings in registered_settings():
+        for key, env_name, raw, kind in app_settings.rejected_scalar_env_vars():
+            if (app_settings.namespace, env_name) in seen:
+                continue
+            seen.add((app_settings.namespace, env_name))
+            warnings.append(checks.Warning(
+                f"Environment variable {env_name}={raw!r} does not parse as a "
+                f"{kind}, the declared type of {app_settings.namespace}[{key!r}]; "
+                f"the library receives the bare string.",
+                hint=(
+                    f"Set {env_name} to a {kind} value"
+                    + (" (true/false, 1/0, yes/no, on/off)" if kind == "bool" else "")
+                    + f", put the value in the {app_settings.namespace} dict in "
+                    f"your settings module, or unset {env_name}."
+                ),
+                id=W002_SCALAR_ENV_VAR,
+            ))
+    return warnings
+
+
 __all__ = [
     "check_env_enum_values",
+    "check_scalar_env_vars",
+    "W002_SCALAR_ENV_VAR",
     "check_ignored_env_vars",
     "check_structured_env_vars",
     "E002_STRUCTURED_ENV_VAR",

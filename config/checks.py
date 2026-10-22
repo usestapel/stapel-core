@@ -10,6 +10,13 @@ through the config seam yet. ``manage.py check`` / boot-smoke is where a
 half-configured service should die, not the first request that needs the
 missing value.
 
+An ``env``/``vault`` row whose value is absent from the environment and the
+secrets provider still passes when the Django settings module defines the key
+with a non-empty value: the settings the process actually runs on resolved it
+(a ``SECRET_KEY = get_secret('SECRET_KEY', fallback)`` line, a value written in
+``dev.py``). Whether that value is a placeholder is ``stapel_prodguard``'s
+question, not this check's.
+
 E002 is the ``settings``-source counterpart: a required row declared as a
 Django setting must resolve in the owner's ``STAPEL_<MOD>`` dict, a flat
 setting, or its default column. Settings rows never consult env or vault.
@@ -20,6 +27,21 @@ from django.core import checks
 
 E001_REQUIRED_CONFIG_MISSING = "stapel_core.config.E001"
 E002_REQUIRED_SETTING_MISSING = "stapel_core.config.E002"
+
+
+def _defined_in_settings(key: str) -> bool:
+    """True when ``settings.<key>`` exists and is not ``None`` or empty."""
+    from django.conf import settings
+
+    try:
+        value = getattr(settings, key, None)
+    except Exception:  # settings not configured: nothing resolved there
+        return False
+    if value is None:
+        return False
+    if isinstance(value, (str, bytes)) and not value.strip():
+        return False
+    return True
 
 
 def _required_entries():
@@ -85,6 +107,8 @@ def check_required_config(app_configs=None, **kwargs):
         try:
             get_config(key, **kwargs)
         except (ConfigUnavailable, ConfigNotDeclared):
+            if _defined_in_settings(key):
+                continue
             purpose = f" — needed for: {entry.purpose}" if entry.purpose else ""
             errors.append(
                 checks.Error(
@@ -93,8 +117,9 @@ def check_required_config(app_configs=None, **kwargs):
                     hint=(
                         "Set the environment variable"
                         + (" or vault secret" if entry.source == "vault" else "")
-                        + " before starting the service, or add a safe "
-                          "default to its CONFIG.MD row."
+                        + f" before starting the service, define settings.{key} "
+                          "in the settings module, or add a safe default to "
+                          "its CONFIG.MD row."
                     ),
                     id=E001_REQUIRED_CONFIG_MISSING,
                 )

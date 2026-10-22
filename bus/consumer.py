@@ -41,6 +41,11 @@ class BaseBusConsumerCommand(BaseCommand):
             ),
         )
 
+    def get_topics(self) -> list[str]:
+        """Topics to consume, resolved at start: override to read a setting
+        the producer reads too, so the two cannot be split by an override."""
+        return list(self.topics)
+
     def handle(self, *args, **options):
         bus = get_bus()
         # A standalone consumer PROCESS on an in-process bus can never
@@ -76,14 +81,15 @@ class BaseBusConsumerCommand(BaseCommand):
         from ..observability.exporter import serve_metrics
 
         serve_metrics()
-        declare_topics(self.topics)
+        topics = self.get_topics()
+        declare_topics(topics)
 
         self.stdout.write(
             f"Starting consumer group={self.consumer_group} "
-            f"topics={self.topics} backend={bus.__class__.__name__}"
+            f"topics={topics} backend={bus.__class__.__name__}"
         )
         bus.consume(
-            self.topics,
+            topics,
             self.consumer_group,
             self._handle_traced,
             poll_timeout=options["poll_timeout"],

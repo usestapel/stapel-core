@@ -141,6 +141,45 @@ def test_core_own_config_md_has_required_keys_that_pass_when_set(monkeypatch, tm
     assert not any(e.id == E001_REQUIRED_CONFIG_MISSING and "SECRET_KEY" in e.msg for e in errors)
 
 
+def test_env_and_vault_rows_resolve_through_the_settings_module(monkeypatch, settings):
+    """An env/vault key absent from os.environ but defined in the settings the
+    process runs on is resolved: a dev.py that writes SECRET_KEY in Python
+    must not leave `manage.py check` red on config.E001."""
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    monkeypatch.delenv("API_TOKEN", raising=False)
+    settings.DATA_DIR = "/srv/data"
+    settings.API_TOKEN = "settings-token"
+
+    assert check_required_config() == []
+
+
+def test_an_empty_setting_does_not_satisfy_a_required_row(monkeypatch, settings):
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    monkeypatch.setenv("API_TOKEN", "secret-token")
+    settings.DATA_DIR = "  "
+
+    errors = check_required_config()
+    assert [e.id for e in errors] == [E001_REQUIRED_CONFIG_MISSING]
+    assert "DATA_DIR" in errors[0].msg
+    assert "settings.DATA_DIR" in errors[0].hint
+
+
+def test_core_secret_key_row_passes_on_settings_secret_key(monkeypatch, settings):
+    """core's own CONFIG.MD row (SECRET_KEY vault, required) against a
+    process whose SECRET_KEY comes from the settings module only."""
+    import stapel_core.config as config
+
+    core_md = Path(config.__file__).resolve().parent.parent / "CONFIG.MD"
+    monkeypatch.setenv("STAPEL_CONFIG_MANIFEST", str(core_md))
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    settings.SECRET_KEY = "django-insecure-dev-only-value-set-in-dev-py"
+    reset_manifest_cache()
+    invalidate_secret()
+
+    errors = check_required_config()
+    assert not any(e.id == E001_REQUIRED_CONFIG_MISSING and "SECRET_KEY" in e.msg for e in errors)
+
+
 # --- settings source --------------------------------------------------------
 
 SETTINGS_MANIFEST_TEXT = """\

@@ -137,6 +137,16 @@ resolved with `import_string` — the standard seam for swapping behavior
 without forking. Host apps and other stapel modules create their own
 instances (e.g. `verification_settings` below).
 
+**An environment value arrives in its default's type.** A key whose default
+is a `bool`, `int` or `float` is read back from the environment in that type
+(`"5242880"` → `5242880`; `true/false`, `1/0`, `yes/no`, `on/off` → bool), so
+a numeric cap compares as a number and `FLAG=False` is falsy. A value that
+does not parse reaches the library as the string it is and `manage.py check`
+names it (`stapel_core.conf.W002`). A key whose library parses the string
+itself (a ceiling that also takes the word `unlimited`) is declared
+`env_raw=("KEY",)` and is passed verbatim. Values from the settings dict and
+flat settings are never converted.
+
 **Keys in `import_strings` skip the environment step** — they are implicitly
 `no_env`. Such a key does not carry a value, it names the class the process
 imports and runs, so a same-named env var in a shared pod would choose the

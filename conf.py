@@ -70,6 +70,11 @@ _EMPTY = object()
 # parse is a guess nobody reviews.
 _STRUCTURED_TYPES = (list, tuple, set, frozenset, dict)
 
+# bool before int: True is an int too.
+_SCALAR_TYPES = (bool, int, float)
+_TRUE_WORDS = frozenset({"1", "true", "yes", "on"})
+_FALSE_WORDS = frozenset({"0", "false", "no", "off", ""})
+
 # Every AppSettings ever built, in construction order. The instances are
 # per-module singletons living in ``<package>/conf.py`` modules that core
 # cannot enumerate — siblings declare their own namespaces and core has no
@@ -106,6 +111,7 @@ class AppSettings:
         env_overridable: Iterable[str] = (),
         resolvers: dict[str, Any] | None = None,
         env_enum: dict[str, Any] | None = None,
+        env_raw: Iterable[str] = (),
     ) -> None:
         self.namespace = namespace
         self.defaults = dict(defaults)
@@ -173,6 +179,16 @@ class AppSettings:
         # module, and importing it from a package's ``conf.py`` at declaration
         # time would drag that module into every import of the package.
         self.env_enum: dict[str, Any] = dict(env_enum or {})
+        # Scalar keys whose environment string the library parses itself (a
+        # numeric ceiling that also takes the word "unlimited"): read back
+        # verbatim, never coerced to the default's type nor reported by W002.
+        self.env_raw = frozenset(env_raw)
+        unknown_raw = self.env_raw - set(self.defaults)
+        if unknown_raw:
+            raise ValueError(
+                f"{namespace}: env_raw names {sorted(unknown_raw)}, which "
+                f"{'is' if len(unknown_raw) == 1 else 'are'} not in defaults"
+            )
         both_ways_out = set(self.env_enum) & self.env_overridable
         if both_ways_out:
             raise ValueError(
@@ -423,6 +439,71 @@ class AppSettings:
             f"settings), or unset {name}."
         )
 
+    def scalar_type(self, key: str) -> type | None:
+        """``bool``/``int``/``float`` when *key*'s declared default is one.
+
+        The environment speaks only strings; a key declared with a scalar
+        default is read back in that type, so ``MAX_SIZE=5242880`` compares
+        as a number and ``FLAG=False`` is falsy.
+        """
+        if key in self.env_raw:
+            return None
+        default = self.defaults.get(key)
+        for kind in _SCALAR_TYPES:
+            if isinstance(default, kind):
+                return kind
+        return None
+
+    def coerce_env_value(self, key: str, raw: str) -> Any:
+        """*raw* read in *key*'s scalar type; ``ValueError`` when it is not one.
+
+        Keys without a scalar default come back unchanged.
+        """
+        kind = self.scalar_type(key)
+        if kind is None:
+            return raw
+        text = raw.strip()
+        if kind is bool:
+            lowered = text.lower()
+            if lowered in _TRUE_WORDS:
+                return True
+            if lowered in _FALSE_WORDS:
+                return False
+            raise ValueError(f"{raw!r} is not a boolean")
+        return kind(text)
+
+    def rejected_scalar_env_vars(self) -> list[tuple[str, str, str, str]]:
+        """``(key, env var, value, type name)`` for every scalar key set to a
+        value that does not parse as its type — the boot-time report of the
+        strings :meth:`_coerce_env` had to pass through unconverted.
+        """
+        found = []
+        for key in self.defaults:
+            kind = self.scalar_type(key)
+            if kind is None or not self._env_allowed(key):
+                continue
+            for name in self.env_var_names(key):
+                raw = os.environ.get(name)
+                if raw is None:
+                    continue
+                try:
+                    self.coerce_env_value(key, raw)
+                except ValueError:
+                    found.append((key, name, raw, kind.__name__))
+        return found
+
+    def _coerce_env(self, key: str, name: str, raw: str) -> Any:
+        """The env string in the default's scalar type.
+
+        A value that does not parse is passed through as the string it is
+        (a library may accept a word such as "unlimited" for a numeric key);
+        ``manage.py check`` names it (``stapel_core.conf.W002``).
+        """
+        try:
+            return self.coerce_env_value(key, raw)
+        except ValueError:
+            return raw
+
     def _connect_reload(self) -> None:
         try:
             from django.test.signals import setting_changed
@@ -455,7 +536,7 @@ class AppSettings:
                         self._refuse_structured_env(key, name, env)
                     if key in self.env_enum and env not in self.env_vocabulary(key):
                         self._refuse_env_enum(key, name, env)
-                    return env
+                    return self._coerce_env(key, name, env)
         if key in self.defaults:
             return self.defaults[key]
         raise AttributeError(f"{self.namespace} has no setting {key!r}")
