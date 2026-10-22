@@ -71,7 +71,7 @@ from typing import Any, Callable
 
 from .backoff import DEFAULT_BASE_SECONDS, DEFAULT_CAP_SECONDS, retry_delay
 from .config import comm_setting
-from .exceptions import CommError, FunctionPayloadTooLarge
+from .exceptions import CommError, FunctionNotRegistered, FunctionPayloadTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -806,6 +806,25 @@ def execute(task_id: str, *, announced_by: str = "", kind: str = "") -> None:
         )
         _observe_duration(record.kind, started)
         _park(record, repr(exc)[:2000], reason=TaskRecord.REASON_UNPROCESSABLE)
+        return
+    except FunctionNotRegistered as exc:
+        # Nobody received the request: no work was done, nothing billed.
+        # Usually the serving worker is restarting; give it the grace
+        # attempts (TASK_UNANSWERED_RETRIES) on top of max_attempts.
+        _observe_duration(record.kind, started)
+        grace = max(int(comm_setting("TASK_UNANSWERED_RETRIES", 3) or 0), 0)
+        if record.attempts < record.max_attempts + grace:
+            logger.warning(
+                "task %s (%s) attempt %s found no responder — retrying: %s",
+                task_id, record.kind, record.attempts, exc,
+            )
+            _requeue(record, repr(exc)[:2000])
+        else:
+            logger.error(
+                "task %s (%s) found no responder after %s attempt(s) — parking",
+                task_id, record.kind, record.attempts,
+            )
+            _park(record, repr(exc)[:2000], reason=TaskRecord.REASON_HANDLER)
         return
     except Exception as exc:
         logger.exception("task %s (%s) failed", task_id, record.kind)

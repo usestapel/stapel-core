@@ -503,6 +503,80 @@ def test_an_ordinary_transport_failure_still_retries(settings):
     )
 
 
+def _run_out(task_id):
+    while TaskRecord.objects.get(pk=task_id).state == TaskRecord.PENDING:
+        TaskRecord.objects.filter(pk=task_id).update(not_before=None)
+        execute(task_id)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_unanswered_call_does_not_spend_a_single_attempt_task(settings):
+    """No responder means nobody got the request: retry past max_attempts=1.
+
+    A priced kind runs with max_attempts=1 so the provider is never paid
+    twice. A call that found no responder (the serving worker restarting)
+    paid nobody, and parking it failed a customer's recording for a
+    deploy's few seconds.
+    """
+    from stapel_core.comm.exceptions import FunctionNotRegistered
+
+    settings.STAPEL_COMM = {
+        **getattr(settings, "STAPEL_COMM", {}), "TASK_RETRY_BACKOFF_BASE": 0,
+    }
+    calls = {"n": 0}
+
+    def restarting_then_up(payload):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise FunctionNotRegistered("no service is serving function 'llm.transcribe'")
+        return {"ok": True}
+
+    register_task("llm.unanswered", restarting_then_up)
+    with transaction.atomic():
+        task_id = start("llm.unanswered", max_attempts=1)
+    _run_out(task_id)
+
+    assert calls["n"] == 2
+    assert status(task_id).state == TaskRecord.DONE
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_unanswered_grace_is_bounded_and_never_buys_a_paid_retry(settings):
+    from stapel_core.comm.exceptions import FunctionCallError, FunctionNotRegistered
+
+    settings.STAPEL_COMM = {
+        **getattr(settings, "STAPEL_COMM", {}),
+        "TASK_RETRY_BACKOFF_BASE": 0, "TASK_UNANSWERED_RETRIES": 2,
+    }
+    calls = {"n": 0}
+
+    def never_up(payload):
+        calls["n"] += 1
+        raise FunctionNotRegistered("nobody")
+
+    register_task("llm.never", never_up)
+    with transaction.atomic():
+        task_id = start("llm.never", max_attempts=1)
+    _run_out(task_id)
+    assert calls["n"] == 3
+    assert status(task_id).state == TaskRecord.FAILED
+
+    paid = {"n": 0}
+
+    def unanswered_then_paid_failure(payload):
+        paid["n"] += 1
+        if paid["n"] == 1:
+            raise FunctionNotRegistered("restarting")
+        raise FunctionCallError("provider failed after doing the work")
+
+    register_task("llm.paid", unanswered_then_paid_failure)
+    with transaction.atomic():
+        task_id = start("llm.paid", max_attempts=1)
+    _run_out(task_id)
+    assert paid["n"] == 2, "one real call, as max_attempts=1 promises"
+    assert status(task_id).state == TaskRecord.FAILED
+
+
 @pytest.mark.django_db(transaction=True)
 def test_the_size_refusal_survives_the_inprocess_call_seam(settings):
     """call() must not launder the class away.

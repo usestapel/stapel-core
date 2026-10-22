@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.93.1] — 2026-10-22
+
+### Fixed — an unanswered function call no longer fails a single-attempt Task
+
+A Task whose handler's `call()` found no responder (`FunctionNotRegistered`:
+the serving worker was restarting, nobody received the request) was treated
+like any failure, so a priced kind running with `max_attempts=1` parked on
+the first try and failed its caller for good — a few seconds of a rolling
+deploy were enough to fail a pipeline run. Such a failure now gets up to
+`STAPEL_COMM["TASK_UNANSWERED_RETRIES"]` (default 3) attempts on top of
+`max_attempts`, on the ordinary backoff and sweep. The grace applies only to
+the unanswered call: any other failure past `max_attempts` still parks, so a
+provider is never called more often than `max_attempts` allows. `0` restores
+the old behaviour.
+
 ## [0.93.0] — 2026-10-22
 
 ### Changed — an environment value arrives in its default's type

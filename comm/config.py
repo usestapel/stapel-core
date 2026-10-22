@@ -99,6 +99,15 @@ _DEFAULTS: dict[str, Any] = {
     # what a single-process test wants, and nothing else.
     "TASK_RETRY_BACKOFF_BASE": 2.0,
     "TASK_RETRY_BACKOFF_CAP": 300.0,
+    # Extra attempts a Task gets when its handler's function call found NO
+    # responder (FunctionNotRegistered: nobody received the request, so no
+    # work was done and nothing was billed). A rolling restart of the
+    # serving worker takes seconds; with max_attempts=1 on a priced kind,
+    # one unanswered call used to park the task and fail its caller for
+    # good. The grace applies only to that failure: any other failure past
+    # max_attempts still parks, so a provider is never called more often
+    # than max_attempts allows. 0 restores the old behaviour.
+    "TASK_UNANSWERED_RETRIES": 3,
     # Largest checkpoint value kept inline in the task row's JSON column.
     # Above it the value travels by reference through LARGE_REPLY["STORE"]
     # (and is stored inline anyway if there is no store — a fat row beats
