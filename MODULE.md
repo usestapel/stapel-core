@@ -2576,6 +2576,7 @@ delivery guarantees; cross-module facts still go through comm Actions.
 | `generate_error_docs [--lang X] [--out docs]` | Human-readable `docs/errors.<lang>.md` reference (i18n-shipping.md §4) |
 | `check_flows [--allow SUBSTRING]` | CI gate: flow documentation completeness |
 | `staff_group`, `reset_sequences` | Staff group fixture management; DB sequence reset |
+| `run_seeds [--list]` | Run the idempotent seed commands named in `settings.STAPEL_SEEDS`, in order (0.95.0). Unknown names fail before any seed runs; a failing seed is named. The generated `bootstrap.sh` calls it as an `optional "seeds"` step |
 
 ### Common Django settings (`django/settings.py`)
 

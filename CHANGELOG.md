@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.95.0] — 2026-10-23
+
+### Added — `manage.py run_seeds` runs the seeds a project declares
+
+A project names its seed commands in `settings.STAPEL_SEEDS` (a list of
+management command names, default empty) and `python manage.py run_seeds`
+runs them in order with `call_command`. Every seed must be idempotent: the
+generated `bootstrap.sh` runs it on every start as an `optional "seeds"` step,
+so a failure degrades the boot and names the seed instead of stopping the
+service. Every name is checked before anything runs (an unknown name fails
+listing the missing commands); a failing seed stops the run and is named;
+`--list` prints the declared seeds. Library seeds keep their own bootstrap
+steps; this is the place for a project's own data.
+
 ## [0.94.0] — 2026-10-22
 
 ### Added — in-process bus subscriptions that survive a bus reset
