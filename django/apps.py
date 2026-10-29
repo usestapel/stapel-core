@@ -56,6 +56,11 @@ class CommonDjangoConfig(AppConfig):
         # where stapel-gdpr already erases the primary row.
         from stapel_core.gdpr.identity import register_identity_mirror_owner
         register_identity_mirror_owner()
+        # Share-link tokens in request paths and referers: the access log and
+        # Django's "Not Found" warning are written by this process, so the
+        # redaction an edge proxy does never reaches them.
+        from stapel_core.observability import url_secrets
+        url_secrets.install()
         # A library that registers a GDPRProvider has already said what it
         # owns. gdpr_registry is the MONOLITH path — the orchestrator walks it
         # in its own process — so in a split fleet a provider in a peer is

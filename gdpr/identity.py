@@ -193,9 +193,10 @@ def is_tombstoned(user) -> bool:
 def erase_subject(subject_type: str, subject_key: str, workspace_id=None):
     """The owner callable. Idempotent; counts what it changed.
 
-    Returns ``None`` for a subject this does not claim, or for a user id this
-    service has never mirrored — ``None`` receipts nothing, and an erasure the
-    orchestrator is not waiting on is not ours to confirm.
+    Returns ``None`` only for a subject type this does not claim. A user id
+    this service never mirrored is a zero-count receipt: the mirror claims
+    every account, so the orchestrator opened a part for it and waits for an
+    answer, and "nothing of this person is stored here" is that answer.
     """
     if subject_type != "account":
         return None
@@ -205,9 +206,9 @@ def erase_subject(subject_type: str, subject_key: str, workspace_id=None):
     User = get_user_model()
     user = User.objects.filter(pk=subject_key).first()
     if user is None:
-        # Never mirrored here, or already dropped. Either way there is nothing
-        # of this person in this store, which is the post-condition.
-        return None
+        # Never mirrored here, or already dropped: the post-condition holds,
+        # and it is confirmed rather than left to the part's deadline.
+        return {"identity_mirror": 0}
 
     if is_tombstoned(user):
         # A redelivery, not a second person. Report zero rather than minting a

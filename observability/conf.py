@@ -82,6 +82,12 @@ observability_settings = AppSettings(
             "refresh_token", "api_key", "apikey", "authorization",
             "cookie", "session", "private_key", "client_secret", "otp",
         ],
+        # Path segments whose NEXT segment is a bearer token (share links:
+        # /share/<token>, /public/shares/<token>). The access log, Django's
+        # "Not Found" warning and a referer quoting such a page get
+        # `<redacted>` in its place (stapel_core.observability.url_secrets).
+        # Empty turns the redaction off.
+        "SECRET_PATH_SEGMENTS": ["share", "shares"],
     },
     # Both are dotted paths naming the CLASS the process imports and runs,
     # so they are implicitly env-closed by the import_strings rule.

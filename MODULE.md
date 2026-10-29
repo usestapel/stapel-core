@@ -1721,6 +1721,7 @@ Public surface (all re-exported from `stapel_core.observability`):
 | `LOG_INCLUDE_SOURCE` | `False` | replace | Adds `module`/`func`/`line` |
 | `LOG_EXEMPT_LOGGERS` | `[]` | **merge** | Loggers `logging_config()` leaves entirely to the host |
 | `REDACT_FIELDS` | password/token/secret/authorization/cookie/… | replace | Record fields blanked to `"***"` at the formatter |
+| `SECRET_PATH_SEGMENTS` | `["share", "shares"]` | replace | Path segments whose next segment is a bearer token; it is written as `<redacted>` in the WSGI access log, Django's `Not Found` warning and quoted referers (`observability.url_secrets`, installed by core's AppConfig) |
 | `METRIC_NAMESPACE` | `"stapel_"` | replace | Prefix on every metric name (matches `STAPEL_METRICS_PREFIX` on `/api/metrics/`) |
 | `HISTOGRAM_BUCKETS` | HTTP-latency ladder (s) | replace | Default histogram buckets; per-call `buckets=` wins |
 | `STATSD_HOST` / `STATSD_PORT` | `"127.0.0.1"` / `8125` | replace | `StatsdMetricsBackend` target |

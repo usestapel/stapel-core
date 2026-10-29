@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.95.1] — 2026-10-29
+
+### Fixed — the identity mirror confirms an erasure of a user it never saw
+
+`gdpr.identity.erase_subject` returned `None` for an account this service
+had never mirrored. The mirror claims every `account`, so the orchestrator
+opened a part for it and waited; `None` receipts nothing, and the part was
+swept to TIMEOUT — every erasure of a person who never touched one of the
+mirroring services ended incomplete. It now answers
+`{"identity_mirror": 0}`: nothing of that person is stored here, which is
+the post-condition.
+
+### Fixed — share-link tokens no longer reach the process's own logs
+
+A share link is a bearer token in the path, and the WSGI access log (request
+line and referer) and Django's `Not Found: <path>` warning are written by the
+service itself, after any proxy that masks it. `observability.url_secrets`
+replaces the segment after each name in
+`STAPEL_OBSERVABILITY["SECRET_PATH_SEGMENTS"]` (default `["share",
+"shares"]`) with `<redacted>`; core's AppConfig attaches its filter to
+`gunicorn.access`, `django.request`, `django.server` and `uvicorn.access`.
+
 ## [0.95.0] — 2026-10-23
 
 ### Added — `manage.py run_seeds` runs the seeds a project declares

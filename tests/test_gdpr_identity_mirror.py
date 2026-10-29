@@ -79,9 +79,52 @@ class TestEraseSubject:
         user.refresh_from_db()
         assert user.email == "person@example.com"
 
-    def test_a_user_never_mirrored_here_is_none(self):
+    def test_a_user_never_mirrored_here_is_a_zero_receipt(self):
+        """The orchestrator opens a part for every owner claiming ``account``;
+        a None here left it waiting until the deadline swept it to TIMEOUT,
+        and every erasure of a guest who never touched this service ended
+        incomplete (a live fleet, 2026-10-24 onward)."""
         import uuid
-        assert identity.erase_subject("account", str(uuid.uuid4())) is None
+        assert identity.erase_subject("account", str(uuid.uuid4())) == {"identity_mirror": 0}
+
+    def test_the_erasure_request_for_a_never_mirrored_user_is_receipted(self, settings):
+        import uuid
+
+        from django.test import override_settings
+
+        from stapel_core.bus.event import Event
+        from stapel_core.comm import action_registry
+        from stapel_core.gdpr import ERASURE_REQUESTED, SECTION_ERASED, register_gdpr_owner
+        from stapel_core.gdpr.owners import _reset_gdpr_owners
+
+        settings.STAPEL_SERVICE_NAME = "svc-a"
+        action_registry.clear()
+        _reset_gdpr_owners()
+        seen = []
+        action_registry.subscribe(SECTION_ERASED, lambda event: seen.append(event.payload))
+        key = str(uuid.uuid4())
+        try:
+            with override_settings(
+                STAPEL_COMM={"OUTBOX_ENABLED": False, "ACTION_TRANSPORT": "inprocess"}
+            ):
+                reg = register_gdpr_owner(
+                    identity.owner_name(), list(identity.SUBJECT_TYPES), identity.erase_subject
+                )
+                reg.handle_erasure_requested(
+                    Event(
+                        event_type=ERASURE_REQUESTED,
+                        service="gdpr",
+                        payload={"correlation_id": "c-1", "subject_type": "account", "subject_key": key},
+                    )
+                )
+        finally:
+            action_registry.clear()
+            _reset_gdpr_owners()
+
+        (receipt,) = seen
+        assert receipt["owner"] == "identity_mirror:svc-a"
+        assert receipt["subject_key"] == key
+        assert receipt["counts"] == {"identity_mirror": 0}
 
     def test_redelivery_reports_zero_not_a_second_pseudonym(self):
         """At-least-once delivery: the second run must not mint a new tombstone."""
