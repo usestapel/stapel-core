@@ -383,6 +383,21 @@ class TestOneTimeCodeDropsMeasure:
         assert report.outcome is DropOutcome.NOT_FOUND
         assert report.what == "pending code"
 
+    def test_nothing_to_discard_is_info_not_a_warning(self):
+        """An erasure of a user with no code in flight is the common case."""
+        store = OneTimeCodeStore("otp_email")
+        with _capture("stapel_core.verification.codes", logging.DEBUG) as records:
+            store.discard("never@example.com")
+        found = [r for r in records if "found nothing" in r.getMessage()]
+        assert [r.levelno for r in found] == [logging.INFO]
+
+    def test_an_unblock_that_finds_nothing_still_warns(self):
+        store = OneTimeCodeStore("otp_email")
+        with _capture("stapel_core.verification.codes", logging.DEBUG) as records:
+            store.unblock("never@example.com")
+        found = [r for r in records if "found nothing" in r.getMessage()]
+        assert [r.levelno for r in found] == [logging.WARNING]
+
     def test_a_real_discard_is_dropped(self):
         store = OneTimeCodeStore("otp_email")
         store.issue("b@example.com", "654321", ttl=300, max_attempts=3)

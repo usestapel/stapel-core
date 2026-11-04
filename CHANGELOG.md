@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.95.2] — 2026-11-04
+
+### Changed — discarding a code that is not there logs at INFO
+
+`OneTimeCodeStore.discard()` finding no pending code is the ordinary case
+(an erasure of a user with no code in flight) and logged a WARNING on every
+such erasure. It now logs at INFO; `unblock()` and other drops keep their
+WARNING. `measured_drop()` takes an explicit `absence_level`.
+
 ## [0.95.1] — 2026-10-29
 
 ### Fixed — the identity mirror confirms an erasure of a user it never saw

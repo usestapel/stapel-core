@@ -232,7 +232,7 @@ class OneTimeCodeStore:
         except Exception as exc:  # noqa: BLE001
             raise StoreUnavailable(str(exc)) from exc
 
-    def _drop(self, key: str, what: str) -> DropReport:
+    def _drop(self, key: str, what: str, *, absence_level: int | None = None) -> DropReport:
         """Remove *key* and measure it, in the vocabulary the package shares.
 
         Goes through this class's own ``_get``/``_delete`` rather than the
@@ -247,6 +247,7 @@ class OneTimeCodeStore:
             exists=lambda: self._get(key) is not None,
             delete=lambda: self._delete(key),
             log=logger,
+            absence_level=absence_level,
             hint=(
                 "this store is deliberately SERVICE-LOCAL (see the module "
                 "header), so a peer's copy of the same identifier is a "
@@ -369,7 +370,11 @@ class OneTimeCodeStore:
         is now in the return value and in the log, which is the difference
         between best-effort and unknowable.
         """
-        return self._drop(self._code_key(identifier), "pending code")
+        # Most discards find nothing (an erasure of a user with no code in
+        # flight): INFO, not WARNING.
+        return self._drop(
+            self._code_key(identifier), "pending code", absence_level=logging.INFO
+        )
 
     # ── block ───────────────────────────────────────────────────────────────
 

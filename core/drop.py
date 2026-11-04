@@ -145,6 +145,7 @@ def measured_drop(
     log: logging.Logger = logger,
     hint: str = DEFAULT_MISS_HINT,
     absence_is_normal: bool = False,
+    absence_level: int | None = None,
 ) -> DropReport:
     """Delete *key* and report what that did, having read the store back.
 
@@ -163,6 +164,8 @@ def measured_drop(
     invalidation broadcast reaching a peer that never cached that user). It is
     a per-call-site decision and never a default: a warning on every event
     would teach the reader to ignore the warning that matters.
+    *absence_level* sets that log level explicitly when neither fits (a
+    routine erasure tail: worth a trace, not a warning).
     """
     try:
         existed = bool(exists())
@@ -187,8 +190,10 @@ def measured_drop(
     if existed:
         return DropReport(DropOutcome.DROPPED, what, key, namespace)
 
+    if absence_level is None:
+        absence_level = logging.DEBUG if absence_is_normal else logging.WARNING
     log.log(
-        logging.DEBUG if absence_is_normal else logging.WARNING,
+        absence_level,
         "%s drop found nothing at %r in namespace %r. If you expected a record "
         "here, whatever wrote it computed a different key — %s.",
         what, key, namespace, hint,
