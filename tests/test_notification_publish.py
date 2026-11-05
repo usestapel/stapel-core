@@ -125,3 +125,49 @@ def test_schema_still_rejects_an_unknown_property():
             {"notification_type": "otp_code", "telegram_chat": "123"},
             _emit_schema(),
         )
+
+
+# ── dedup key (optional, carried to the notifications consumer) ──────
+
+
+def test_dedup_key_and_ttl_ride_the_payload():
+    jsonschema = pytest.importorskip("jsonschema")
+    assert request_notification(
+        "feed.reaction_received",
+        user_id="u-1",
+        dedup_key="feed:reaction:post:7",
+        dedup_ttl=300,
+    ) is True
+    (payload,) = _published_payloads()
+    assert payload["dedup_key"] == "feed:reaction:post:7"
+    assert payload["dedup_ttl"] == 300
+    jsonschema.validate(payload, _emit_schema())
+
+
+def test_dedup_key_without_ttl_leaves_the_window_to_the_consumer():
+    request_notification("otp_code", email="dest@example.com", dedup_key="k")
+    (payload,) = _published_payloads()
+    assert payload["dedup_key"] == "k"
+    assert "dedup_ttl" not in payload
+
+
+def test_no_dedup_key_keeps_the_old_payload():
+    request_notification("otp_code", email="dest@example.com")
+    (payload,) = _published_payloads()
+    assert "dedup_key" not in payload and "dedup_ttl" not in payload
+
+
+@pytest.mark.parametrize("kwargs, match", [
+    ({"dedup_key": ""}, "dedup_key"),
+    ({"dedup_key": 42}, "dedup_key"),
+    ({"dedup_key": "x" * 256}, "dedup_key"),
+    ({"dedup_key": "k", "dedup_ttl": 0}, "dedup_ttl"),
+    ({"dedup_key": "k", "dedup_ttl": True}, "dedup_ttl"),
+    ({"dedup_key": "k", "dedup_ttl": 1.5}, "dedup_ttl"),
+    ({"dedup_key": "k", "dedup_ttl": 30 * 86400 + 1}, "dedup_ttl"),
+    ({"dedup_ttl": 60}, "dedup_ttl"),
+])
+def test_malformed_dedup_raises_early(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        request_notification("otp_code", email="dest@example.com", **kwargs)
+    assert _published_payloads() == []

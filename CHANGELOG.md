@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.95.3] — 2026-11-05
+
+### Added — `request_notification` takes an optional dedup key
+
+`request_notification(..., dedup_key=None, dedup_ttl=None)`. The key (and
+the window in seconds, 1..30 days) ride the `notification.requested`
+payload only when set, and stapel-notifications delivers at most one
+request per `(notification_type, dedup_key)` within the window, so a
+reminder or a debounced reaction no longer hand-rolls its own claim.
+Malformed values raise `ValueError` before anything is published; calls
+without a key publish the payload they always did.
+
 ## [0.95.2] — 2026-11-04
 
 ### Changed — discarding a code that is not there logs at INFO
