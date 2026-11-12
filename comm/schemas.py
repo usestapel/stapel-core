@@ -13,6 +13,13 @@ taskstore AppConfig.ready().
 owner, and only owners write the emit registry (a consumer's
 ``on_action(schema=)`` is kept per subscription instead). Two apps declaring
 one fact with different schemas are reported by ``stapel_core.comm.E011``.
+
+Core is a library, not an app with a ``schemas/`` directory of its own: the
+facts it emits ship next to their emitters (``gdpr/schemas/emits/``,
+``notifications/schemas/emits/``). :func:`register_core_emit_schemas` declares
+every one of them with ``owner="stapel_core"``; it runs from core's
+``AppConfig.ready()`` and first thing in :func:`autoload_schemas`, so core is
+the first declared owner of its facts whatever the INSTALLED_APPS order.
 """
 from __future__ import annotations
 
@@ -23,6 +30,38 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _loaded = False
+
+#: Owner name core's own emit declarations are recorded under.
+CORE_OWNER = "stapel_core"
+
+_CORE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def core_emit_schema_files() -> dict[str, Path]:
+    """``{fact: path}`` for every ``schemas/emits/*.json`` core ships."""
+    return {
+        path.stem: path
+        for path in sorted(_CORE_ROOT.glob("*/schemas/emits/*.json"))
+    }
+
+
+def register_core_emit_schemas(registry=None) -> int:
+    """Declare every emit schema core ships, as their owner. Idempotent.
+
+    Returns the number declared. Re-declaring under the same owner replaces
+    the schema with itself, so calling it from several ``ready()`` hooks is
+    safe.
+    """
+    from .registry import action_registry
+
+    registry = registry or action_registry
+    count = 0
+    for fact, path in core_emit_schema_files().items():
+        schema = _read(path)
+        if schema is not None:
+            registry.register_schema(fact, schema, owner=CORE_OWNER)
+            count += 1
+    return count
 
 
 def autoload_schemas() -> int:
@@ -37,6 +76,7 @@ def autoload_schemas() -> int:
 
     from .registry import action_registry, function_registry
 
+    register_core_emit_schemas(action_registry)
     count = 0
     for app_config in apps.get_app_configs():
         base = Path(app_config.path) / "schemas"

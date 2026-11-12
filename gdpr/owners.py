@@ -56,35 +56,19 @@ USER_DELETED = "user.deleted"
 #: subject and split its history in two.
 PSEUDONYM_PREFIX = "erased:"
 
-#: Payload contracts. Deliberately the LOOSEST correct shape — required keys
-#: and their types, additional properties allowed. A schema registered here
-#: is registered for the whole process, and an owner library must not be the
-#: reason a field stapel-gdpr added is refused at the emitter.
-ERASURE_REQUESTED_SCHEMA = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": ERASURE_REQUESTED,
-    "type": "object",
-    "required": ["correlation_id", "subject_type", "subject_key"],
-    "properties": {
-        "correlation_id": {"type": ["string", "integer"]},
-        "subject_type": {"type": "string"},
-        "subject_key": {"type": ["string", "integer"]},
-        "workspace_id": {"type": ["string", "integer", "null"]},
-    },
-}
-
-OWNER_PROBE_SCHEMA = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": OWNER_PROBE,
-    "type": "object",
-    "properties": {"correlation_id": {"type": ["string", "integer"]}},
-}
-
 #: ``erase(subject_type, subject_key, workspace_id) -> counts | None``.
 EraseCallable = Callable[[str, str, "str | None"], "Mapping[str, object] | None"]
 
 _lock = threading.Lock()
 _owners: dict[str, "GdprOwner"] = {}
+
+
+def _is_key(value) -> bool:
+    """A non-empty string or non-zero integer: the shape of an id another
+    module sent."""
+    if isinstance(value, bool) or not value:
+        return False
+    return isinstance(value, (int, str))
 
 
 def receipt_id(owner: str, subject_type: str, subject_key: str, correlation_id: str) -> str:
@@ -208,14 +192,10 @@ def register_gdpr_owner(
         registration = _build(name, types, erase, legacy_user_deleted, caller_module)
         _owners[name] = registration
 
-    subscribe_action(
-        ERASURE_REQUESTED,
-        registration.handle_erasure_requested,
-        schema=ERASURE_REQUESTED_SCHEMA,
-    )
-    subscribe_action(
-        OWNER_PROBE, registration.handle_owner_probe, schema=OWNER_PROBE_SCHEMA
-    )
+    # No schema=: both facts are stapel-gdpr's, and the handlers read their
+    # fields defensively (stapel_core.testing.assert_module_registers_only_own_emit_schemas).
+    subscribe_action(ERASURE_REQUESTED, registration.handle_erasure_requested)
+    subscribe_action(OWNER_PROBE, registration.handle_owner_probe)
     if registration.handle_user_deleted is not None:
         subscribe_action(USER_DELETED, registration.handle_user_deleted)
     logger.debug(
@@ -320,7 +300,13 @@ def _build(
         correlation_id = payload.get("correlation_id")
         subject_type = payload.get("subject_type")
         subject_key = payload.get("subject_key")
-        if not correlation_id or not subject_type or not subject_key:
+        if (
+            not _is_key(correlation_id)
+            or not isinstance(subject_type, str)
+            or not subject_type
+            or not _is_key(subject_key)
+            or not (payload.get("workspace_id") is None or _is_key(payload["workspace_id"]))
+        ):
             # Dropped, not raised: a payload this shape will never parse, and
             # raising would redeliver it until the broker gives up.
             logger.error(
@@ -375,7 +361,7 @@ def _build(
         payload = getattr(event, "payload", None) or {}
         answer = {"owner": owner, "subject_types": list(subject_types)}
         correlation_id = payload.get("correlation_id")
-        if correlation_id:
+        if _is_key(correlation_id):
             answer["correlation_id"] = str(correlation_id)
         emit(OWNER_ALIVE, answer, key=owner)
 
@@ -441,10 +427,8 @@ def _build(
 
 __all__ = [
     "ERASURE_REQUESTED",
-    "ERASURE_REQUESTED_SCHEMA",
     "OWNER_ALIVE",
     "OWNER_PROBE",
-    "OWNER_PROBE_SCHEMA",
     "PSEUDONYM_PREFIX",
     "SECTION_ERASED",
     "USER_DELETED",

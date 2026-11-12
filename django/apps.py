@@ -84,6 +84,12 @@ class CommonDjangoConfig(AppConfig):
         # `manage.py check` in every service.
         from django.core.checks import register as _register_check
 
+        # Core owns the facts it emits (gdpr.section.erased, gdpr.owner.alive,
+        # notification.requested): declared here so emit() validates them in
+        # every process, not only where a consumer happened to ship a copy.
+        from stapel_core.comm.schemas import register_core_emit_schemas
+        register_core_emit_schemas()
+
         from stapel_core.comm.schema_ownership import (
             check_emit_schema_conflicts,
             check_schema_ownership,

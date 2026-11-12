@@ -297,6 +297,12 @@ identical declarations `W011`. A module with its own variant of a fact names
 it under its own prefix (`orders.payment.completed`, not `payment.completed`).
 Bricks gate themselves with
 `stapel_core.testing.assert_module_registers_only_own_emit_schemas("<package>")`.
+Core's own facts (`gdpr.section.erased`, `gdpr.owner.alive`,
+`notification.requested`; every `*/schemas/emits/*.json` in the package) are
+declared with `owner="stapel_core"` by
+`stapel_core.comm.schemas.register_core_emit_schemas()` from core's
+`AppConfig.ready()` and the taskstore autoload, so they are validated at emit
+in every process. Core subscribes to stapel-gdpr's facts without `schema=`.
 
 ### Outbox atomicity — `mutate_and_emit()` + emit-check (`comm/actions.py`, `lint/emit_check.py`)
 

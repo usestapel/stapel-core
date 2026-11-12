@@ -241,19 +241,14 @@ def register_provider_bridge() -> bool:
     """
     global _subscribed
     from stapel_core.comm import subscribe_action
-    from stapel_core.gdpr.owners import (
-        ERASURE_REQUESTED,
-        ERASURE_REQUESTED_SCHEMA,
-        OWNER_PROBE,
-        OWNER_PROBE_SCHEMA,
-    )
+    from stapel_core.gdpr.owners import ERASURE_REQUESTED, OWNER_PROBE
 
     if _subscribed:
         return False
-    subscribe_action(
-        ERASURE_REQUESTED, bridge_erasure_requested, schema=ERASURE_REQUESTED_SCHEMA
-    )
-    subscribe_action(OWNER_PROBE, bridge_owner_probe, schema=OWNER_PROBE_SCHEMA)
+    # No schema=: the facts are stapel-gdpr's; each bridged owner's handler
+    # reads the payload defensively.
+    subscribe_action(ERASURE_REQUESTED, bridge_erasure_requested)
+    subscribe_action(OWNER_PROBE, bridge_owner_probe)
     _subscribed = True
     return True
 

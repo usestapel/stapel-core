@@ -84,19 +84,19 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from .schemas import core_emit_schema_files
+
 logger = logging.getLogger(__name__)
 
 E010 = "stapel_core.comm.E010"
 W010 = "stapel_core.comm.W010"
 
-#: Facts this library emits and therefore owns. Read by the check; a package
-#: other than ``stapel_core`` shipping a schema for one of these is the defect.
-#: Listed rather than derived because the emit sites are in several modules and
-#: a missed one would make the check quietly weaker.
-CORE_OWNED_ACTIONS = (
-    "gdpr.section.erased",
-    "gdpr.owner.alive",
-)
+#: Facts this library emits and therefore owns: every ``schemas/emits/`` file
+#: core ships (the same set :func:`register_core_emit_schemas` declares). A
+#: package other than ``stapel_core`` shipping a schema for one of these is
+#: the defect. ``tests/test_core_emit_schemas.py`` holds every core emit site
+#: to a shipped schema, so the set cannot quietly lag the emitters.
+CORE_OWNED_ACTIONS = tuple(sorted(core_emit_schema_files()))
 
 
 def _shipping_package(schema_path: Path) -> str:
@@ -142,9 +142,11 @@ def _owner_schema(action: str):
     """
     import json
 
-    path = Path(__file__).resolve().parent.parent / "gdpr" / "schemas" / "emits"
+    path = core_emit_schema_files().get(action)
+    if path is None:
+        return None
     try:
-        return _validation_shape(json.loads((path / f"{action}.json").read_text()))
+        return _validation_shape(json.loads(path.read_text()))
     except (OSError, ValueError):
         return None
 

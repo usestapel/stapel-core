@@ -127,6 +127,42 @@ consumer's schema refuses is now parked for that consumer instead of
 refusing the emit. A consumer's `schema=` is no longer visible in
 `action_registry._schemas`.
 
+#### Core's own facts are validated at emit in every process
+
+Core ships emit schemas for `gdpr.section.erased`, `gdpr.owner.alive` and
+`notification.requested`, but core is not an app with a `schemas/`
+directory, so the per-app autoload never read them: a receipt core emitted
+was validated only where a consumer happened to register an identical copy,
+and under the ownership model above it was not validated at all.
+
+- `stapel_core.comm.schemas.register_core_emit_schemas()` declares every
+  `schemas/emits/*.json` core ships with `owner="stapel_core"`. It runs from
+  core's `AppConfig.ready()` and first thing in the taskstore's
+  `autoload_schemas()`, so core is the first declared owner of its facts in
+  either INSTALLED_APPS order. `stapel_core.comm.schema_ownership.CORE_OWNED_ACTIONS`
+  is derived from the same files (it now includes `notification.requested`).
+- Every payload core emits passes its schema (receipts from
+  `register_gdpr_owner`, the provider bridge and the legacy `user.deleted`
+  path; the probe answer; `request_notification`). No payload or schema
+  changed.
+- Core's own subscriptions to stapel-gdpr's facts (`register_gdpr_owner`,
+  the provider bridge) no longer pass `schema=` copies of
+  `gdpr.erasure.requested` / `gdpr.owner.probe`; the handlers drop a
+  mistyped payload themselves (logged `malformed`, nothing erased, no
+  receipt). `stapel_core.gdpr.owners.ERASURE_REQUESTED_SCHEMA` and
+  `OWNER_PROBE_SCHEMA` are removed.
+  `assert_module_registers_only_own_emit_schemas("stapel_core")` passes.
+
+**Upgrade note.** A hand-written emit of `gdpr.section.erased` or
+`gdpr.owner.alive` (outside `register_gdpr_owner`) with a field the schema
+does not list, or a non-string id, now raises `SchemaValidationError` at the
+emitter — inside an erasure's transaction that rolls the erasure back, which
+is the intent: fix the payload. A package that ships its own
+`schemas/emits/` copy of one of the three facts is now also reported by
+`stapel_core.comm.E011` (differs) / `W011` (identical) besides `E010` /
+`W010`. Code importing `ERASURE_REQUESTED_SCHEMA` / `OWNER_PROBE_SCHEMA`
+reads the payload defensively instead.
+
 ## [0.95.3] — 2026-11-05
 
 ### Added — `request_notification` takes an optional dedup key
