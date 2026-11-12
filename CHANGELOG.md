@@ -1,42 +1,15 @@
 # Changelog
 
-## Unreleased (proposed 0.96.0)
-
-### Added — the session authority sees every access token a refresh mints
-
-`stapel_core.django.jwt.provider.register_access_observer(observer)`:
-`observer(refresh_payload, access_token)` runs after
-`JWTProvider.refresh_access_token` mints from a verified refresh token — the
-path the JWT middleware (expired-token and proactive refresh), the channels
-re-auth and core's refresh view share. A session authority (stapel-auth
-0.51.0) records the access jti on the refresh token's session, so a
-per-device revoke reaches tokens minted here; before, they were unknown to the
-session and stayed valid until they expired. An observer that raises withholds
-the token (`None`), so an access token its session could not record is never
-handed out. No observer registered: behaviour unchanged.
-
-## [Unreleased] — proposed 0.95.4
-
-### Changed — a workspaces outage is one WARNING per window, not one per request
-
-`get_membership` and `require_capability` logged a WARNING on every lookup
-that reached no verdict, so a workspaces peer outage produced one line per
-request. They now log the first occurrence per `(peer, reason)` at WARNING
-with its context, count repeats within the window (DEBUG), report the count
-on the next WARNING, and log one INFO with the hidden total when the peer
-answers again. Per process, bounded to 64 keys, no cache involved.
-`WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS` (env, default 60; `0` disables).
-`WorkspaceLookupUnavailable` gains a `reason` attribute (`transport`,
-`path_skew`, `status_<code>`, `capability_call`, default `unknown`) —
-additive; raising and strict semantics are unchanged.
-Tests: `tests/test_workspaces_no_verdict_log.py`.
-
-## [Unreleased] — proposed 0.96.0
+## Unreleased — proposed 0.96.0
 
 Minor (pre-1.0: may break a deployment whose environment spells a boolean
-with a word outside the list below). No migration.
+with a word outside the list below). No migration. Combines what was proposed
+separately as 0.95.4 (workspaces no-verdict logging), 0.95.5 (sitemap) and
+0.96.0 (access observer, blank-env booleans, fact-schema ownership).
 
-### Security — a blank environment value no longer turns a default-on gate off
+### Security
+
+#### A blank environment value no longer turns a default-on gate off
 
 Since 0.93.0, `AppSettings` read an empty environment variable on a key with a
 `bool` default as False. `KEY=` is the line an env-file template leaves, so a
@@ -61,7 +34,7 @@ so a blank value, `1`, `yes` or `on` sent the cookie without `Secure` /
   covers those reads too. `parse_bool_word` is the shared parser.
 * `stapel_core.django.settings` reads every boolean through `env_bool`.
 
-**Upgrade note.** The four cookie flags above are now on unless set to a false
+**Upgrade note.** **Upgrade note.** The four cookie flags above are now on unless set to a false
 word. These default-off settings now also accept `1` / `yes` / `on` as true,
 where only `true` did before: `CORS_ALLOW_ALL_ORIGINS`,
 `STAPEL_TRUST_PROXY_SSL_HEADER`, `STAPEL_PUBLIC_API_SCHEMA`,
@@ -71,9 +44,51 @@ to `1`, `yes` or `on` in an environment where you did not mean it.**
 `STAPEL_WS_ALLOW_QUERY_TOKEN` stays tri-state: unset defers to the posture, a
 blank or unrecognised value keeps the query-string token off.
 
-## [Unreleased] — proposed 0.96.0
+### Added
 
-### Fixed — a consumer can no longer overwrite the emitter's fact schema
+#### The session authority sees every access token a refresh mints
+
+`stapel_core.django.jwt.provider.register_access_observer(observer)`:
+`observer(refresh_payload, access_token)` runs after
+`JWTProvider.refresh_access_token` mints from a verified refresh token — the
+path the JWT middleware (expired-token and proactive refresh), the channels
+re-auth and core's refresh view share. A session authority (stapel-auth
+0.51.0) records the access jti on the refresh token's session, so a
+per-device revoke reaches tokens minted here; before, they were unknown to the
+session and stayed valid until they expired. An observer that raises withholds
+the token (`None`), so an access token its session could not record is never
+handed out. No observer registered: behaviour unchanged.
+
+#### A site-scoped sitemap aggregator (`stapel_core.django.sitemap`)
+
+`sitemap.xml` and `sitemap-<n>.xml` for the request's site, assembled from
+`<module>.sitemap_entries` comm Functions registered by name
+(`register_sitemap_provider`, `STAPEL_SITEMAP["PROVIDERS"]` merged over it,
+`None` removes). Pages close at 50 000 URLs or 50 MiB; alternates render as
+`xhtml:link hreflang`; the set is cached per site. A provider that does not
+answer is skipped with one warning and the partial set is cached for
+`PARTIAL_CACHE_TTL` only. `Site.key` (`brand.key`, else `host`) is the site
+key the providers receive.
+
+### Changed
+
+#### A workspaces outage is one WARNING per window, not one per request
+
+`get_membership` and `require_capability` logged a WARNING on every lookup
+that reached no verdict, so a workspaces peer outage produced one line per
+request. They now log the first occurrence per `(peer, reason)` at WARNING
+with its context, count repeats within the window (DEBUG), report the count
+on the next WARNING, and log one INFO with the hidden total when the peer
+answers again. Per process, bounded to 64 keys, no cache involved.
+`WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS` (env, default 60; `0` disables).
+`WorkspaceLookupUnavailable` gains a `reason` attribute (`transport`,
+`path_skew`, `status_<code>`, `capability_call`, default `unknown`) —
+additive; raising and strict semantics are unchanged.
+Tests: `tests/test_workspaces_no_verdict_log.py`.
+
+### Fixed
+
+#### A consumer can no longer overwrite the emitter's fact schema
 
 `@on_action(name, schema=...)` wrote the consumer's schema into the one
 per-name registry `emit()` validates against, so installing a module that
@@ -106,21 +121,6 @@ in the same process is no longer validated at the emitter; a payload that
 consumer's schema refuses is now parked for that consumer instead of
 refusing the emit. A consumer's `schema=` is no longer visible in
 `action_registry._schemas`.
-
-## [Unreleased]
-
-Proposed version: 0.95.5 (additive; after 0.95.4).
-
-### Added — a site-scoped sitemap aggregator (`stapel_core.django.sitemap`)
-
-`sitemap.xml` and `sitemap-<n>.xml` for the request's site, assembled from
-`<module>.sitemap_entries` comm Functions registered by name
-(`register_sitemap_provider`, `STAPEL_SITEMAP["PROVIDERS"]` merged over it,
-`None` removes). Pages close at 50 000 URLs or 50 MiB; alternates render as
-`xhtml:link hreflang`; the set is cached per site. A provider that does not
-answer is skipped with one warning and the partial set is cached for
-`PARTIAL_CACHE_TTL` only. `Site.key` (`brand.key`, else `host`) is the site
-key the providers receive.
 
 ## [0.95.3] — 2026-11-05
 
