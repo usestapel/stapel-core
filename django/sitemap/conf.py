@@ -1,7 +1,26 @@
 """Settings namespace of the sitemap aggregator (``STAPEL_SITEMAP``)."""
 from stapel_core.conf import AppSettings
 
-sitemap_settings = AppSettings(
+#: Prefix of every environment variable this namespace reads.
+ENV_PREFIX = "STAPEL_SITEMAP_"
+
+
+class SitemapAppSettings(AppSettings):
+    """``STAPEL_SITEMAP``, read from the environment only under prefixed names.
+
+    The keys (``ORIGIN``, ``CACHE_TTL``, ``PROVIDERS``, …) are too generic to
+    trust as bare environment variables: an unrelated ``ORIGIN`` in a pod
+    would silently become every sitemap URL's host. Each key is read as
+    ``STAPEL_SITEMAP_<KEY>`` and its bare name is never consulted. Coercion,
+    blank-means-unset and the env checks (E002/E004/W002) follow the names
+    returned here.
+    """
+
+    def env_var_names(self, key: str) -> tuple[str, ...]:
+        return (f"{ENV_PREFIX}{key}",)
+
+
+sitemap_settings = SitemapAppSettings(
     "STAPEL_SITEMAP",
     defaults={
         # {"<name>": "<module>.sitemap_entries"} MERGED over the providers
@@ -34,4 +53,4 @@ sitemap_settings = AppSettings(
     },
 )
 
-__all__ = ["sitemap_settings"]
+__all__ = ["ENV_PREFIX", "SitemapAppSettings", "sitemap_settings"]

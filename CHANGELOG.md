@@ -73,6 +73,10 @@ handed out. No observer registered: behaviour unchanged.
 answer is skipped with one warning and the partial set is cached for
 `PARTIAL_CACHE_TTL` only. `Site.key` (`brand.key`, else `host`) is the site
 key the providers receive.
+Environment: every key is read only as `STAPEL_SITEMAP_<KEY>`
+(`STAPEL_SITEMAP_ORIGIN`, `STAPEL_SITEMAP_CACHE_TTL`, …); bare names such as
+`ORIGIN` or `CACHE_TTL` are never read. Blank means the default;
+`STAPEL_SITEMAP_PROVIDERS` is refused (`stapel_core.conf.E002`).
 
 ### Changed
 

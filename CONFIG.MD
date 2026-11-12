@@ -111,16 +111,18 @@ it only fills in keys this file does not know about yet. See
 
 ### Sitemap aggregator (source: settings, `STAPEL_SITEMAP`)
 
+Each key is read from the environment only as `STAPEL_SITEMAP_<KEY>` (`STAPEL_SITEMAP_ORIGIN`, `STAPEL_SITEMAP_CACHE_TTL`, …); the bare key name is never read. A blank value means the default. `PROVIDERS` is a dict and is refused from the environment (`stapel_core.conf.E002`); set it in the settings dict.
+
 | Key | Source | Purpose | Required | Default |
 |-----|--------|---------|----------|---------|
 | PROVIDERS | settings | Sitemap providers `{name: "<module>.sitemap_entries"}` merged over `register_sitemap_provider`; `None` removes one. | no | {} |
-| CACHE_TTL | settings | Seconds a complete sitemap set is served from the cache. | no | 3600 |
-| PARTIAL_CACHE_TTL | settings | Seconds a set built while a provider did not answer is kept. | no | 300 |
-| CACHE_ALIAS | settings | Django cache alias of the sitemap sets. | no | default |
-| PAGE_MAX_URLS | settings | URLs per sitemap page (protocol limit 50 000). | no | 50000 |
-| PAGE_MAX_BYTES | settings | Uncompressed bytes per sitemap page (protocol limit 50 MiB). | no | 52428800 |
-| BATCH_LIMIT | settings | `limit` sent per provider call. | no | 1000 |
-| MAX_URLS | settings | Ceiling on URLs per site across providers; the build stops and logs "truncated at N". | no | 1000000 |
-| CALL_TIMEOUT | settings | Seconds one provider call may take before it counts as unanswered. | no | 5.0 |
-| URL_TEMPLATE | settings | How a site-relative path becomes a URL: `{origin}`, `{path}`, `{locale}`. | no | {origin}{path} |
-| ORIGIN | settings | Origin when the site registry is empty; empty = the request's own. | no | |
+| CACHE_TTL | settings | Seconds a complete sitemap set is served from the cache. Env: `STAPEL_SITEMAP_CACHE_TTL`. | no | 3600 |
+| PARTIAL_CACHE_TTL | settings | Seconds a set built while a provider did not answer is kept. Env: `STAPEL_SITEMAP_PARTIAL_CACHE_TTL`. | no | 300 |
+| CACHE_ALIAS | settings | Django cache alias of the sitemap sets. Env: `STAPEL_SITEMAP_CACHE_ALIAS`. | no | default |
+| PAGE_MAX_URLS | settings | URLs per sitemap page (protocol limit 50 000). Env: `STAPEL_SITEMAP_PAGE_MAX_URLS`. | no | 50000 |
+| PAGE_MAX_BYTES | settings | Uncompressed bytes per sitemap page (protocol limit 50 MiB). Env: `STAPEL_SITEMAP_PAGE_MAX_BYTES`. | no | 52428800 |
+| BATCH_LIMIT | settings | `limit` sent per provider call. Env: `STAPEL_SITEMAP_BATCH_LIMIT`. | no | 1000 |
+| MAX_URLS | settings | Ceiling on URLs per site across providers; the build stops and logs "truncated at N". Env: `STAPEL_SITEMAP_MAX_URLS`. | no | 1000000 |
+| CALL_TIMEOUT | settings | Seconds one provider call may take before it counts as unanswered. Env: `STAPEL_SITEMAP_CALL_TIMEOUT`. | no | 5.0 |
+| URL_TEMPLATE | settings | How a site-relative path becomes a URL: `{origin}`, `{path}`, `{locale}`. Env: `STAPEL_SITEMAP_URL_TEMPLATE`. | no | {origin}{path} |
+| ORIGIN | settings | Origin when the site registry is empty; empty = the request's own. Env: `STAPEL_SITEMAP_ORIGIN`. | no | |

@@ -2978,6 +2978,14 @@ request's own scheme and host.
 | `URL_TEMPLATE` | `"{origin}{path}"` | `{origin}`, `{path}`, `{locale}`; `"{origin}/{locale}{path}"` for locale-prefixed frontends |
 | `ORIGIN` | `""` | Origin with no site registry; empty = the request's |
 
+**Environment.** Every key is read from the environment only as
+`STAPEL_SITEMAP_<KEY>` (`SitemapAppSettings.env_var_names`); the bare names
+(`ORIGIN`, `CACHE_TTL`, …) are too generic to trust and are never read.
+Blank means the default; numbers and the template follow the usual
+`AppSettings` coercion and checks (W002 for an unparseable number);
+`STAPEL_SITEMAP_PROVIDERS` is refused (E002) — the registry belongs in the
+settings dict.
+
 ### Cross-service navigation — `STAPEL_SERVICES` + `NAV_LINKS` (`django/nav.py`)
 
 The admin/Swagger "Services" menu is driven by two deploy-config registries
