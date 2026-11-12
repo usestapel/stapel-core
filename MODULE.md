@@ -149,7 +149,9 @@ reaches the library as the string it is and is named by
 `stapel_core.conf.W002`. A boolean read directly from the environment outside
 a namespace (a settings module) uses `stapel_core.conf.env_bool(NAME,
 default)`, with the same rules and the same E004; the shipped
-`stapel_core.django.settings` reads every boolean that way. A key whose library parses the string
+`stapel_core.django.settings` reads every boolean that way. A number read the
+same way uses `stapel_core.conf.env_number(NAME, default)` (blank or
+unparseable → default, W002 names the latter). A key whose library parses the string
 itself (a ceiling that also takes the word `unlimited`) is declared
 `env_raw=("KEY",)` and is passed verbatim. Values from the settings dict and
 flat settings are never converted.

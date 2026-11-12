@@ -33,6 +33,10 @@ so a blank value, `1`, `yes` or `on` sent the cookie without `Secure` /
   boolean read straight from the environment in a settings module; E004
   covers those reads too. `parse_bool_word` is the shared parser.
 * `stapel_core.django.settings` reads every boolean through `env_bool`.
+* New `stapel_core.conf.env_number(name, default)`: the numeric twin of
+  `env_bool` (blank or unset → default; a value that does not parse →
+  default and `stapel_core.conf.W002`, never an exception at import).
+  `WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS` reads through it.
 
 **Upgrade note.** **Upgrade note.** The four cookie flags above are now on unless set to a false
 word. These default-off settings now also accept `1` / `yes` / `on` as true,
@@ -80,7 +84,8 @@ request. They now log the first occurrence per `(peer, reason)` at WARNING
 with its context, count repeats within the window (DEBUG), report the count
 on the next WARNING, and log one INFO with the hidden total when the peer
 answers again. Per process, bounded to 64 keys, no cache involved.
-`WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS` (env, default 60; `0` disables).
+`WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS` (env, default 60; `0` disables;
+blank or unparseable = 60, see `env_number`).
 `WorkspaceLookupUnavailable` gains a `reason` attribute (`transport`,
 `path_skew`, `status_<code>`, `capability_call`, default `unknown`) —
 additive; raising and strict semantics are unchanged.

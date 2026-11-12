@@ -200,7 +200,7 @@ def check_scalar_env_vars(app_configs=None, **kwargs):
     :func:`stapel_core.conf.env_bool` outside any namespace. A blank value is
     "unset" and is never reported.
     """
-    from .conf import registered_settings, rejected_env_bools
+    from .conf import registered_settings, rejected_env_bools, rejected_env_numbers
 
     found = []
     seen: set[tuple[str, str]] = set()
@@ -228,6 +228,14 @@ def check_scalar_env_vars(app_configs=None, **kwargs):
                 ),
                 id=W002_SCALAR_ENV_VAR,
             ))
+    for env_name, raw, default in rejected_env_numbers():
+        found.append(checks.Warning(
+            f"Environment variable {env_name}={raw!r} does not parse as a "
+            f"{type(default).__name__}; the setting it sets runs its default "
+            f"({default!r}) instead.",
+            hint=f"Set {env_name} to a number, or unset it. A blank value means unset.",
+            id=W002_SCALAR_ENV_VAR,
+        ))
     for env_name, raw, fallback in rejected_env_bools():
         found.append(_bool_error(
             env_name, raw, "the Django setting", fallback,

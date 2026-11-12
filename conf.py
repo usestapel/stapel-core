@@ -141,6 +141,48 @@ def rejected_env_bools() -> list[tuple[str, str, Any]]:
             found.append((name, raw, fallback))
     return found
 
+
+#: Every variable read through :func:`env_number`, with its default.
+#: ``stapel_core.conf.W002`` re-reads them at ``manage.py check`` time.
+_ENV_NUMBER_READS: dict[str, int | float] = {}
+
+
+def env_number(name: str, default: int | float) -> int | float:
+    """Read the numeric environment variable *name* in the type of *default*.
+
+    Unset or blank → *default*. A value that does not parse as that type →
+    *default* as well, and ``manage.py check`` names it
+    (``stapel_core.conf.W002``) — never an exception at import, which would
+    take the process down over a log window. The numeric twin of
+    :func:`env_bool` for a module-level read outside any namespace.
+    """
+    if isinstance(default, bool) or not isinstance(default, (int, float)):
+        raise TypeError(f"env_number({name!r}) needs an int or float default")
+    _ENV_NUMBER_READS[name] = default
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return type(default)(raw.strip())
+    except ValueError:
+        return default
+
+
+def rejected_env_numbers() -> list[tuple[str, str, int | float]]:
+    """``(env var, value, default)`` for every :func:`env_number` read whose
+    variable is set to a non-blank value that does not parse."""
+    found = []
+    for name, default in sorted(_ENV_NUMBER_READS.items()):
+        raw = os.environ.get(name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            type(default)(raw.strip())
+        except ValueError:
+            found.append((name, raw, default))
+    return found
+
+
 # Every AppSettings ever built, in construction order. The instances are
 # per-module singletons living in ``<package>/conf.py`` modules that core
 # cannot enumerate — siblings declare their own namespaces and core has no
@@ -652,7 +694,9 @@ class AppSettings:
 __all__ = [
     "AppSettings",
     "env_bool",
+    "env_number",
     "parse_bool_word",
     "registered_settings",
     "rejected_env_bools",
+    "rejected_env_numbers",
 ]

@@ -33,6 +33,7 @@ from uuid import UUID
 import requests
 from django.core.cache import cache
 
+from stapel_core.conf import env_number
 from stapel_core.core.drop import DropReport, drop_cache_key, service_namespace
 from stapel_core.django.peers import service_answered
 
@@ -113,8 +114,8 @@ class WorkspaceLookupUnavailable(Exception):
 #: request asks again and fails the same way; the first failure in a window is
 #: logged at WARNING with its context, the rest are counted and the count is
 #: reported on the next WARNING (or on recovery, at INFO).
-NO_VERDICT_LOG_WINDOW_SECONDS = float(
-    os.getenv("WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS", "60")
+NO_VERDICT_LOG_WINDOW_SECONDS = env_number(
+    "WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS", 60.0
 )
 
 #: Upper bound on distinct (peer, reason) pairs remembered; the oldest is
