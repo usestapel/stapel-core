@@ -2878,6 +2878,62 @@ registry, so links minted outside a request land off-fleet.
    fine — they are ours, and they go through this same registry as ordinary
    sites.
 
+### Sitemap aggregator — `STAPEL_SITEMAP` (`django/sitemap/`)
+
+Site-scoped `sitemap.xml` (index) + `sitemap-<n>.xml` (pages) assembled from
+every module that owns public URLs, with no import of any of them: a provider
+is a comm Function name in a MERGE registry.
+
+```python
+# provider module, AppConfig.ready()
+from stapel_core.django.sitemap import register_sitemap_provider
+register_sitemap_provider("cms.sitemap_entries")          # name defaults to "cms"
+
+# host settings — merged over code registrations; None removes one
+STAPEL_SITEMAP = {"PROVIDERS": {"listings": "listings.sitemap_entries", "cms": None}}
+
+# the URLconf that serves the site root
+from stapel_core.django.sitemap.urls import get_sitemap_urls
+urlpatterns += get_sitemap_urls()
+```
+
+**Provider contract** (`django/sitemap/build.py` docstring is the source):
+request `{site, locale: null, cursor: str | null, limit: int}` → `{entries:
+[{path | loc, lastmod?, locale?, alternates?: [{locale, path | loc}]}],
+cursor: str | null}` (`next_cursor` accepted as a synonym). `site` is
+`Site.key` (`brand.key`, else `host`; `""` with no registry). `path` is
+site-relative (`/about`) and becomes `URL_TEMPLATE.format(origin, path,
+locale)`; an absolute `loc` must be on the site's own host. Malformed entries,
+foreign hosts and duplicates are dropped; unknown keys ignored. stapel-cms's
+`cms.sitemap_entries` answers exactly this.
+
+**Failure posture.** A provider that is unreachable, raises, times out
+(`CALL_TIMEOUT`), answers without an `entries` list or repeats a cursor is
+skipped for that build with one WARNING line; the partial set is cached for
+`PARTIAL_CACHE_TTL` only. `MAX_URLS` per site stops the build and logs
+`truncated at N`.
+
+**Output.** Pages close at `PAGE_MAX_URLS` (50 000) or `PAGE_MAX_BYTES`
+(50 MiB), the protocol's limits; `xhtml:link rel="alternate" hreflang` per
+alternate; the index carries each page's newest `lastmod`. Cached per site
+(`CACHE_ALIAS`, `CACHE_TTL`), `Cache-Control: public`; a site with
+`seo.index: false` answers 404. `invalidate_sitemaps(site_key)` drops a site's
+set (wire it to a publication fact); `build_sitemaps(site_key, origin)` warms
+it from a beat task. With an empty registry the origin is `ORIGIN`, else the
+request's own scheme and host.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `PROVIDERS` | `{}` | `{name: function}` merged over `register_sitemap_provider`; `None` removes |
+| `CACHE_TTL` / `PARTIAL_CACHE_TTL` | `3600` / `300` | Seconds a complete / partial set is served |
+| `CACHE_ALIAS` | `"default"` | Django cache alias |
+| `PAGE_MAX_URLS` / `PAGE_MAX_BYTES` | `50000` / `52428800` | Per-file limits |
+| `BATCH_LIMIT` | `1000` | `limit` sent per provider call |
+| `MAX_URLS` | `1000000` | Per-site ceiling across providers |
+| `CALL_TIMEOUT` | `5.0` | Seconds per provider call |
+| `URL_TEMPLATE` | `"{origin}{path}"` | `{origin}`, `{path}`, `{locale}`; `"{origin}/{locale}{path}"` for locale-prefixed frontends |
+| `ORIGIN` | `""` | Origin with no site registry; empty = the request's |
+
 ### Cross-service navigation — `STAPEL_SERVICES` + `NAV_LINKS` (`django/nav.py`)
 
 The admin/Swagger "Services" menu is driven by two deploy-config registries

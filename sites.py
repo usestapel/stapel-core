@@ -131,6 +131,16 @@ class Site:
     seo: Mapping = field(default_factory=dict)
 
     @property
+    def key(self) -> str:
+        """The site's stable key: ``brand.key``, else ``host``.
+
+        What site-scoped rows and comm payloads name a site by (a sitemap
+        provider's ``site``); ``""`` stands for "no registry" in those
+        payloads, never for a registered site.
+        """
+        return self.brand.key if self.brand else self.host
+
+    @property
     def hosts(self) -> tuple[str, ...]:
         """``host`` and every alias — the names a browser may send."""
         return (self.host, *self.aliases)

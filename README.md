@@ -28,7 +28,7 @@ pip install stapel-core
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | Django | `Django>=5.2,<7.0` |
 | Usage surface | 57 |
-| Extension points | 17 |
+| Extension points | 18 |
 | Error codes | 42 |
 
 ## Documentation

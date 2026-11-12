@@ -4,6 +4,11 @@
   "axes": [],
   "extension_points": [
     {
+      "name": "STAPEL_SITEMAP[\"PROVIDERS\"]",
+      "kind": "merge_registry",
+      "summary": "Sitemap providers by comm Function name ({name: '<module>.sitemap_entries'}), merged over register_sitemap_provider() calls, None removes one. django/sitemap/ asks each per site ({site, locale, cursor, limit} -> {entries: [{path|loc, lastmod?, alternates?}], cursor}) and serves sitemap.xml + paged sitemap-<n>.xml from get_sitemap_urls(); an unanswered provider is skipped and logged."
+    },
+    {
       "name": "STAPEL_VERIFICATION[\"EXTRA_FACTORS\"]",
       "kind": "dotted_path_list",
       "summary": "Register host-owned verification factors (subclass VerificationFactor) by dotted path — declaring is enough, CommonDjangoConfig.ready() calls load_configured_factors() at boot and pins the host's id over any library registration of the same name."
