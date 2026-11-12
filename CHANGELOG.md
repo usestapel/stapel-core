@@ -1,5 +1,41 @@
 # Changelog
 
+## [Unreleased] — proposed 0.96.0
+
+### Fixed — a consumer can no longer overwrite the emitter's fact schema
+
+`@on_action(name, schema=...)` wrote the consumer's schema into the one
+per-name registry `emit()` validates against, so installing a module that
+consumed a fact with its own copy of the shape could refuse the OWNER's
+emits. Measured: a module subscribing to `payment.completed` with its own
+`{reference_type, reference_key, ...}` copy made the payment module's real
+payments fail with `'reference_type' is a required property` whenever its
+`ready()` ran after the `schemas/emits/` autoload (the normal layout).
+
+- The emit registry is written only by a fact's declared owner: the
+  `schemas/emits/` autoload (attributed to the app shipping the file) and
+  `action_registry.register_schema(name, schema, owner=None)` (owner
+  defaults to the calling package).
+- `on_action(schema=)` / `subscribe_action(schema=)` keep their signatures;
+  the schema is stored per subscription and checked before THAT handler
+  runs. A refusal is parked for that handler only
+  (`bus_dlq_total{reason="consumer_schema"}`, ERROR log naming the handler;
+  `STAPEL_COMM["UNPROCESSABLE_PAYLOAD"] = "raise"` reports it as the
+  handler's failure instead). A consumer schema stricter than the owner's
+  filters that consumer and nobody else.
+- New check `stapel_core.comm.E011`: two packages declare one fact's emit
+  schema and the schemas validate differently (both named; the first stays
+  in force instead of last-writer-wins). `W011`: they validate identically.
+- New `stapel_core.testing.assert_module_registers_only_own_emit_schemas(package)`:
+  fails when a package passes `schema=` for a fact it does not ship in its
+  own `schemas/emits/`, or declares a fact another package also declares.
+
+Observable change: an emit of a fact whose ONLY schema came from a consumer
+in the same process is no longer validated at the emitter; a payload that
+consumer's schema refuses is now parked for that consumer instead of
+refusing the emit. A consumer's `schema=` is no longer visible in
+`action_registry._schemas`.
+
 ## [0.95.3] — 2026-11-05
 
 ### Added — `request_notification` takes an optional dedup key

@@ -233,11 +233,86 @@ def check_schema_ownership(app_configs=None, search_roots=None, **kwargs):
     return problems
 
 
+E011 = "stapel_core.comm.E011"
+W011 = "stapel_core.comm.W011"
+
+
+def emit_schema_conflicts(registry=None) -> list[tuple[str, list[str], bool]]:
+    """``(fact, declaring packages, divergent)`` for every fact declared twice.
+
+    Only declarations count — a ``schemas/emits/`` file or an explicit
+    ``register_schema`` — never a consumer's ``on_action(schema=)``, which is
+    kept per subscription and cannot reach the emit registry.
+    """
+    import json
+
+    from .registry import action_registry
+
+    registry = registry or action_registry
+    found = []
+    for fact, owners in sorted(registry.emit_declarations().items()):
+        if len(owners) < 2:
+            continue
+        shapes = {
+            json.dumps(_validation_shape(schema), sort_keys=True)
+            for schema in owners.values()
+        }
+        found.append((fact, sorted(owners), len(shapes) > 1))
+    return found
+
+
+def check_emit_schema_conflicts(app_configs=None, registry=None, **kwargs):
+    """System check: one fact, one declared emitter.
+
+    ``E011`` — two packages declare themselves the emitter of one fact with
+    schemas that validate differently. Whichever the registry holds refuses
+    the other's emits, and which one it holds depends on INSTALLED_APPS order;
+    nothing about that is safe to boot.
+
+    ``W011`` — two packages declare the same fact with the same validating
+    shape. Nothing is refused today; one of them is still a copy.
+    """
+    from django.core.checks import Error, Warning
+
+    problems = []
+    for fact, owners, divergent in emit_schema_conflicts(registry):
+        named = " and ".join(owners)
+        if divergent:
+            problems.append(Error(
+                f"{named} both declare an emit schema for {fact!r}, and the "
+                f"schemas differ. One fact has one emitter: whichever schema "
+                f"the registry holds refuses the other package's emits, and "
+                f"which one that is depends on INSTALLED_APPS order.",
+                hint=(
+                    f"Keep schemas/emits/{fact}.json in the package that emits "
+                    f"{fact!r}; a package that only consumes it deletes its "
+                    "copy. A package with its own fact names it under its own "
+                    "prefix."
+                ),
+                id=E011,
+                obj=fact,
+            ))
+        else:
+            problems.append(Warning(
+                f"{named} both declare an emit schema for {fact!r}. They "
+                f"validate identically today; one of them is a copy that "
+                f"diverges the day the owner changes the contract.",
+                hint=f"Delete the copy in the package that does not emit {fact!r}.",
+                id=W011,
+                obj=fact,
+            ))
+    return problems
+
+
 __all__ = [
     "ANNOTATION_KEYWORDS",
     "E010",
+    "E011",
     "W010",
+    "W011",
     "CORE_OWNED_ACTIONS",
+    "check_emit_schema_conflicts",
     "check_schema_ownership",
+    "emit_schema_conflicts",
     "foreign_schema_copies",
 ]

@@ -25,6 +25,11 @@ def on_action(name: str, *, schema: dict | None = None) -> Callable[[ActionHandl
 
         @on_action("user.deleted")
         def erase_profile(event): ...
+
+    *schema* is a CONSUMER-side guard for this handler only: a payload it
+    refuses is parked for this handler (see :func:`deliver_to_subscribers`)
+    and never refused at the emitter. The fact's contract is its owner's
+    ``schemas/emits/<name>.json``; a consumer never writes it.
     """
 
     def decorator(handler: ActionHandler) -> ActionHandler:
@@ -35,8 +40,7 @@ def on_action(name: str, *, schema: dict | None = None) -> Callable[[ActionHandl
 
 
 def subscribe_action(name: str, handler: ActionHandler, *, schema: dict | None = None) -> None:
-    action_registry.subscribe(name, handler)
-    action_registry.register_schema(name, schema)
+    action_registry.subscribe(name, handler, schema=schema)
 
 
 def emit(
@@ -276,6 +280,19 @@ def _run_handlers(event, handlers) -> list[Exception]:
     retriable: list[Exception] = []
     for handler in handlers:
         try:
+            refusal = _consumer_schema_refusal(event, handler)
+            if refusal is not None:
+                if comm_setting("UNPROCESSABLE_PAYLOAD", "park") == "raise":
+                    logger.error(
+                        "action handler %r refused the payload of %s: %s",
+                        handler, event.event_type, refusal,
+                    )
+                    retriable.append(refusal)
+                else:
+                    _park_unprocessable(
+                        event, handler, refusal, reason="consumer_schema"
+                    )
+                continue
             handler(event)
         except ValidationError as exc:
             if comm_setting("UNPROCESSABLE_PAYLOAD", "park") == "raise":
@@ -294,7 +311,26 @@ def _run_handlers(event, handlers) -> list[Exception]:
     return retriable
 
 
-def _park_unprocessable(event, handler, exc) -> None:
+def _consumer_schema_refusal(event, handler) -> Exception | None:
+    """The handler's own ``on_action(schema=)`` refusing this payload, if it does.
+
+    A consumer schema is that consumer's expectation, not the fact's contract:
+    the emit already passed the owner's schema. A payload the consumer's copy
+    refuses is therefore unprocessable FOR THIS HANDLER only — the other
+    subscribers still receive it.
+    """
+    from .exceptions import SchemaValidationError
+
+    try:
+        action_registry.validate_delivery(
+            event.event_type, handler, getattr(event, "payload", None) or {}
+        )
+    except SchemaValidationError as exc:
+        return exc
+    return None
+
+
+def _park_unprocessable(event, handler, exc, *, reason: str = "unprocessable") -> None:
     """Count and log one unprocessable payload. Never raises.
 
     Loud on purpose. Parking means the work in that handler did NOT happen,
@@ -306,14 +342,15 @@ def _park_unprocessable(event, handler, exc) -> None:
 
     logger.error(
         "action %s event_id=%s: handler %r refused the payload as "
-        "unprocessable (%s). Redelivery cannot repair a value no field can "
-        "coerce, so it is parked, not retried — THE HANDLER'S WORK DID NOT "
-        "HAPPEN. Alert on bus_dlq_total{reason=\"unprocessable\"}.",
+        "unprocessable (%s). Redelivery cannot repair it, so it is parked, "
+        "not retried — THE HANDLER'S WORK DID NOT HAPPEN. Alert on "
+        "bus_dlq_total{reason=\"%s\"}.",
         event.event_type, getattr(event, "event_id", None), handler,
         "; ".join(getattr(exc, "messages", None) or [str(exc)]),
+        reason,
         exc_info=True,
     )
-    record_parked(event.event_type, event, reason="unprocessable")
+    record_parked(event.event_type, event, reason=reason)
 
 
 def deliver(event: Event) -> None:

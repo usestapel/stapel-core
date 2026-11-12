@@ -92,30 +92,110 @@ class FunctionRegistry:
             self._schemas.clear()
 
 
+def _caller_package(depth: int = 2) -> str:
+    """Top-level package of the code that called into the registry."""
+    import sys
+
+    frame = sys._getframe(depth)
+    while frame is not None:
+        module = frame.f_globals.get("__name__", "")
+        if module and not module.startswith("stapel_core.comm"):
+            return module.split(".")[0]
+        frame = frame.f_back
+    return "unknown"
+
+
 class ActionRegistry:
-    """name → 0..N subscriber callables."""
+    """name → 0..N subscriber callables, and one EMIT schema per name.
+
+    Two kinds of schema, two owners:
+
+    - the **emit schema** is the fact's contract, declared by the module that
+      emits it (its ``schemas/emits/<name>.json``, loaded by
+      :func:`~stapel_core.comm.schemas.autoload_schemas`, or
+      :meth:`register_schema`). :func:`~stapel_core.comm.emit` validates
+      against it. Nobody else writes it.
+    - a **consumer schema** is what ``on_action(name, schema=...)`` passes. It
+      is stored per subscription and checked only on what THAT handler is
+      about to receive; a mismatch parks the delivery to that handler and
+      never reaches the emitter. A consumer schema stricter than the owner's
+      therefore filters that one consumer and nothing else.
+
+    Two declared emitters of one name with different schemas are a real
+    conflict, reported by ``stapel_core.comm.E011`` (see
+    :mod:`stapel_core.comm.schema_ownership`). The first declaration stays the
+    effective one until it is resolved; a later one never silently replaces it.
+    """
 
     def __init__(self) -> None:
         self._subscribers: dict[str, list[ActionHandler]] = {}
+        #: name → the effective emit schema (the first owner's declaration).
         self._schemas: dict[str, dict | None] = {}
+        #: name → {owner package: declared emit schema}, in declaration order.
+        self._emit_declarations: dict[str, dict[str, dict]] = {}
+        #: name → [(handler, consumer schema)], one entry per subscription.
+        self._consumer_schemas: dict[str, list[tuple[ActionHandler, dict]]] = {}
         self._lock = threading.Lock()
 
-    def subscribe(self, name: str, handler: ActionHandler) -> None:
+    def subscribe(
+        self, name: str, handler: ActionHandler, *, schema: dict | None = None
+    ) -> None:
+        """Subscribe *handler*; *schema* (optional) guards only its deliveries."""
         with self._lock:
             handlers = self._subscribers.setdefault(name, [])
             if handler not in handlers:
                 handlers.append(handler)
-
-    def register_schema(self, name: str, schema: dict | None) -> None:
-        with self._lock:
             if schema is not None:
-                self._schemas[name] = schema
+                entries = self._consumer_schemas.setdefault(name, [])
+                entries[:] = [(h, s) for h, s in entries if h != handler]
+                entries.append((handler, schema))
+
+    def register_schema(
+        self, name: str, schema: dict | None, *, owner: str | None = None
+    ) -> None:
+        """Declare the EMIT schema of *name* on behalf of *owner*.
+
+        *owner* is the emitting package (``app_config.name`` for the
+        ``schemas/emits/`` autoload); omitted, it is the caller's top-level
+        package. The same owner may re-declare (the latest wins); a second
+        owner is recorded for the conflict check and never replaces the
+        first one's schema.
+        """
+        if schema is None:
+            return
+        owner = owner or _caller_package()
+        with self._lock:
+            declarations = self._emit_declarations.setdefault(name, {})
+            declarations[owner] = schema
+            first_owner = next(iter(declarations))
+            self._schemas[name] = declarations[first_owner]
 
     def handlers(self, name: str) -> list[ActionHandler]:
         return list(self._subscribers.get(name, []))
 
     def validate(self, name: str, payload: dict) -> None:
+        """Validate an EMIT of *name* against its owner's schema."""
         _validate(name, payload, self._schemas.get(name))
+
+    def consumer_schema(self, name: str, handler: ActionHandler) -> dict | None:
+        for subscribed, schema in self._consumer_schemas.get(name, ()):
+            if subscribed == handler:
+                return schema
+        return None
+
+    def validate_delivery(self, name: str, handler: ActionHandler, payload: dict) -> None:
+        """Validate what *handler* is about to receive against ITS schema."""
+        _validate(name, payload, self.consumer_schema(name, handler))
+
+    def emit_declarations(self) -> dict[str, dict[str, dict]]:
+        """``{name: {owner: schema}}`` for every declared emit schema."""
+        with self._lock:
+            return {name: dict(owners) for name, owners in self._emit_declarations.items()}
+
+    def consumer_schemas(self) -> dict[str, list[tuple[ActionHandler, dict]]]:
+        """``{name: [(handler, schema)]}`` for every subscription with a schema."""
+        with self._lock:
+            return {name: list(entries) for name, entries in self._consumer_schemas.items()}
 
     def names(self) -> list[str]:
         return sorted(self._subscribers)
@@ -125,6 +205,8 @@ class ActionRegistry:
         with self._lock:
             self._subscribers.clear()
             self._schemas.clear()
+            self._emit_declarations.clear()
+            self._consumer_schemas.clear()
 
 
 function_registry = FunctionRegistry()

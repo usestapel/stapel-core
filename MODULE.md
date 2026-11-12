@@ -270,6 +270,25 @@ Registration seams: `@on_action(name, schema=...)` / `subscribe_action()`
 `@task_handler(kind)` / `register_task()` (one executor per Task kind).
 Registries: `action_registry`, `function_registry` (`comm/registry.py`).
 
+**Fact schema ownership (since 0.96.0).** An Action's schema belongs to the
+module that emits it: its `schemas/emits/<name>.json` (autoloaded per
+INSTALLED_APP, attributed to that app) or `action_registry.register_schema(name,
+schema, owner=...)`. Only those declarations write the emit registry, and
+`emit()` validates against the first owner's schema. `@on_action(name,
+schema=...)` is a CONSUMER guard stored per subscription: it is checked only
+on what that handler is about to receive, and a payload it refuses is parked
+for that handler (`bus_dlq_total{reason="consumer_schema"}`, ERROR log naming
+the handler; `UNPROCESSABLE_PAYLOAD="raise"` makes it that handler's
+retriable failure instead) — never a refusal of the emit, never a change to
+the owner's schema. A consumer schema stricter than the owner's therefore
+filters that consumer only; the other subscribers still receive the fact.
+Two packages declaring one fact's emit schema differently is
+`stapel_core.comm.E011` (both named; the first declaration stays in force),
+identical declarations `W011`. A module with its own variant of a fact names
+it under its own prefix (`orders.payment.completed`, not `payment.completed`).
+Bricks gate themselves with
+`stapel_core.testing.assert_module_registers_only_own_emit_schemas("<package>")`.
+
 ### Outbox atomicity — `mutate_and_emit()` + emit-check (`comm/actions.py`, `lint/emit_check.py`)
 
 The outbox guarantee — *the event leaves iff the surrounding transaction
