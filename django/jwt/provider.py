@@ -51,6 +51,36 @@ def unregister_refresh_check(check) -> None:
         _refresh_checks.remove(check)
 
 
+#: Session authorities told about every access token minted from a refresh
+#: token. See :func:`register_access_observer`.
+_access_observers: list = []
+
+
+def register_access_observer(observer) -> None:
+    """Let the service that owns sessions record what a refresh minted.
+
+    ``observer(refresh_payload, access_token)`` runs after
+    :meth:`JWTProvider.refresh_access_token` minted ``access_token`` from the
+    VERIFIED refresh token whose claims are ``refresh_payload`` — on every
+    path that mints that way (the middleware's expired-token and proactive
+    refresh, the channels re-auth, core's refresh view). A session authority
+    records the access jti on the refresh token's session, so revoking that
+    session can revoke the access token too; without this a token minted
+    here was unknown to the session and outlived a per-device revoke until it
+    expired. An observer that raises withholds the token (the call returns
+    ``None``): an access token its session could not record is one that
+    revocation could not reach. Idempotent.
+    """
+    if observer not in _access_observers:
+        _access_observers.append(observer)
+
+
+def unregister_access_observer(observer) -> None:
+    """Remove an observer registered with :func:`register_access_observer`."""
+    if observer in _access_observers:
+        _access_observers.remove(observer)
+
+
 class _LoaderDefault:
     """Sentinel: "caller said nothing", which is NOT the same as "caller said None".
 
@@ -258,6 +288,7 @@ class JWTProvider:
         user_data = self._manager.validate_refresh_token(refresh_token)
         if not user_data or self._user_banned(user_data):
             return None
+        payload = None
         if _refresh_checks:
             payload = self.handler.decode_token(refresh_token) or {}
             for check in list(_refresh_checks):
@@ -267,7 +298,21 @@ class JWTProvider:
                         payload.get("user_id"),
                     )
                     return None
-        return self._manager.refresh_access_token(refresh_token, load_user_data)
+        access_token = self._manager.refresh_access_token(refresh_token, load_user_data)
+        if access_token and _access_observers:
+            if payload is None:
+                payload = self.handler.decode_token(refresh_token) or {}
+            for observer in list(_access_observers):
+                try:
+                    observer(payload, access_token)
+                except Exception:
+                    logger.exception(
+                        "access token withheld: the session authority could not "
+                        "record it (user %s)",
+                        payload.get("user_id"),
+                    )
+                    return None
+        return access_token
 
     def is_blacklisted(self, token: str) -> bool:
         """Check if token is blacklisted."""

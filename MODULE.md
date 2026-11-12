@@ -1996,7 +1996,7 @@ here, because the next caller will not have it.
 
 | Choke point | Owns | Refuses |
 |---|---|---|
-| `jwt_provider` (`django/jwt/provider.py`) | ALL minting: `create_tokens(user)`, `create_tokens_from_data(data)`, `refresh_access_token(token)` | a revoked jti, a user-level ban (`is_user_blacklisted`) — before the mint, never after |
+| `jwt_provider` (`django/jwt/provider.py`) | ALL minting: `create_tokens(user)`, `create_tokens_from_data(data)`, `refresh_access_token(token)` | a revoked jti, a user-level ban (`is_user_blacklisted`) — before the mint, never after; the session authority's `register_refresh_check` before a mint-from-refresh and `register_access_observer` (records the minted access token on its session) after it |
 | `revocation_cache()` (`core/revocation_store.py`) | the ONE key namespace all three revocation facts are written to, shared by every peer service | nothing itself — it is what makes the others reach across services (0.39.0; mechanism generalized into `core/fleet_cache.py` in 0.45.0) |
 | `fleet_cache()` (`core/fleet_cache.py`) | the mechanism under every namespace that must be shared rather than per-service — revocation and verification grants today | nothing itself — it is what stops a per-service `KEY_PREFIX` turning fleet state into a per-service illusion (0.45.0) |
 | `is_user_tombstoned()` (`django/jwt/tombstone.py`) | "this uid was deleted at the issuer" — consulted on BOTH halves of the gate: authentication (consumer mode) and re-mint (unconditionally) | a deleted account, for at least the refresh-token lifetime (0.40.0/0.41.0) |
