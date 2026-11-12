@@ -323,3 +323,18 @@ def test_the_gate_passes_a_well_behaved_module(tmp_path, monkeypatch):
     action_registry.subscribe(FACT, _handler_from("someone_else"), schema=CONSUMER_SCHEMA)
 
     assert_module_registers_only_own_emit_schemas("fake_shop_gate3")
+
+
+def test_a_hand_built_event_without_a_name_still_reaches_its_handlers():
+    """deliver_to_subscribers() takes any object with a payload; libraries'
+    suites build one by hand. The per-subscription check must not need a
+    name it cannot use."""
+    from stapel_core.comm.actions import deliver_to_subscribers
+
+    seen = []
+    action_registry.subscribe(FACT, lambda event: seen.append(event.payload))
+    action_registry.subscribe(FACT, lambda event: seen.append("guarded"), schema=CONSUMER_SCHEMA)
+    event = SimpleNamespace(payload=dict(OWNER_PAYLOAD))
+
+    assert deliver_to_subscribers(event, action_registry.handlers(FACT)) == []
+    assert seen == [OWNER_PAYLOAD, "guarded"]

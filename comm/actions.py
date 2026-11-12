@@ -321,9 +321,15 @@ def _consumer_schema_refusal(event, handler) -> Exception | None:
     """
     from .exceptions import SchemaValidationError
 
+    name = getattr(event, "event_type", None)
+    if name is None:
+        # No fact name, so no subscription schema to look it up by: an event
+        # built by hand for deliver_to_subscribers() reaches the handler as
+        # it always did.
+        return None
     try:
         action_registry.validate_delivery(
-            event.event_type, handler, getattr(event, "payload", None) or {}
+            name, handler, getattr(event, "payload", None) or {}
         )
     except SchemaValidationError as exc:
         return exc

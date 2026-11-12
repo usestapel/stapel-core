@@ -114,6 +114,9 @@ payments fail with `'reference_type' is a required property` whenever its
   `STAPEL_COMM["UNPROCESSABLE_PAYLOAD"] = "raise"` reports it as the
   handler's failure instead). A consumer schema stricter than the owner's
   filters that consumer and nobody else.
+  An event without an `event_type` (built by hand for
+  `deliver_to_subscribers()`) has no subscription schema to look up and
+  reaches its handlers unchecked, as before.
 - New check `stapel_core.comm.E011`: two packages declare one fact's emit
   schema and the schemas validate differently (both named; the first stays
   in force instead of last-writer-wins). `W011`: they validate identically.
