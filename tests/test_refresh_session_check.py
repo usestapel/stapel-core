@@ -128,3 +128,65 @@ def test_registration_is_idempotent():
         assert mod._refresh_checks.count(check) == 1
     finally:
         unregister_refresh_check(check)
+
+
+@pytest.fixture
+def minted():
+    from stapel_core.django.jwt.provider import (
+        register_access_observer,
+        unregister_access_observer,
+    )
+
+    seen: list = []
+
+    def observer(refresh_payload, access_token):
+        seen.append((refresh_payload.get("jti"), access_token))
+
+    register_access_observer(observer)
+    yield seen
+    unregister_access_observer(observer)
+
+
+@pytest.mark.django_db
+class TestEveryMintFromRefreshIsObserved:
+    """The session authority sees each access token a refresh token mints, on
+    the middleware path as on a direct call, so it can revoke it later."""
+
+    def test_the_middleware_mint_reaches_the_observer(self, provider, minted):
+        user = _user("observed")
+        refresh = _refresh_for(provider, user)
+
+        req = _expired_access_request(refresh)
+        JWTAuthMiddleware(lambda r: HttpResponse()).process_request(req)
+
+        assert req._jwt_refreshed is True
+        assert minted == [
+            (provider.handler.decode_token(refresh)["jti"], req._new_access_token)
+        ]
+
+    def test_a_direct_refresh_reaches_the_observer(self, provider, minted):
+        refresh = _refresh_for(provider, _user("direct"))
+        access = provider.refresh_access_token(refresh)
+        assert access and minted == [(provider.handler.decode_token(refresh)["jti"], access)]
+
+    def test_a_refused_refresh_is_not_observed(self, provider, minted, refused_jtis):
+        refresh = _refresh_for(provider, _user("refused"))
+        refused_jtis.add(provider.handler.decode_token(refresh)["jti"])
+        assert provider.refresh_access_token(refresh) is None
+        assert minted == []
+
+    def test_an_observer_that_fails_withholds_the_token(self, provider):
+        from stapel_core.django.jwt.provider import (
+            register_access_observer,
+            unregister_access_observer,
+        )
+
+        def broken(refresh_payload, access_token):
+            raise RuntimeError("session store down")
+
+        register_access_observer(broken)
+        try:
+            refresh = _refresh_for(provider, _user("withheld"))
+            assert provider.refresh_access_token(refresh) is None
+        finally:
+            unregister_access_observer(broken)

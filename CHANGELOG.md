@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (proposed 0.96.0)
+
+### Added — the session authority sees every access token a refresh mints
+
+`stapel_core.django.jwt.provider.register_access_observer(observer)`:
+`observer(refresh_payload, access_token)` runs after
+`JWTProvider.refresh_access_token` mints from a verified refresh token — the
+path the JWT middleware (expired-token and proactive refresh), the channels
+re-auth and core's refresh view share. A session authority (stapel-auth
+0.51.0) records the access jti on the refresh token's session, so a
+per-device revoke reaches tokens minted here; before, they were unknown to the
+session and stayed valid until they expired. An observer that raises withholds
+the token (`None`), so an access token its session could not record is never
+handed out. No observer registered: behaviour unchanged.
+
 ## [0.95.3] — 2026-11-05
 
 ### Added — `request_notification` takes an optional dedup key
