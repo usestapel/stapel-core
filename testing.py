@@ -308,6 +308,79 @@ def assert_declared_paths_resolve(schema: dict, urlconf=None) -> None:
     )
 
 
+def _handler_package(handler) -> str:
+    target = getattr(handler, "__func__", handler)
+    target = getattr(target, "func", target)  # functools.partial
+    return (getattr(target, "__module__", None) or "").split(".")[0]
+
+
+def _shipped_emit_facts(package: str) -> set[str]:
+    from importlib.util import find_spec
+
+    spec = find_spec(package)
+    if spec is None or not spec.submodule_search_locations:
+        return set()
+    facts: set[str] = set()
+    for location in spec.submodule_search_locations:
+        facts.update(p.stem for p in (Path(location) / "schemas" / "emits").glob("*.json"))
+    return facts
+
+
+def assert_module_registers_only_own_emit_schemas(package: str, registry=None) -> None:
+    """*package* writes schemas only for the facts it emits.
+
+    Call it from a library's suite once Django is set up (the subscriptions
+    exist after ``ready()``):
+
+        def test_fact_schemas_are_ours():
+            assert_module_registers_only_own_emit_schemas("stapel_orders")
+
+    Fails when *package*
+
+    - passes ``on_action(name, schema=...)`` for a fact it does not ship in its
+      own ``schemas/emits/`` — a copy of another module's contract. Core keeps
+      that copy per subscription, so it can no longer refuse the owner's
+      emits, but it still parks every delivery the owner's next field change
+      makes it refuse. Read the owner's fields defensively in the handler
+      instead;
+    - declares an emit schema for a fact another package also declares
+      (``stapel_core.comm.E011`` / ``W011``): one fact, one emitter. A module
+      with its own variant of a fact names it under its own prefix
+      (``orders.payment.completed``, not ``payment.completed``).
+
+    What it cannot see: a foreign fact the package EMITS without declaring
+    it. Walk the package's emit paths and compare the names against its
+    ``schemas/emits/`` for that (stapel-orders' ``tests/test_fact_schemas.py``
+    is the pattern).
+    """
+    from stapel_core.comm.registry import action_registry
+
+    registry = registry or action_registry
+    own = _shipped_emit_facts(package)
+    declarations = registry.emit_declarations()
+    own |= {fact for fact, owners in declarations.items() if package in owners}
+
+    problems = []
+    for fact, entries in sorted(registry.consumer_schemas().items()):
+        if fact in own:
+            continue
+        for handler, _schema in entries:
+            if _handler_package(handler) == package:
+                problems.append(
+                    f"{package} subscribes to {fact!r} with schema= ({handler!r}), "
+                    f"but {fact!r} is not in {package}'s schemas/emits/: that is "
+                    "a copy of another module's contract"
+                )
+    for fact in sorted(own):
+        others = sorted(set(declarations.get(fact, {})) - {package})
+        if others:
+            problems.append(
+                f"{fact!r} is declared as an emit schema by {package} and by "
+                f"{', '.join(others)}: one fact has one emitter"
+            )
+    assert not problems, "\n  ".join(["fact schema ownership:"] + problems)
+
+
 # ---------------------------------------------------------------------------
 # The emit gate — a guard that can actually fire under tests
 # ---------------------------------------------------------------------------

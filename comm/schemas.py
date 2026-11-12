@@ -8,6 +8,11 @@ instead of in an audit.
 
 File name = action/function name (minus .json). Called once from the
 taskstore AppConfig.ready().
+
+``schemas/emits/`` is a DECLARATION: the app shipping the file is the fact's
+owner, and only owners write the emit registry (a consumer's
+``on_action(schema=)`` is kept per subscription instead). Two apps declaring
+one fact with different schemas are reported by ``stapel_core.comm.E011``.
 """
 from __future__ import annotations
 
@@ -37,10 +42,11 @@ def autoload_schemas() -> int:
         base = Path(app_config.path) / "schemas"
         if not base.is_dir():
             continue
+        owner = getattr(app_config, "name", None) or Path(app_config.path).name
         for schema_file in sorted(base.glob("emits/*.json")):
             schema = _read(schema_file)
             if schema is not None:
-                action_registry.register_schema(schema_file.stem, schema)
+                action_registry.register_schema(schema_file.stem, schema, owner=owner)
                 count += 1
         for schema_file in sorted(base.glob("functions/*.json")):
             schema = _read(schema_file)

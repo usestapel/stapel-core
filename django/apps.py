@@ -84,8 +84,13 @@ class CommonDjangoConfig(AppConfig):
         # `manage.py check` in every service.
         from django.core.checks import register as _register_check
 
-        from stapel_core.comm.schema_ownership import check_schema_ownership
+        from stapel_core.comm.schema_ownership import (
+            check_emit_schema_conflicts,
+            check_schema_ownership,
+        )
         _register_check(check_schema_ownership)
+        # stapel_core.comm.E011: two packages declare one fact's emit schema.
+        _register_check(check_emit_schema_conflicts)
         # E011: a section this process owns must be reachable over comm. The
         # gap it closes was found by running an erasure — the worst way to
         # find it, since the first person to learn would otherwise be a
