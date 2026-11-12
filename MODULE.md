@@ -140,9 +140,16 @@ instances (e.g. `verification_settings` below).
 **An environment value arrives in its default's type.** A key whose default
 is a `bool`, `int` or `float` is read back from the environment in that type
 (`"5242880"` → `5242880`; `true/false`, `1/0`, `yes/no`, `on/off` → bool), so
-a numeric cap compares as a number and `FLAG=False` is falsy. A value that
-does not parse reaches the library as the string it is and `manage.py check`
-names it (`stapel_core.conf.W002`). A key whose library parses the string
+a numeric cap compares as a number and `FLAG=False` is falsy. A blank or
+whitespace-only value on such a key is "unset": the declared default applies
+(`KEY=` from an env-file template never turns a default-on gate off). A bool
+key set to any other word keeps its declared default and fails
+`manage.py check` (`stapel_core.conf.E004`); an int/float that does not parse
+reaches the library as the string it is and is named by
+`stapel_core.conf.W002`. A boolean read directly from the environment outside
+a namespace (a settings module) uses `stapel_core.conf.env_bool(NAME,
+default)`, with the same rules and the same E004; the shipped
+`stapel_core.django.settings` reads every boolean that way. A key whose library parses the string
 itself (a ceiling that also takes the word `unlimited`) is declared
 `env_raw=("KEY",)` and is passed verbatim. Values from the settings dict and
 flat settings are never converted.

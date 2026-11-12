@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
+from stapel_core.conf import env_bool
 from stapel_core.sites import (
     SiteRegistry,
     SitesConfigError,
@@ -199,7 +200,7 @@ SPECTACULAR_SETTINGS = {
     # says so with STAPEL_PUBLIC_API_SCHEMA=True.
     'SERVE_PERMISSIONS': (
         ['rest_framework.permissions.AllowAny']
-        if os.getenv('STAPEL_PUBLIC_API_SCHEMA', 'False').lower() == 'true'
+        if env_bool('STAPEL_PUBLIC_API_SCHEMA', False)
         else ['stapel_core.django.openapi.swagger.IsStaffUserForSwagger']
     ),
 }
@@ -207,7 +208,7 @@ SPECTACULAR_SETTINGS = {
 #: Mirrors the SERVE_PERMISSIONS choice above as a plain flag, so a project (or
 #: a test) can read the stance without re-deriving it from a dotted path.
 STAPEL_PUBLIC_API_SCHEMA = (
-    os.getenv('STAPEL_PUBLIC_API_SCHEMA', 'False').lower() == 'true'
+    env_bool('STAPEL_PUBLIC_API_SCHEMA', False)
 )
 
 # JWT Configuration for common library - read from environment
@@ -229,8 +230,8 @@ JWT_COOKIE_DOMAIN = os.getenv('JWT_COOKIE_DOMAIN', None)  # None = host-only, se
 # non-HTTPS hop. Local development is not the casualty it looks like: browsers
 # treat http://localhost as a trustworthy origin and accept Secure cookies
 # there. Set JWT_COOKIE_SECURE=False explicitly for the rare plain-HTTP host.
-JWT_COOKIE_SECURE = os.getenv('JWT_COOKIE_SECURE', 'True').lower() == 'true'
-JWT_COOKIE_HTTPONLY = os.getenv('JWT_COOKIE_HTTPONLY', 'True').lower() == 'true'
+JWT_COOKIE_SECURE = env_bool('JWT_COOKIE_SECURE', True)
+JWT_COOKIE_HTTPONLY = env_bool('JWT_COOKIE_HTTPONLY', True)
 JWT_COOKIE_SAMESITE = os.getenv('JWT_COOKIE_SAMESITE', 'Lax')
 # WebSocket origin allowlist. A cookie-authenticated handshake is admitted
 # only from an origin listed here — a cookie is ambient authority and
@@ -250,26 +251,27 @@ STAPEL_WS_ALLOWED_ORIGINS = [
 # it means "ask the deployment's posture": a service that declares
 # STAPEL_POSTURE has the channel off, one that never adopted a posture keeps
 # it. Set it to true/false to answer explicitly.
-_ws_query_token = os.getenv('STAPEL_WS_ALLOW_QUERY_TOKEN')
-STAPEL_WS_ALLOW_QUERY_TOKEN = (
-    None if _ws_query_token is None else _ws_query_token.strip().lower() == 'true'
+# A blank or unrecognised value keeps the channel off rather than deferring to
+# the posture.
+STAPEL_WS_ALLOW_QUERY_TOKEN = env_bool(
+    'STAPEL_WS_ALLOW_QUERY_TOKEN', None, unanswered=False
 )
-JWT_AUTO_REFRESH_ENABLED = os.getenv('JWT_AUTO_REFRESH_ENABLED', 'False').lower() == 'true'
+JWT_AUTO_REFRESH_ENABLED = env_bool('JWT_AUTO_REFRESH_ENABLED', False)
 JWT_REFRESH_THRESHOLD = int(os.getenv('JWT_REFRESH_THRESHOLD', '300'))  # 5 minutes default
 # Only auth service should be allowed to refresh tokens (set True in auth service settings)
-JWT_REFRESH_ALLOWED = os.getenv('JWT_REFRESH_ALLOWED', 'False').lower() == 'true'
+JWT_REFRESH_ALLOWED = env_bool('JWT_REFRESH_ALLOWED', False)
 # Make JWTCookieAuthentication refuse a cookie-only mutation that cannot prove
 # it is same-origin (X-Requested-With, or an Origin/Referer this deployment
 # serves) — the rule CsrfExemptAPIMiddleware describes and can never apply to
 # a DRF view, which is csrf_exempt by construction. Off by default: it is a
 # change to what every existing client must send. See
 # stapel_core.django.jwt.authentication.cookie_csrf_enforced.
-STAPEL_JWT_COOKIE_CSRF = os.getenv('STAPEL_JWT_COOKIE_CSRF', 'False').lower() == 'true'
+STAPEL_JWT_COOKIE_CSRF = env_bool('STAPEL_JWT_COOKIE_CSRF', False)
 
 # CORS Configuration for all services
 # For production, set CORS_ALLOWED_ORIGINS environment variable with comma-separated origins
 # For local development, set CORS_ALLOW_ALL_ORIGINS=true in .env
-CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False').lower() == 'true'
+CORS_ALLOW_ALL_ORIGINS = env_bool('CORS_ALLOW_ALL_ORIGINS', False)
 cors_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_origins.split(',') if origin.strip()]
 # Cookies cross-origin, but only where an exact origin was named. This used to
@@ -444,7 +446,7 @@ def get_default_database(
 # HTTPS and turn every is_secure() check into a lie. Trust is now a statement
 # the deployment makes: STAPEL_TRUST_PROXY_SSL_HEADER=True.
 STAPEL_TRUST_PROXY_SSL_HEADER = (
-    os.getenv('STAPEL_TRUST_PROXY_SSL_HEADER', 'False').lower() == 'true'
+    env_bool('STAPEL_TRUST_PROXY_SSL_HEADER', False)
 )
 SECURE_PROXY_SSL_HEADER = (
     ("HTTP_X_FORWARDED_PROTO", "https") if STAPEL_TRUST_PROXY_SSL_HEADER else None
@@ -457,14 +459,14 @@ SESSION_COOKIE_NAME = "stapel_sessionid"
 SESSION_COOKIE_SAMESITE = "Lax"
 # TLS-only by default, same reasoning as JWT_COOKIE_SECURE above: a session id
 # is a bearer credential, and "set True in prod" is a comment, not a mechanism.
-SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'True').lower() == 'true'
+SESSION_COOKIE_SECURE = env_bool('SESSION_COOKIE_SECURE', True)
 
 # CSRF cookie-based (default) - works better with microservices
 # JS must call syncCsrfToken() after AJAX requests to update form tokens
 CSRF_USE_SESSIONS = False
 # Django's own default is False. A CSRF token readable on a cleartext hop is
 # a CSRF token an on-path attacker can reuse.
-CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', 'True').lower() == 'true'
+CSRF_COOKIE_SECURE = env_bool('CSRF_COOKIE_SECURE', True)
 # Note: Each service should override CSRF_COOKIE_NAME in their base.py settings
 
 # Default login URLs (can override per service) — derived lazily from the
@@ -708,6 +710,6 @@ def setup_sentry(service_name: str) -> None:
         environment=environment,
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", default_sample_rate)),
         profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", default_sample_rate)),
-        send_default_pii=os.getenv("SENTRY_SEND_DEFAULT_PII", "false").lower() == "true",
+        send_default_pii=env_bool("SENTRY_SEND_DEFAULT_PII", False),
         server_name=service_name,
     )

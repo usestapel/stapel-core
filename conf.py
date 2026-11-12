@@ -73,7 +73,73 @@ _STRUCTURED_TYPES = (list, tuple, set, frozenset, dict)
 # bool before int: True is an int too.
 _SCALAR_TYPES = (bool, int, float)
 _TRUE_WORDS = frozenset({"1", "true", "yes", "on"})
-_FALSE_WORDS = frozenset({"0", "false", "no", "off", ""})
+_FALSE_WORDS = frozenset({"0", "false", "no", "off"})
+
+# A blank environment value is not an answer. ``KEY=`` is what an env-file
+# template leaves behind, so it reads as "unset" and the declared default
+# applies — never as False, which would open every gate that defaults to on.
+_BLANK = object()
+
+
+def parse_bool_word(raw: str) -> Any:
+    """``True``/``False`` for a recognised word, :data:`_BLANK` for a blank one.
+
+    Recognised (case- and space-insensitive): ``1/true/yes/on`` and
+    ``0/false/no/off``. Anything else raises ``ValueError``.
+    """
+    text = raw.strip().lower()
+    if not text:
+        return _BLANK
+    if text in _TRUE_WORDS:
+        return True
+    if text in _FALSE_WORDS:
+        return False
+    raise ValueError(f"{raw!r} is not a boolean")
+
+
+#: Every variable read through :func:`env_bool`, with the value it falls back
+#: to. ``stapel_core.conf.E004`` re-reads them at ``manage.py check`` time.
+_ENV_BOOL_READS: dict[str, Any] = {}
+
+
+def env_bool(name: str, default: Any, *, unanswered: Any = _BLANK) -> Any:
+    """Read the boolean environment variable *name*.
+
+    Unset or blank → *default*. A recognised word → its value. Any other
+    value → *default* as well, and ``manage.py check`` refuses it
+    (``stapel_core.conf.E004``): a gate that defaults to on can only be turned
+    off by an explicit false word, and a hatch that defaults to off only
+    opened by an explicit true word.
+
+    *unanswered* replaces *default* for the blank and unrecognised cases when
+    they must differ from "unset" (a tri-state key whose unset means "ask
+    another setting").
+    """
+    fallback = default if unanswered is _BLANK else unanswered
+    _ENV_BOOL_READS[name] = fallback
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = parse_bool_word(raw)
+    except ValueError:
+        return fallback
+    return fallback if value is _BLANK else value
+
+
+def rejected_env_bools() -> list[tuple[str, str, Any]]:
+    """``(env var, value, fallback)`` for every :func:`env_bool` read whose
+    variable is set to something other than a boolean word or a blank."""
+    found = []
+    for name, fallback in sorted(_ENV_BOOL_READS.items()):
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        try:
+            parse_bool_word(raw)
+        except ValueError:
+            found.append((name, raw, fallback))
+    return found
 
 # Every AppSettings ever built, in construction order. The instances are
 # per-module singletons living in ``<package>/conf.py`` modules that core
@@ -457,25 +523,23 @@ class AppSettings:
     def coerce_env_value(self, key: str, raw: str) -> Any:
         """*raw* read in *key*'s scalar type; ``ValueError`` when it is not one.
 
-        Keys without a scalar default come back unchanged.
+        A blank value on a scalar key is "unset": the declared default comes
+        back. Keys without a scalar default come back unchanged.
         """
         kind = self.scalar_type(key)
         if kind is None:
             return raw
         text = raw.strip()
+        if not text:
+            return self.defaults[key]
         if kind is bool:
-            lowered = text.lower()
-            if lowered in _TRUE_WORDS:
-                return True
-            if lowered in _FALSE_WORDS:
-                return False
-            raise ValueError(f"{raw!r} is not a boolean")
+            return parse_bool_word(text)
         return kind(text)
 
     def rejected_scalar_env_vars(self) -> list[tuple[str, str, str, str]]:
         """``(key, env var, value, type name)`` for every scalar key set to a
         value that does not parse as its type — the boot-time report of the
-        strings :meth:`_coerce_env` had to pass through unconverted.
+        values :meth:`_coerce_env` could not convert.
         """
         found = []
         for key in self.defaults:
@@ -495,13 +559,18 @@ class AppSettings:
     def _coerce_env(self, key: str, name: str, raw: str) -> Any:
         """The env string in the default's scalar type.
 
-        A value that does not parse is passed through as the string it is
-        (a library may accept a word such as "unlimited" for a numeric key);
-        ``manage.py check`` names it (``stapel_core.conf.W002``).
+        A bool key set to an unrecognised word resolves to its declared
+        default — the value the library ships as safe — and ``manage.py
+        check`` refuses it (``stapel_core.conf.E004``). An int/float that does
+        not parse is passed through as the string it is (a library may accept
+        a word such as "unlimited" for a numeric key); ``manage.py check``
+        names it (``stapel_core.conf.W002``).
         """
         try:
             return self.coerce_env_value(key, raw)
         except ValueError:
+            if self.scalar_type(key) is bool:
+                return self.defaults[key]
             return raw
 
     def _connect_reload(self) -> None:
@@ -531,6 +600,8 @@ class AppSettings:
         if self._env_allowed(key):
             for name in self.env_var_names(key):
                 env = os.environ.get(name)
+                if env is not None and not env.strip() and self.scalar_type(key):
+                    continue
                 if env is not None:
                     if isinstance(self.defaults.get(key), _STRUCTURED_TYPES):
                         self._refuse_structured_env(key, name, env)
@@ -578,4 +649,10 @@ class AppSettings:
         return value
 
 
-__all__ = ["AppSettings", "registered_settings"]
+__all__ = [
+    "AppSettings",
+    "env_bool",
+    "parse_bool_word",
+    "registered_settings",
+    "rejected_env_bools",
+]
