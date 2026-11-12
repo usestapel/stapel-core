@@ -107,6 +107,21 @@ consumer's schema refuses is now parked for that consumer instead of
 refusing the emit. A consumer's `schema=` is no longer visible in
 `action_registry._schemas`.
 
+## [Unreleased]
+
+Proposed version: 0.95.5 (additive; after 0.95.4).
+
+### Added — a site-scoped sitemap aggregator (`stapel_core.django.sitemap`)
+
+`sitemap.xml` and `sitemap-<n>.xml` for the request's site, assembled from
+`<module>.sitemap_entries` comm Functions registered by name
+(`register_sitemap_provider`, `STAPEL_SITEMAP["PROVIDERS"]` merged over it,
+`None` removes). Pages close at 50 000 URLs or 50 MiB; alternates render as
+`xhtml:link hreflang`; the set is cached per site. A provider that does not
+answer is skipped with one warning and the partial set is cached for
+`PARTIAL_CACHE_TTL` only. `Site.key` (`brand.key`, else `host`) is the site
+key the providers receive.
+
 ## [0.95.3] — 2026-11-05
 
 ### Added — `request_notification` takes an optional dedup key

@@ -2,7 +2,7 @@
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters, the serializer seam and thin-view base) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
-Contract: surface 57 · extension points 17 · error codes 42.
+Contract: surface 57 · extension points 18 · error codes 42.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Usage surface — call these before writing your own
@@ -163,6 +163,8 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
   Secret provider; a missing production secret is a loud boot failure (SecretUnavailable), never a silent empty string.
 - STAPEL_SERVICES [deploy_registry]
   The sibling services of this deployment (env-JSON or setting), seeded by stapel-create-project and appended by stapel-new-service; a monolith leaves it unset and one implicit service is derived.
+- STAPEL_SITEMAP["PROVIDERS"] [merge_registry]
+  Sitemap providers by comm Function name ({name: '<module>.sitemap_entries'}), merged over register_sitemap_provider() calls, None removes one. django/sitemap/ asks each per site ({site, locale, cursor, limit} -> {entries: [{path|loc, lastmod?, alternates?}], cursor}) and serves sitemap.xml + paged sitemap-<n>.xml from get_sitemap_urls(); an unanswered provider is skipped and logged.
 - STAPEL_SITES [deploy_registry]
   The hosts this deployment serves and the brand each wears (setting, STAPEL_SITES_FILE or STAPEL_SITES_JSON). One build, N hosts: ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, the WebSocket origin allowlist, the return_to allowlist and the storefront's GET /<auth>/api/v1/site/ bootstrap all derive from it. Empty = the ordinary single-host deployment.
 - STAPEL_VERIFICATION["EXTRA_FACTORS"] [dotted_path_list]

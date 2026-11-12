@@ -108,3 +108,19 @@ it only fills in keys this file does not know about yet. See
 | STAPEL_SECRETS_PROVIDER | env | Bootstrap dotted path of the secret provider (before django.setup). | no | env provider |
 | TELEGRAM_ALERT_CHAT_ID | env | Telegram chat id for alerts. | no | |
 | TELEGRAM_ALERT_THREAD_ID | env | Telegram topic/thread id for alerts. | no | |
+
+### Sitemap aggregator (source: settings, `STAPEL_SITEMAP`)
+
+| Key | Source | Purpose | Required | Default |
+|-----|--------|---------|----------|---------|
+| PROVIDERS | settings | Sitemap providers `{name: "<module>.sitemap_entries"}` merged over `register_sitemap_provider`; `None` removes one. | no | {} |
+| CACHE_TTL | settings | Seconds a complete sitemap set is served from the cache. | no | 3600 |
+| PARTIAL_CACHE_TTL | settings | Seconds a set built while a provider did not answer is kept. | no | 300 |
+| CACHE_ALIAS | settings | Django cache alias of the sitemap sets. | no | default |
+| PAGE_MAX_URLS | settings | URLs per sitemap page (protocol limit 50 000). | no | 50000 |
+| PAGE_MAX_BYTES | settings | Uncompressed bytes per sitemap page (protocol limit 50 MiB). | no | 52428800 |
+| BATCH_LIMIT | settings | `limit` sent per provider call. | no | 1000 |
+| MAX_URLS | settings | Ceiling on URLs per site across providers; the build stops and logs "truncated at N". | no | 1000000 |
+| CALL_TIMEOUT | settings | Seconds one provider call may take before it counts as unanswered. | no | 5.0 |
+| URL_TEMPLATE | settings | How a site-relative path becomes a URL: `{origin}`, `{path}`, `{locale}`. | no | {origin}{path} |
+| ORIGIN | settings | Origin when the site registry is empty; empty = the request's own. | no | |
