@@ -23,6 +23,9 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
@@ -95,7 +98,100 @@ class WorkspaceLookupUnavailable(Exception):
     `INTERNAL_API_PREFIXES`). Callers that turn `None` into HTTP 403 should
     turn this into 503 instead: telling a user "you are not a member" on the
     strength of a routing mistake is worse than telling them the truth.
+
+    ``reason`` is a short, bounded classification of why (``transport``,
+    ``path_skew``, ``status_<code>``, ``capability_call``) — the message
+    carries ids and URLs, the reason never does, so it can key a log throttle.
     """
+
+    def __init__(self, message: str = "", *, reason: str = "unknown"):
+        super().__init__(message)
+        self.reason = reason
+
+
+#: Seconds one (peer, reason) WARNING stands for. During a peer outage every
+#: request asks again and fails the same way; the first failure in a window is
+#: logged at WARNING with its context, the rest are counted and the count is
+#: reported on the next WARNING (or on recovery, at INFO).
+NO_VERDICT_LOG_WINDOW_SECONDS = float(
+    os.getenv("WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS", "60")
+)
+
+#: Upper bound on distinct (peer, reason) pairs remembered; the oldest is
+#: forgotten first. Keys are bounded by construction — this is the backstop.
+NO_VERDICT_LOG_MAX_KEYS = 64
+
+
+class _NoVerdictLog:
+    """Per-process throttle for "the workspaces peer reached no verdict" lines.
+
+    In-process on purpose: it needs no cache (the cache may be what is down)
+    and costs one dict lookup. Each worker logs at most one WARNING per
+    (peer, reason) per window.
+    """
+
+    def __init__(self, *, window: float, max_keys: int, clock=time.monotonic):
+        self.window = window
+        self.max_keys = max_keys
+        self.clock = clock
+        self._entries: OrderedDict[tuple[str, str], list] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def report(self, peer: str, reason: str, detail: str) -> bool:
+        """Record one no-verdict; return True when it was logged at WARNING."""
+        key = (peer, reason)
+        now = self.clock()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None and self.window > 0 and now - entry[0] < self.window:
+                entry[1] += 1
+                loud, suppressed = False, entry[1]
+            else:
+                suppressed = entry[1] if entry is not None else 0
+                self._entries[key] = [now, 0]
+                self._entries.move_to_end(key)
+                while len(self._entries) > self.max_keys:
+                    self._entries.popitem(last=False)
+                loud = True
+        if loud:
+            logger.warning(
+                "workspaces lookup reached no verdict (peer=%s reason=%s): %s%s",
+                peer, reason, detail,
+                f" [{suppressed} more like it suppressed in the previous window]"
+                if suppressed else "",
+            )
+        else:
+            logger.debug(
+                "workspaces lookup reached no verdict (peer=%s reason=%s, "
+                "%d suppressed this window): %s", peer, reason, suppressed, detail,
+            )
+        return loud
+
+    def recovered(self, peer: str) -> None:
+        """The peer answered: forget its open windows, summarise what was hidden."""
+        if not self._entries:
+            return
+        with self._lock:
+            keys = [k for k in self._entries if k[0] == peer]
+            hidden = {k[1]: self._entries.pop(k)[1] for k in keys}
+        if not keys:
+            return
+        total = sum(hidden.values())
+        logger.info(
+            "workspaces peer %s answers again; %d no-verdict lookup(s) were "
+            "not logged individually (%s)",
+            peer, total,
+            ", ".join(f"{r}={n}" for r, n in sorted(hidden.items())) or "none",
+        )
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_no_verdict_log = _NoVerdictLog(
+    window=NO_VERDICT_LOG_WINDOW_SECONDS, max_keys=NO_VERDICT_LOG_MAX_KEYS
+)
 
 
 @dataclass
@@ -155,7 +251,9 @@ def _internal_get(path_suffix: str, *, method: str = "get", timeout: float = 3.0
             resp = requests.request(method, url, headers=headers, timeout=timeout)
         except requests.RequestException as exc:
             # Transport, not routing: another prefix cannot help.
-            raise WorkspaceLookupUnavailable(f"{url}: {exc}") from exc
+            raise WorkspaceLookupUnavailable(
+                f"{url}: {exc}", reason="transport"
+            ) from exc
         if resp.status_code == 404 and not _service_answered(resp):
             last_error = f"{url}: 404 from the URL resolver (not the view)"
             continue  # wrong mount point — try the next one
@@ -167,7 +265,8 @@ def _internal_get(path_suffix: str, *, method: str = "get", timeout: float = 3.0
     raise WorkspaceLookupUnavailable(
         "no known mount point for the workspaces internal API — this service "
         f"and stapel-workspaces disagree about its path ({last_error}). "
-        f"Tried: {', '.join(INTERNAL_API_PREFIXES)}"
+        f"Tried: {', '.join(INTERNAL_API_PREFIXES)}",
+        reason="path_skew",
     )
 
 
@@ -194,26 +293,30 @@ def get_membership(workspace_id, user_id, *, strict: bool = False) -> Optional[M
     try:
         resp = _internal_get(f"/{workspace_id}/members/{user_id}")
     except WorkspaceLookupUnavailable as exc:
-        logger.warning("workspaces membership lookup failed: %s", exc)
+        _no_verdict_log.report(
+            WORKSPACES_SERVICE_URL, exc.reason, f"membership lookup failed: {exc}"
+        )
         if strict:
             raise
         return None
 
+    if resp.status_code in (200, 404):
+        _no_verdict_log.recovered(WORKSPACES_SERVICE_URL)
     if resp.status_code == 404:
         # The VIEW answered (see `_service_answered`) — a genuine "not a
         # member", safe to remember.
         cache.set(key, "__none__", CACHE_TTL_SECONDS)
         return None
     if resp.status_code != 200:
-        logger.warning(
-            "workspaces membership lookup returned %s for %s/%s",
-            resp.status_code,
-            workspace_id,
-            user_id,
+        reason = f"status_{resp.status_code}"
+        _no_verdict_log.report(
+            WORKSPACES_SERVICE_URL, reason,
+            f"membership lookup returned {resp.status_code} for "
+            f"{workspace_id}/{user_id}",
         )
         if strict:
             raise WorkspaceLookupUnavailable(
-                f"workspaces answered {resp.status_code}"
+                f"workspaces answered {resp.status_code}", reason=reason
             )
         return None
     role = (resp.json() or {}).get("role")
@@ -366,14 +469,19 @@ def require_capability(
         # The provider raised or the call failed: no verdict was rendered.
         # Reporting that as a denial is how an outage becomes a 403 (see the
         # docstring). Not cached — the next call retries.
-        logger.warning("workspaces capability check reached no verdict: %s", exc)
+        _no_verdict_log.report(
+            CAPABILITY_FUNCTION, "capability_call",
+            f"capability check for {workspace_id}/{user_id}: {exc}",
+        )
         if strict:
             raise WorkspaceLookupUnavailable(
                 f"{CAPABILITY_FUNCTION} did not render a verdict for "
-                f"{workspace_id}/{user_id}: {exc}"
+                f"{workspace_id}/{user_id}: {exc}",
+                reason="capability_call",
             ) from exc
         return None
 
+    _no_verdict_log.recovered(CAPABILITY_FUNCTION)
     allowed = bool((result or {}).get("allowed"))
     role = (result or {}).get("role")
     if allowed and role:
