@@ -1,5 +1,45 @@
 # Changelog
 
+## [Unreleased] — proposed 0.96.0
+
+Minor (pre-1.0: may break a deployment whose environment spells a boolean
+with a word outside the list below). No migration.
+
+### Security — a blank environment value no longer turns a default-on gate off
+
+Since 0.93.0, `AppSettings` read an empty environment variable on a key with a
+`bool` default as False. `KEY=` is the line an env-file template leaves, so a
+gate documented as default-on (`STAPEL_BILLING["STRICT_CHECKOUT_RECONCILIATION"]`,
+`STAPEL_CDN["REQUIRE_DECODER"]`, `STAPEL_MODERATION["APPEAL_REQUIRES_DIFFERENT_ACTOR"]`, …)
+ran switched off. The shipped `stapel_core.django.settings` had the same class
+in its own reads: `JWT_COOKIE_HTTPONLY` (since the first release) and
+`JWT_COOKIE_SECURE`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE` (default-on
+since 0.24.0) accepted only the word `true`,
+so a blank value, `1`, `yes` or `on` sent the cookie without `Secure` /
+`HttpOnly`.
+
+* A blank or whitespace-only value on a `bool`/`int`/`float` key is "unset":
+  the declared default applies. String keys are unchanged.
+* A `bool` key changes only for `1/true/yes/on` or `0/false/no/off`
+  (case- and space-insensitive). Any other word keeps the declared default and
+  fails `manage.py check` with the new error `stapel_core.conf.E004` (it was
+  the warning `W002`, and the library received the bare string). `W002` now
+  covers int/float only.
+* New `stapel_core.conf.env_bool(name, default)`: the same rules for a
+  boolean read straight from the environment in a settings module; E004
+  covers those reads too. `parse_bool_word` is the shared parser.
+* `stapel_core.django.settings` reads every boolean through `env_bool`.
+
+**Upgrade note.** The four cookie flags above are now on unless set to a false
+word. These default-off settings now also accept `1` / `yes` / `on` as true,
+where only `true` did before: `CORS_ALLOW_ALL_ORIGINS`,
+`STAPEL_TRUST_PROXY_SSL_HEADER`, `STAPEL_PUBLIC_API_SCHEMA`,
+`JWT_REFRESH_ALLOWED`, `JWT_AUTO_REFRESH_ENABLED`, `STAPEL_JWT_COOKIE_CSRF`,
+`SENTRY_SEND_DEFAULT_PII`. **Before upgrading, check that none of them is set
+to `1`, `yes` or `on` in an environment where you did not mean it.**
+`STAPEL_WS_ALLOW_QUERY_TOKEN` stays tri-state: unset defers to the posture, a
+blank or unrecognised value keeps the query-string token off.
+
 ## [0.95.3] — 2026-11-05
 
 ### Added — `request_notification` takes an optional dedup key
