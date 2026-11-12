@@ -1597,6 +1597,16 @@ never fire. `require_capability` and `require_role` now default to
 legitimate non-authorization callers, and any caller rendering its `None` as 403
 must ask for strict.
 
+A no-verdict is logged once per `(peer, reason)` per window, not once per
+request (0.95.4): the first occurrence is a WARNING with its context, repeats in
+the window are counted at DEBUG and the count rides the next WARNING, and the
+first answer after an outage logs one INFO with the hidden total. The window is
+`WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS` (env, default 60; `0` logs every
+occurrence); the throttle is per process and holds at most 64 keys. `reason` is
+a bounded classification carried on the exception
+(`WorkspaceLookupUnavailable.reason`: `transport`, `path_skew`,
+`status_<code>`, `capability_call`); the message keeps ids and URLs.
+
 ### Silenced checks — `django/check_guard.py`
 
 `SILENCED_SYSTEM_CHECKS` was a blanket line nothing in the fleet read: any

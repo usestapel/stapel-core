@@ -15,6 +15,22 @@ session and stayed valid until they expired. An observer that raises withholds
 the token (`None`), so an access token its session could not record is never
 handed out. No observer registered: behaviour unchanged.
 
+## [Unreleased] — proposed 0.95.4
+
+### Changed — a workspaces outage is one WARNING per window, not one per request
+
+`get_membership` and `require_capability` logged a WARNING on every lookup
+that reached no verdict, so a workspaces peer outage produced one line per
+request. They now log the first occurrence per `(peer, reason)` at WARNING
+with its context, count repeats within the window (DEBUG), report the count
+on the next WARNING, and log one INFO with the hidden total when the peer
+answers again. Per process, bounded to 64 keys, no cache involved.
+`WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS` (env, default 60; `0` disables).
+`WorkspaceLookupUnavailable` gains a `reason` attribute (`transport`,
+`path_skew`, `status_<code>`, `capability_call`, default `unknown`) —
+additive; raising and strict semantics are unchanged.
+Tests: `tests/test_workspaces_no_verdict_log.py`.
+
 ## [0.95.3] — 2026-11-05
 
 ### Added — `request_notification` takes an optional dedup key
