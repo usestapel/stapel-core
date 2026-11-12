@@ -71,6 +71,14 @@ def _is_key(value) -> bool:
     return isinstance(value, (int, str))
 
 
+def _is_optional_scope(value) -> bool:
+    """``workspace_id`` as stapel-gdpr sends it: a string (``""`` = none), an
+    integer, or null."""
+    return value is None or (
+        isinstance(value, (str, int)) and not isinstance(value, bool)
+    )
+
+
 def receipt_id(owner: str, subject_type: str, subject_key: str, correlation_id: str) -> str:
     """Durable, deterministic proof-of-work id for one erasure.
 
@@ -305,7 +313,7 @@ def _build(
             or not isinstance(subject_type, str)
             or not subject_type
             or not _is_key(subject_key)
-            or not (payload.get("workspace_id") is None or _is_key(payload["workspace_id"]))
+            or not _is_optional_scope(payload.get("workspace_id"))
         ):
             # Dropped, not raised: a payload this shape will never parse, and
             # raising would redeliver it until the broker gives up.

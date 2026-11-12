@@ -131,6 +131,23 @@ def test_emit_now_refuses_a_payload_core_s_own_schema_refuses(fact, payload):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("workspace_id", ["", None, "ws-1", 12])
+def test_the_request_shapes_stapel_gdpr_sends_are_erased(sink, workspace_id):
+    """stapel-gdpr sends ``workspace_id: ""`` for an unscoped erasure."""
+    register_core_emit_schemas()
+    erase = _Eraser()
+    with override_settings(STAPEL_COMM=INPROCESS):
+        reg = register_gdpr_owner("docs", ["account"], erase)
+        reg.handle_erasure_requested(Event(
+            event_type=ERASURE_REQUESTED, service="gdpr",
+            payload={"request_id": 1, "correlation_id": "c-1", "subject_type": "account",
+                     "subject_key": "u-1", "workspace_id": workspace_id},
+        ))
+    assert erase.calls == [("account", "u-1", workspace_id)]
+    assert len(sink[SECTION_ERASED]) == 1
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("correlation_id, subject_key", [("c-1", "doc-9"), (7, 9)])
 def test_erasure_receipt_passes_its_schema(sink, correlation_id, subject_key):
     register_core_emit_schemas()
