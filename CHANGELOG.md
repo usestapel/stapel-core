@@ -1,11 +1,37 @@
 # Changelog
 
-## Unreleased — proposed 0.96.0
+## [0.96.0] — 2026-11-13
 
 Minor (pre-1.0: may break a deployment whose environment spells a boolean
 with a word outside the list below). No migration. Combines what was proposed
 separately as 0.95.4 (workspaces no-verdict logging), 0.95.5 (sitemap) and
 0.96.0 (access observer, blank-env booleans, fact-schema ownership).
+
+### Breaking — check before upgrading a deployment
+
+- **A boolean env value outside `1/true/yes/on/0/false/no/off` now fails
+  `manage.py check` with the ERROR `stapel_core.conf.E004`** (under the boot
+  gate this refuses to boot). It was the warning `W002`.
+- **A blank env value (`KEY=`) on a bool/int/float key now means the declared
+  default**, not False/0. Default-on gates a template left blank switch back
+  on (for example `STRICT_CHECKOUT_RECONCILIATION`, `REQUIRE_DECODER`,
+  `APPEAL_REQUIRES_DIFFERENT_ACTOR`).
+- **`JWT_COOKIE_SECURE`, `JWT_COOKIE_HTTPONLY`, `SESSION_COOKIE_SECURE`,
+  `CSRF_COOKIE_SECURE` are on unless set to a false word.** A plain-http host
+  that relied on a blank value or `1` must set `false` explicitly.
+- **Default-off hatches now open on `1` / `yes` / `on`**, not only `true`
+  (list in the Security upgrade note).
+- **A consumer's `on_action(schema=)` no longer writes the emit registry**;
+  only a fact's owner does. stapel-orders 0.1.0 with `PAYMENT="mock"` next to
+  stapel-billing refuses every checkout on this core: upgrade stapel-orders
+  to 0.2.0 first or together.
+- **Core's own facts (`gdpr.section.erased`, `gdpr.owner.alive`,
+  `notification.requested`) are validated at emit**;
+  `stapel_core.gdpr.owners.ERASURE_REQUESTED_SCHEMA` and
+  `OWNER_PROBE_SCHEMA` are removed.
+- **An access observer that raises withholds the refreshed access token.**
+  Only when one is registered (stapel-auth 0.51.0 does): a session-store
+  outage turns refreshes into re-logins.
 
 ### Security
 
@@ -38,7 +64,7 @@ so a blank value, `1`, `yes` or `on` sent the cookie without `Secure` /
   default and `stapel_core.conf.W002`, never an exception at import).
   `WORKSPACES_NO_VERDICT_LOG_WINDOW_SECONDS` reads through it.
 
-**Upgrade note.** **Upgrade note.** The four cookie flags above are now on unless set to a false
+**Upgrade note.** The four cookie flags above are now on unless set to a false
 word. These default-off settings now also accept `1` / `yes` / `on` as true,
 where only `true` did before: `CORS_ALLOW_ALL_ORIGINS`,
 `STAPEL_TRUST_PROXY_SSL_HEADER`, `STAPEL_PUBLIC_API_SCHEMA`,
