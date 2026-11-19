@@ -97,8 +97,9 @@ E001  a security-relevant posture value is not what the declared preset says
       (``SecurityCriticalError``: waivable per id, never silenceable).
 E002  ``STAPEL_POSTURE`` is malformed, names no known preset, or carries
       options the preset refuses.
-W001  a posture value that is not security-relevant differs — visibility, not
-      judgement.
+W001  a posture value that is not security-relevant differs, or a
+      security-relevant one moved toward safety (an open registration door
+      found shut) — visibility, not judgement.
 W002  a declared retired environment variable is set on this deployment and
       nothing reads it.
 W003  the ``prototype`` stage is declared and nothing prototypical is on.
@@ -169,11 +170,17 @@ class PresetValue:
     "changing it away from the posture weakens the posture". It decides
     between E001 and W001, i.e. between a finding a deploy gate stops on and
     one it prints.
+
+    ``narrower`` lists the values that move a security-relevant key toward
+    safety (a registration door the posture opens, found shut). The deployment
+    still differs from the name it declares, so the finding stays — as W001,
+    not E001: shutting a door weakens nothing.
     """
 
     value: Any
     why: str
     security_relevant: bool = False
+    narrower: tuple = ()
 
 
 def _validate_stage(stage: str) -> str:
@@ -232,6 +239,9 @@ def _registration(**doors: bool) -> dict[str, PresetValue]:
             open_,
             why_open if open_ else why_shut,
             security_relevant=True,
+            # An open door found shut narrows the posture (a deployment that
+            # signs in by phone only closes the other doors with it).
+            narrower=(False,) if open_ else (),
         )
         for name, open_ in doors.items()
     }
@@ -591,7 +601,10 @@ def check_posture_coherence(app_configs=None, **kwargs):
                 f"declares the {name} posture, which sets it to "
                 f"{item.value!r} — {item.why}."
             )
-            if item.security_relevant:
+            narrows = any(
+                live == safe and type(live) is type(safe) for safe in item.narrower
+            )
+            if item.security_relevant and not narrows:
                 findings.append(SecurityCriticalError(
                     message,
                     hint=f"Either drop the override (the preset spread is the "

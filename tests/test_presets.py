@@ -455,3 +455,53 @@ def test_a_live_stage_never_asks_what_is_stubbed():
         EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
     ):
         assert ids_of(check_posture_coherence()) == []
+
+
+# ---------------------------------------------------------------------------
+# Direction: shutting a door the posture opens narrows it
+# ---------------------------------------------------------------------------
+
+
+def test_shutting_a_door_the_public_posture_opens_is_visible_not_a_blocker():
+    """A public deployment that signs in by phone only shuts the other doors:
+    the posture's name and behaviour differ (W001), nothing is weakened."""
+    preset = public_space()
+    settings_dict = spread(preset)
+    settings_dict["STAPEL_AUTH"] = {
+        **preset["STAPEL_AUTH"],
+        "AUTH_SSO_REGISTRATION": False,
+        "AUTH_OAUTH_REGISTRATION": False,
+    }
+    with override_settings(**settings_dict):
+        findings = check_posture_coherence()
+    assert ids_of(findings) == [W001_POSTURE_VALUE_DIFFERS] * 2
+    assert not any(isinstance(f, SecurityCriticalError) for f in findings)
+
+
+def test_opening_a_door_the_private_posture_shuts_is_still_red():
+    preset = private_space()
+    settings_dict = spread(preset)
+    settings_dict["STAPEL_AUTH"] = {**preset["STAPEL_AUTH"], "AUTH_PHONE_REGISTRATION": True}
+    with override_settings(**settings_dict):
+        findings = check_posture_coherence()
+    assert ids_of(findings) == [E001_POSTURE_VALUE_OVERRIDDEN]
+
+
+def test_a_shut_door_written_as_a_non_bool_is_not_narrower():
+    """Only the exact safe value narrows: a falsy string is drift, not a door."""
+    preset = public_space()
+    settings_dict = spread(preset)
+    settings_dict["STAPEL_AUTH"] = {**preset["STAPEL_AUTH"], "AUTH_SSO_REGISTRATION": ""}
+    with override_settings(**settings_dict):
+        findings = check_posture_coherence()
+    assert ids_of(findings) == [E001_POSTURE_VALUE_OVERRIDDEN]
+
+
+def test_only_open_doors_carry_a_narrower_value():
+    for name in PRESETS:
+        options = {"door": "requests"} if name == "private_space" else {}
+        for key, item in posture_spec(name, **options)["STAPEL_AUTH"].items():
+            if key.endswith("_REGISTRATION"):
+                assert item.narrower == ((False,) if item.value else ()), (name, key)
+            else:
+                assert item.narrower == (), (name, key)

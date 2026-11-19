@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.98.1] — 2026-11-19
+
+Patch. No consumer edit.
+
+### Changed — shutting a registration door the posture opens is W001, not E001
+
+- `stapel_core.presets.E001` fired on ANY difference from a security-relevant
+  posture value, including a public deployment that shuts a registration door
+  `public_space` opens (`AUTH_SSO_REGISTRATION: False` on a phone-only
+  project). Shutting a door weakens nothing, so that difference is now
+  `stapel_core.presets.W001`: still visible, no longer a deploy blocker and no
+  waiver needed.
+- `PresetValue` gains `narrower` — the values that move a security-relevant
+  key toward safety. Only the registration doors a posture opens carry one
+  (`(False,)`). Opening a door the posture shuts, a non-bool value, mock OTP
+  on a live stage and the street mandate stay E001.
+
 ## [0.98.0] — 2026-11-19
 
 Minor. No migration, no consumer edit: every old import path and settings
