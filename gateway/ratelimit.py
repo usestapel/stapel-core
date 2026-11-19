@@ -14,32 +14,24 @@ service layer (S6).
 """
 from __future__ import annotations
 
-import re
 import time
 from abc import ABC, abstractmethod
+
+from stapel_core.security.ratelimit import InvalidRate
+from stapel_core.security.ratelimit import parse_rate as _parse_rate
 
 from .base import CallerContext
 from .exceptions import GatewayConfigError
 
-_PERIODS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-_RATE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+|[smhd])\s*$")
-
 
 def parse_rate(rate: str) -> tuple[int, int]:
-    """``"30/m"`` → ``(30, 60)``; also ``"100/h"``, ``"5/s"``, ``"10/900"``
-    (N per 900 seconds). Malformed strings are a configuration error —
-    fail closed, never "no limit"."""
-    match = _RATE_RE.match(rate or "")
-    if not match:
-        raise GatewayConfigError(
-            f"rate_limit {rate!r} is malformed (expected 'N/s|m|h|d' or 'N/SECONDS')"
-        )
-    limit = int(match.group(1))
-    period = match.group(2)
-    window = _PERIODS.get(period) or int(period)
-    if limit <= 0 or window <= 0:
-        raise GatewayConfigError(f"rate_limit {rate!r} must be positive")
-    return limit, window
+    """``"30/m"`` → ``(30, 60)``: :func:`stapel_core.security.ratelimit.parse_rate`
+    with the gateway's error contract — a malformed rate raises
+    :class:`GatewayConfigError` (fail closed, never "no limit")."""
+    try:
+        return _parse_rate(rate)
+    except InvalidRate as exc:
+        raise GatewayConfigError(f"rate_limit {exc.rate!r} {exc.problem}") from exc
 
 
 class RateLimiter(ABC):

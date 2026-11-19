@@ -28,6 +28,10 @@ import logging
 import threading
 import time
 
+# The client IP is a security primitive, not IP intelligence: it lives in
+# stapel_core.security and is re-exported here (the same function object).
+from stapel_core.security.proxy import client_ip
+
 from .providers import (
     HttpJsonProvider,
     MaxMindProvider,
@@ -246,34 +250,6 @@ def _handle_failure(ip: str, provider_name: str) -> None:
 def country_of(ip: str | None) -> str | None:
     """ISO country code of *ip*, or ``None``. Never raises (see classify_ip)."""
     return classify_ip(ip).country
-
-
-def client_ip(request) -> str | None:
-    """The client IP of a Django/DRF request, as netintel should see it.
-
-    By default only ``REMOTE_ADDR`` is trusted. When the deployment sits
-    behind a proxy that *strips and re-sets* a client-IP header, point
-    ``STAPEL_NETINTEL["TRUSTED_PROXY_HEADER"]`` at its META key (e.g.
-    ``"HTTP_X_FORWARDED_FOR"``); the first hop of that header is used.
-
-    .. warning:: Never set ``TRUSTED_PROXY_HEADER`` unless the edge proxy
-       overwrites the header on every request — any client can send
-       ``X-Forwarded-For`` and spoof a residential address, downgrading
-       every network-trust decision built on top of this value.
-    """
-    if request is None:
-        return None
-    meta = getattr(request, "META", None) or {}
-
-    from .conf import netintel_settings
-
-    header = netintel_settings.TRUSTED_PROXY_HEADER
-    if header:
-        for candidate in str(meta.get(header, "")).split(","):
-            candidate = candidate.strip()
-            if candidate:
-                return candidate
-    return meta.get("REMOTE_ADDR") or None
 
 
 __all__ = [

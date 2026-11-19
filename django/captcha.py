@@ -72,17 +72,15 @@ _register_errors()
 
 
 def _extract_ip(request) -> str | None:
-    """The client IP as netintel sees it — one trust model per request.
+    """The client IP — one trust model per request.
 
-    Delegates to :func:`stapel_core.netintel.client_ip` so the ``remoteip``
-    sent to the captcha provider's siteverify and the IP in logs match the IP
-    that was *classified* (network-trust tiering). Previously this trusted
-    ``X-Forwarded-For`` / ``X-Real-IP`` unconditionally — a different, weaker
-    trust model than classification (which trusts ``REMOTE_ADDR`` only unless
-    ``STAPEL_NETINTEL["TRUSTED_PROXY_HEADER"]`` is set), so siteverify and the
-    logs could disagree with the tiering decision.
+    Delegates to :func:`stapel_core.security.client_ip`, the same function
+    classification reads, so the ``remoteip`` sent to the captcha provider's
+    siteverify and the IP in logs match the IP that was classified:
+    ``REMOTE_ADDR`` only, unless ``STAPEL_SECURITY["TRUSTED_PROXY_HEADER"]``
+    is set.
     """
-    from stapel_core.netintel import client_ip
+    from stapel_core.security import client_ip
 
     return client_ip(request)
 

@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: migration-lint contract contract-check release-check
+.PHONY: migration-lint contract contract-check release-check layering
 
 # Expand/contract gate for Django migrations (release-management.md §3;
 # stapel_tools.migration_lint). Requires stapel-tools importable (the
@@ -61,3 +61,8 @@ contract-check:
 # before tagging. See release-check.sh for the two rules.
 release-check:
 	sh ./release-check.sh
+
+# Layer boundary (L0 base / L1 kernel / L2 optional) and the hard-dependency
+# budget — MODULE.md "Layers and the dependency budget".
+layering:
+	$(PYTHON) -m pytest tests/test_layering.py tests/test_dependency_budget.py -q

@@ -19,7 +19,9 @@ W003_NOT_CONFIGURED = "stapel_core.netintel.W003"
 # STAPEL_NETINTEL keys whose non-default value means the operator sat down to
 # configure IP intelligence. CACHE_*/NEGATIVE_CACHE_TTL are deliberately not
 # here: they tune the plumbing and are set by people copying a settings
-# template, so they are no evidence of intent.
+# template, so they are no evidence of intent. Neither is
+# TRUSTED_PROXY_HEADER: it configures client_ip(), which every IP-keyed rate
+# limit and audit row reads whether or not anything classifies addresses.
 _INTENT_KEYS = (
     "MAXMIND_ASN_DB",
     "MAXMIND_COUNTRY_DB",
@@ -27,7 +29,6 @@ _INTENT_KEYS = (
     "HTTP_URL_TEMPLATE",
     "HTTP_API_KEY",
     "EXTRA_DATACENTER_ASNS",
-    "TRUSTED_PROXY_HEADER",
 )
 
 

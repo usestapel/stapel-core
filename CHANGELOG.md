@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.98.0] — 2026-11-19
+
+Minor. No migration, no consumer edit: every old import path and settings
+key keeps working.
+
+### Changed — the client-IP seam lives in `stapel_core.security`
+
+- `client_ip(request)` and its configuration move from netintel to the
+  security namespace: `stapel_core.security.client_ip`, key
+  `STAPEL_SECURITY["TRUSTED_PROXY_HEADER"]` (`no_env`, as before).
+  `stapel_core.netintel.client_ip` is the same function object, re-exported.
+- `STAPEL_NETINTEL["TRUSTED_PROXY_HEADER"]` is still honoured when the new key
+  is absent; resolution is `STAPEL_SECURITY` → `STAPEL_NETINTEL` → flat
+  `TRUSTED_PROXY_HEADER` → `None`, so a configuration that only used the old
+  key trusts exactly the header it trusted before.
+  `netintel_settings.TRUSTED_PROXY_HEADER` answers with the effective header.
+- New W-level checks: `stapel_core.security.W001` (the legacy key is set —
+  move it) and `W002` (both keys set and different — `STAPEL_SECURITY` wins).
+- **`stapel_core.netintel.W003` no longer counts `TRUSTED_PROXY_HEADER` as a
+  request for IP classification.** A project that set only the proxy header
+  stops getting W003 and can drop that `SILENCED_SYSTEM_CHECKS` entry; MaxMind
+  paths, HTTP provider keys, `EXTRA_DATACENTER_ASNS` and network-class captcha
+  rules still raise it.
+
+### Added
+
+- `stapel_core.security.parse_rate` / `InvalidRate` (a `ValueError`): the
+  rate-string parser (`"30/m"` → `(30, 60)`) is kernel.
+  `stapel_core.gateway.ratelimit.parse_rate` delegates to it and keeps its
+  contract (`GatewayConfigError`, same message).
+- Layer gate `tests/test_layering.py` (L0 base / L1 kernel / L2 optional;
+  module-level imports may not point upward, lazy ones only through a
+  reasoned allow-list; every unit must have a layer) and hard-dependency
+  budget `tests/test_dependency_budget.py`. `make layering` runs both. Layers
+  are documented in `MODULE.md`.
+
 ## [0.97.0] — 2026-11-19
 
 Minor, additive. No migration. Nothing changes for a schema emitted the way

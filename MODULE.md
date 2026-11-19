@@ -66,9 +66,13 @@ points below; a generic fix or gap belongs **upstream** (see
 - `captcha` — `CaptchaVerifier` ABC with turnstile / recaptcha / hcaptcha /
   noop backends, plus the tiered challenge policy (`captcha/policy.py`,
   `@captcha_protected`) driven by the client's network class.
+- `security` — the fleet's security primitives: `client_ip(request)` with
+  its trusted-proxy configuration (`STAPEL_SECURITY["TRUSTED_PROXY_HEADER"]`),
+  `parse_rate("30/m")`, the CORS credentials rule, reviewed auth backends.
 - `netintel` — IP intelligence seam: `classify_ip(ip) -> IpProfile`,
-  `country_of(ip)`, `client_ip(request)`; pluggable provider (MaxMind mmdb /
-  generic HTTP JSON / null), Django-cache-backed, fail-open.
+  `country_of(ip)`; pluggable provider (MaxMind mmdb / generic HTTP JSON /
+  null), Django-cache-backed, fail-open. `netintel.client_ip` is a re-export
+  of `security.client_ip`.
 - `eventstore` — append-only stream seam for high-volume streams (LLM-call
   ledger, gateway audit, analytics, delivery logs): `append` / `query`
   (cursor read) / `rollup` / `purge`; buffered batch writes, generic nullable
@@ -99,6 +103,30 @@ points below; a generic fix or gap belongs **upstream** (see
 
 All public root exports are lazy (PEP 562, see `__init__.py`); importing
 `stapel_core` never touches Django until a Django-dependent attribute is used.
+
+### Layers and the dependency budget (`tests/test_layering.py`, `tests/test_dependency_budget.py`)
+
+One wheel, three declared layers. The table lives in `tests/test_layering.py`
+(`LAYERS`, `DJANGO_L2`); a unit that is in none of them fails the gate.
+
+| Layer | Units | May import |
+|---|---|---|
+| L0 base | `conf`, `conf_checks`, `config`, `secrets`, `security`, `signals`, `hashing`, `schema_strict`, `net` | stdlib, Django, L0 |
+| L1 kernel | `comm`, `bus`, `core`, `access`, `gdpr`, `observability`, `verification`, `sites`, `eventstore`, `notifications`, `flows`, `i18n`, `language`, `staticfiles`, `templates`, `kafka` (constants used by `notifications.publish`), `django/*` except the L2 apps (incl. `django/cdn`, re-exported by `stapel_core.django`) | L0, L1 |
+| L2 optional | `captcha`, `django/captcha`, `django/captcha_checks`, `netintel`, `gateway`, `django/gateway`, `media`, `django/sitemap`, `django/workspaces`, `oauth`, `lint`, `testing` | L0, L1, L2 |
+
+Rule (R1): L0/L1 never import a higher layer at module level, and import it
+lazily only through a pair in `LAZY_ALLOWED` — today four, each with its
+reason: the two system-check registrations in `CommonDjangoConfig.ready()`
+(`netintel.checks`, `django.captcha_checks`), the OpenAPI contract profile
+reading captcha guards, and `stapel_preflight` probing the workspaces peer.
+Adding a pair is a design decision written next to it. String imports
+(`import_string`, root `_LAZY_EXPORTS`) are invisible to the gate.
+
+Rule (R3): the hard dependencies in `pyproject.toml` equal `BUDGET` in
+`tests/test_dependency_budget.py`. Adding one means adding it there with its
+installed size and why it cannot be an extra; a feature's third-party need is
+an extra imported lazily. `make layering` runs both gates.
 
 ### The contract document — `docs/capabilities.json` (`make contract`)
 
@@ -1503,7 +1531,7 @@ logged at INFO (`ip_kind, action, level, allowed`) — the input of host-side
 antifraud scoring. With no netintel provider configured, every request
 classifies as `unknown` → `invisible`, i.e. exactly the historical binary
 behavior. `remoteip` sent to siteverify and the IP in logs use
-`netintel.client_ip` — the *same* trust model as classification (REMOTE_ADDR
+`security.client_ip` — the *same* trust model as classification (REMOTE_ADDR
 unless `TRUSTED_PROXY_HEADER` is set), not a separate `X-Forwarded-For` read.
 
 **Tiering is currently nominal for the builtin backends.** The three builtin
@@ -1656,10 +1684,46 @@ project could mute any library's security check with no signal to anybody.
 Core marks its own: `cors.E001`, `auth_backends.E003`, `blacklist.W001`,
 `mandate.E001`, `prodguard.E001`/`E002`.
 
+### Client IP — `STAPEL_SECURITY["TRUSTED_PROXY_HEADER"]` (`security/proxy.py`)
+
+`stapel_core.security.client_ip(request)` is the one reading of a request's
+client address: rate-limit keys, lockouts, audit and session IPs, captcha
+`remoteip`, IP classification. Default: `REMOTE_ADDR` only. Behind an edge
+proxy that **overwrites** a client-IP header on every request, point
+`STAPEL_SECURITY["TRUSTED_PROXY_HEADER"]` at its META key (e.g.
+`"HTTP_X_REAL_IP"`); the first non-empty hop of that header is used, else
+`REMOTE_ADDR`. A header the edge only appends to is client-controlled.
+
+```python
+STAPEL_SECURITY = {"TRUSTED_PROXY_HEADER": "HTTP_X_REAL_IP"}
+```
+
+Resolution (`trusted_proxy_header()`): `STAPEL_SECURITY` dict →
+`STAPEL_NETINTEL` dict (legacy home of the key) → flat
+`TRUSTED_PROXY_HEADER` setting → `None`. **Never the environment**
+(`no_env`): a stray variable must not decide which header is believed. A
+configuration that only used the legacy key resolves exactly as before.
+
+| Check | When |
+|---|---|
+| `stapel_core.security.W001` | `STAPEL_NETINTEL["TRUSTED_PROXY_HEADER"]` is set — deprecated, still honoured; move it to `STAPEL_SECURITY` |
+| `stapel_core.security.W002` | both keys are set and differ — `STAPEL_SECURITY` wins, the legacy value is ignored |
+
+Kept for the 0.x line: `stapel_core.netintel.client_ip` (the same function
+object) and `netintel_settings.TRUSTED_PROXY_HEADER` (answers with the
+effective header, whichever namespace sets it). Setting the header is not a
+request for IP classification: `netintel.W003` does not count it.
+
+`stapel_core.security.parse_rate("30/m") -> (30, 60)` (`security/ratelimit.py`)
+is the rate-string parser for any fixed-window limiter (`N/s|m|h|d` or
+`N/SECONDS`); a malformed or non-positive rate raises `InvalidRate`
+(a `ValueError`), never "no limit". `stapel_core.gateway.ratelimit.parse_rate`
+keeps working and keeps raising `GatewayConfigError`.
+
 ### NetIntel providers — `STAPEL_NETINTEL` (`netintel/`)
 
 `classify_ip(ip) -> IpProfile{kind: residential|datacenter|vpn|tor|unknown,
-asn, asn_org, country, confidence}`, `country_of(ip)`, `client_ip(request)`.
+asn, asn_org, country, confidence}`, `country_of(ip)`.
 Fail-open by contract: provider errors log a warning once per provider class
 and return the unknown profile — `classify_ip` never raises. Root exports:
 `stapel_core.classify_ip` / `country_of` / `IpProfile` (lazy).
@@ -1674,7 +1738,7 @@ and return the unknown profile — `classify_ip` never raises. Root exports:
 | `EXTRA_DATACENTER_ASNS` | `[]` | **merge** over builtin `HOSTING_ASNS` | Extra ASNs treated as hosting/datacenter |
 | `HTTP_URL_TEMPLATE` / `HTTP_API_KEY` | `None` | replace | `HttpJsonProvider` endpoint (`{ip}` placeholder) and bearer key |
 | `HTTP_RESPONSE_MAPPER` | `None` (builtin mapper) | replace (dotted path/callable) | `mapper(data, ip) -> IpProfile` — adapts any ipinfo/IPQS-style JSON |
-| `TRUSTED_PROXY_HEADER` | `None` | replace | META key of the proxy-set client-IP header for `client_ip()`; default trusts `REMOTE_ADDR` only (proxy headers are spoofable) |
+| `TRUSTED_PROXY_HEADER` | `None` | deprecated | Legacy home of `STAPEL_SECURITY["TRUSTED_PROXY_HEADER"]` (see *Client IP*); honoured when the new key is absent, reported by `stapel_core.security.W001` |
 
 `PROVIDER`, `HTTP_URL_TEMPLATE`, `HTTP_API_KEY` and `TRUSTED_PROXY_HEADER`
 carry trust/security weight and have generic names, so they are **never**
@@ -1699,7 +1763,8 @@ production hot path — use the offline `MaxMindProvider` there; reserve
 System checks (W-level, registered by `stapel_core.django` app):
 `stapel_core.netintel.W001` (PROVIDER unimportable), `W002` (not a
 `NetIntelProvider`), `W003` (the seam is depended on but never wired — fires
-when `STAPEL_NETINTEL` is configured while `PROVIDER` is left at the default
+when a classification key of `STAPEL_NETINTEL` (MaxMind paths, HTTP provider,
+`EXTRA_DATACENTER_ASNS`) is configured while `PROVIDER` is left at the default
 `NullProvider`, or when captcha rules are keyed by a class no request can
 ever carry; silent under DEBUG, and it names settings, never their values).
 A broken or unwired provider degrades, it never blocks a deploy.
@@ -1778,7 +1843,7 @@ Public surface (all re-exported from `stapel_core.observability`):
 `METRICS_BACKEND` and `ERROR_REPORTER` are `import_strings` (implicitly
 env-closed — they name the class the process runs, not data). The three header
 names and `TRUST_INCOMING_TRACE` carry trust weight and are `no_env` for the
-same reason `netintel.TRUSTED_PROXY_HEADER` is.
+same reason `security.TRUSTED_PROXY_HEADER` is.
 
 **Nothing in the facade raises into a caller.** A measurement is an observation
 of the work, not part of it: a missing client library, an unreachable statsd,

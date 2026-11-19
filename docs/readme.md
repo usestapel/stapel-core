@@ -104,9 +104,10 @@ STAPEL_NETINTEL = {
 Built-in providers: `NullProvider` (default — always `unknown`),
 `MaxMindProvider` (offline mmdb, `pip install stapel-core[netintel-maxmind]`),
 `HttpJsonProvider` (ipinfo/IPQS-style HTTP APIs via `HTTP_URL_TEMPLATE` /
-`HTTP_API_KEY` / `HTTP_RESPONSE_MAPPER`). `client_ip(request)` honors
-`TRUSTED_PROXY_HEADER` (default: `REMOTE_ADDR` only — proxy headers are
-spoofable unless your edge overwrites them).
+`HTTP_API_KEY` / `HTTP_RESPONSE_MAPPER`). The client address itself comes
+from `stapel_core.security.client_ip(request)`, which honors
+`STAPEL_SECURITY["TRUSTED_PROXY_HEADER"]` (default: `REMOTE_ADDR` only —
+proxy headers are spoofable unless your edge overwrites them).
 
 `residential` is a claim that requires evidence, and `MaxMindProvider` has
 exactly one source of it: the Anonymous-IP database consulted and not listing

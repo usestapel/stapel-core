@@ -27,6 +27,10 @@ class CommonDjangoConfig(AppConfig):
 
         # System checks (registered on import; W-level, never block deploys).
         from stapel_core.netintel import checks as _netintel_checks  # noqa: F401
+        # Security-namespace checks (stapel_core.security.checks): W-level
+        # when the trusted client-IP header is still configured under its
+        # legacy STAPEL_NETINTEL key, or when both keys disagree.
+        from stapel_core.security import checks as _security_checks  # noqa: F401
         # Ignored-env-var check (stapel_core.conf_checks): W-level when an env
         # var is set whose name an AppSettings namespace lists in
         # import_strings without env_overridable. Such a var is silently not

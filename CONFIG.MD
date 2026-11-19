@@ -109,6 +109,14 @@ it only fills in keys this file does not know about yet. See
 | TELEGRAM_ALERT_CHAT_ID | env | Telegram chat id for alerts. | no | |
 | TELEGRAM_ALERT_THREAD_ID | env | Telegram topic/thread id for alerts. | no | |
 
+### Client IP (source: settings, `STAPEL_SECURITY`)
+
+Never read from the environment: which header is trusted for the client IP is a security decision a stray variable must not make. `STAPEL_NETINTEL["TRUSTED_PROXY_HEADER"]` is the deprecated home of the key, honoured when this one is absent (`stapel_core.security.W001`).
+
+| Key | Source | Purpose | Required | Default |
+|-----|--------|---------|----------|---------|
+| TRUSTED_PROXY_HEADER | settings | META key of a client-IP header the edge proxy overwrites on every request (e.g. `HTTP_X_REAL_IP`); `client_ip()` takes its first hop. Empty = `REMOTE_ADDR` only. | no | |
+
 ### Sitemap aggregator (source: settings, `STAPEL_SITEMAP`)
 
 Each key is read from the environment only as `STAPEL_SITEMAP_<KEY>` (`STAPEL_SITEMAP_ORIGIN`, `STAPEL_SITEMAP_CACHE_TTL`, …); the bare key name is never read. A blank value means the default. `PROVIDERS` is a dict and is refused from the environment (`stapel_core.conf.E002`); set it in the settings dict.

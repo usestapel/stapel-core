@@ -1,7 +1,24 @@
 """Settings namespace for IP intelligence (``STAPEL_NETINTEL``)."""
 from stapel_core.conf import AppSettings
 
-netintel_settings = AppSettings(
+
+class _NetIntelSettings(AppSettings):
+    """``TRUSTED_PROXY_HEADER`` answers with the effective trusted header.
+
+    The key moved to ``STAPEL_SECURITY``; code that still reads it here
+    (sibling checks, host code) must see the header ``client_ip()`` uses,
+    whichever namespace configures it.
+    """
+
+    def __getattr__(self, key):
+        if key == "TRUSTED_PROXY_HEADER":
+            from stapel_core.security.proxy import trusted_proxy_header
+
+            return trusted_proxy_header()
+        return super().__getattr__(key)
+
+
+netintel_settings = _NetIntelSettings(
     "STAPEL_NETINTEL",
     defaults={
         # Provider seam (replace-style): dotted path, class or instance of a
@@ -33,10 +50,9 @@ netintel_settings = AppSettings(
         "HTTP_URL_TEMPLATE": None,
         "HTTP_API_KEY": None,
         "HTTP_RESPONSE_MAPPER": None,
-        # META key of a proxy-set client-IP header, e.g.
-        # "HTTP_X_FORWARDED_FOR". None (default) = trust REMOTE_ADDR only.
-        # Only set this when a trusted proxy strips/overwrites the header —
-        # client-supplied values are trivially spoofed.
+        # Deprecated home of STAPEL_SECURITY["TRUSTED_PROXY_HEADER"]: still
+        # honoured when the new key is absent (stapel_core.security.W001).
+        # Reading it here returns the effective header (see above).
         "TRUSTED_PROXY_HEADER": None,
     },
     # These keys carry security/trust weight and have generic names, so they
