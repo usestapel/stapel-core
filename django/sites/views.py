@@ -15,6 +15,8 @@ guest is exactly who this is for" is the stance).
 """
 from __future__ import annotations
 
+from drf_spectacular.utils import extend_schema
+from rest_framework import serializers
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -23,7 +25,7 @@ from stapel_core.django.api.permissions import ANONYMOUS_ALLOWED
 
 from .helpers import request_host, site_registry
 
-__all__ = ["SiteBootstrapView", "site_payload"]
+__all__ = ["SiteBootstrapSerializer", "SiteBootstrapView", "site_payload"]
 
 #: Five minutes: long enough that a crawl or a traffic spike does not become a
 #: request per page view, short enough that a brand correction is live within
@@ -68,6 +70,39 @@ def site_payload(request) -> dict:
     }
 
 
+class SiteBrandSerializer(serializers.Serializer):
+    """What the storefront paints on this host (``stapel_core.sites.Brand``)."""
+
+    key = serializers.CharField(help_text="Stable brand key")
+    name = serializers.CharField(help_text="Brand name")
+    title = serializers.CharField(help_text="Document title; may be empty")
+    logo = serializers.CharField(help_text="Logo URL or asset path; may be empty")
+    theme = serializers.CharField(help_text="Theme key; may be empty")
+    legal = serializers.DictField(
+        child=serializers.CharField(), help_text="Legal texts/links by key"
+    )
+
+
+class SiteSeoSerializer(serializers.Serializer):
+    """Indexing hints; a site may declare further keys, passed through as-is."""
+
+    index = serializers.BooleanField(help_text="Whether crawlers may index this host")
+    canonical_host = serializers.CharField(help_text="Host canonical URLs point at")
+
+
+class SiteBootstrapSerializer(serializers.Serializer):
+    """Declaration of :func:`site_payload` for the contract; never used to render."""
+
+    host = serializers.CharField(help_text="The matched site's host (or the request host)")
+    matched = serializers.BooleanField(help_text="The request host is a declared site or alias")
+    primary = serializers.BooleanField(help_text="The answering site is the primary one")
+    locale = serializers.CharField(help_text="The site's locale; may be empty")
+    brand = SiteBrandSerializer(
+        allow_null=True, help_text="null when the deployment declares no sites"
+    )
+    seo = SiteSeoSerializer()
+
+
 class SiteBootstrapView(APIView):
     """``GET /<auth-prefix>/api/v1/site/`` — host → brand, for the storefront."""
 
@@ -75,6 +110,7 @@ class SiteBootstrapView(APIView):
     authentication_classes = []
     stapel_anonymous_access = ANONYMOUS_ALLOWED
 
+    @extend_schema(responses={200: SiteBootstrapSerializer})
     def get(self, request):
         response = Response(site_payload(request))
         response["Cache-Control"] = CACHE_CONTROL

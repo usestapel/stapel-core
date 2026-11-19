@@ -18,6 +18,7 @@ from drf_spectacular.utils import (
 from rest_framework import serializers
 
 from stapel_core.django.api.errors import StapelErrorSerializer
+from stapel_core.django.openapi.contract import current_contract_profile
 
 # =============================================================================
 # Custom AutoSchema with Permission Classes Display
@@ -70,7 +71,26 @@ class PermissionAwareAutoSchema(AutoSchema):
         elif permission_info:
             operation["description"] = permission_info.strip()
 
+        if current_contract_profile() >= 2:
+            from .contract import annotate_operation
+
+            annotate_operation(self, operation)
         return operation
+
+    def get_auth(self):
+        """Profile 2 asks the permission stack whether a stranger gets in.
+
+        drf-spectacular adds the anonymous alternative only when it sees
+        ``AllowAny`` by class, so a gate that admits strangers under another
+        name (an enrolment guard, a header check) reads as auth-required.
+        Profile 1 keeps that historical answer byte-for-byte.
+        """
+        auths = super().get_auth()
+        if current_contract_profile() >= 2:
+            from .contract import profile_security
+
+            auths = profile_security(self, auths)
+        return auths
 
 
 # =============================================================================

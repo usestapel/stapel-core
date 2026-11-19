@@ -493,19 +493,43 @@ def _register_jwt_auth_extension():
         target_class = "stapel_core.django.jwt.authentication.JWTCookieAuthentication"
         name = "JWTCookieAuth"
 
+        def __init__(self, target):
+            super().__init__(target)
+            # Profile 2 also declares the bearer header the same
+            # authenticator accepts (extract_jwt_from_request); profile 1
+            # keeps the single historical scheme. Instances are created per
+            # schema generation, inside the profile block.
+            from stapel_core.django.openapi.contract import (
+                BEARER_SCHEME_NAME,
+                current_contract_profile,
+            )
+
+            if current_contract_profile() >= 2:
+                self.name = ["JWTCookieAuth", BEARER_SCHEME_NAME]
+
+        def get_security_requirement(self, auto_schema):
+            if isinstance(self.name, list):
+                # Alternatives, not a conjunction: either credential suffices.
+                return [{n: []} for n in self.name]
+            return {self.name: []}
+
         def get_security_definition(self, _auto_schema):
             # The advertised name must be the cookie this deployment actually
             # sets, not the default: a service that renamed JWT_COOKIE_NAME
             # was publishing a schema whose auth scheme named a cookie it
             # never issues.
             from stapel_core.django.jwt.utils import jwt_cookie_names
+            from stapel_core.django.openapi.contract import BEARER_SCHEME
 
-            return {
+            cookie = {
                 "type": "apiKey",
                 "in": "cookie",
                 "name": jwt_cookie_names()[0],
                 "description": "JWT token stored in cookie. Login via /auth/admin/ to get the cookie.",
             }
+            if isinstance(self.name, list):
+                return [cookie, dict(BEARER_SCHEME)]
+            return cookie
 
     # The extension is auto-registered when the class is defined
     return JWTCookieAuthenticationExtension

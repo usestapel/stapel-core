@@ -270,6 +270,9 @@ def captcha_protected(action: str = 'default'):
             _log(True)
             return view_method(*args, **kwargs)
 
+        # Read by the contract emission (x-stapel-captcha); see
+        # stapel_core.django.openapi.contract.captcha_contract.
+        wrapper._stapel_captcha = {"action": action}
         return wrapper
 
     return decorator

@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.97.0] — 2026-11-19
+
+Minor, additive. No migration. Nothing changes for a schema emitted the way
+every module emits today (contract profile 1, `stapel_tools.codegen`
+defaults): that output is byte-identical.
+
+### Added — contract profile 2 (`stapel_core.django.openapi.contract`)
+
+The per-operation facts a generated native client needs, read only inside
+`contract_profile(2)` (stapel-tools' `emit_schema(..., contract_profile=2)`
+opens it):
+
+- **Bearer next to the cookie.** The JWT cookie extension declares
+  `JWTBearerAuth` (`http`/`bearer`/`JWT`) as a second scheme and every
+  secured operation lists both as alternatives. The authenticator has always
+  accepted `Authorization: Bearer`; the schema now says so.
+- **Public operations from the running gate.** The anonymous alternative
+  `{}` is added when the operation's permission stack, run on a request with
+  `AnonymousUser` and no token, lets it through (`admits_anonymous`) and the
+  handler does not answer `error.401.unauthorized` itself. drf-spectacular
+  only recognises `AllowAny` by class, so a gate like stapel-auth's
+  `DenyEnrollOnly` read as auth-required. A gate that raises while probed is a
+  refusal.
+- **Error codes per operation.** `responses.<status>["x-stapel-errors"]` from
+  a static walk (`collect_error_codes`): the authenticators, the permission
+  stack, the handler through its decorators, closures, function-body imports,
+  `self.` methods, service classes and module functions in stapel packages and
+  the view's own package, and the request serializer's validators. Only
+  registered codes are bound; a status the declaration lacked is added with the
+  `StapelError` body (the step-up 403 keeps its challenge schema). New
+  `@raises("error.409.x", ...)` declares what the walk cannot see; an
+  unregistered declared code refuses the emission.
+- **Captcha.** `x-stapel-captcha: {action, token}` on operations guarded by
+  `@captcha_protected` (which now marks its wrapper) or taking a
+  `CaptchaMixin` request serializer.
+
+### Fixed
+
+- `stapel_postprocessing_hook` (`x-stapel-flows` / `x-stapel-verification`)
+  never ran `autodiscover_flows()`, so flows attached post-hoc in a module's
+  `flows.py` were invisible to it; it now also reads the flow registry, and
+  matches router (regex) routes and renamed path parameters (`pk` → `id`).
+- `GET …/site/` declares its body (`SiteBootstrapSerializer`); it was a
+  schema-less 200.
+
 ## [0.96.0] — 2026-11-13
 
 Minor (pre-1.0: may break a deployment whose environment spells a boolean
