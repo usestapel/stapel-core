@@ -43,6 +43,7 @@ ERR_429_TOO_MANY_REQUESTS = "error.429.too_many_requests"
 ERR_429_RATE_LIMIT = "error.429.rate_limit"
 ERR_400_VALIDATION_ERROR = "error.400.validation_error"
 ERR_400_EXPECTED_LIST = "error.400.expected_list"
+ERR_400_TOO_MANY_IDS = "error.400.too_many_ids"
 ERR_400_INVALID_AD_ID = "error.400.invalid_ad_id"
 ERR_404_AD_NOT_FOUND = "error.404.ad_not_found"
 ERR_500_INTERNAL = "error.500.internal"
@@ -73,6 +74,9 @@ COMMON_ERRORS = {
     # Field-level validation (400)
     ERR_400_VALIDATION_ERROR: "Validation error",
     ERR_400_EXPECTED_LIST: "Expected a list of items",
+    # A batch endpoint bounds its id list and refuses past the bound, never
+    # truncates; both numbers travel so the client can split the request.
+    ERR_400_TOO_MANY_IDS: "Too many ids: {requested} requested, at most {limit} per batch request",
     ERR_400_INVALID_AD_ID: "Invalid advertisement ID",
     ERR_404_AD_NOT_FOUND: "Listing not found",
     # Universal field validation — DRF error codes mapped to localizable keys.
@@ -221,6 +225,7 @@ RETRY_PARAM_TYPES: Dict[str, str] = {
     "retry_after_minutes": "integer",
 }
 _PARAM_TYPE_REGISTRY[ERR_429_RATE_LIMIT] = dict(RETRY_PARAM_TYPES)
+_PARAM_TYPE_REGISTRY[ERR_400_TOO_MANY_IDS] = {"requested": "integer", "limit": "integer"}
 
 #: code -> package that re-registered a key another package owns with a
 #: different en text, without claiming it. The owner's translations were made

@@ -11,6 +11,7 @@ from stapel_core.django.api.errors import (  # noqa: F401
     # Error key constants
     ERR_400_BAD_REQUEST,
     ERR_400_EXPECTED_LIST,
+    ERR_400_TOO_MANY_IDS,
     ERR_400_VALIDATION_ERROR,
     ERR_400_INVALID_AD_ID,
     ERR_401_UNAUTHORIZED,

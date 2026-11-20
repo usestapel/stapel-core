@@ -15,6 +15,7 @@
   "error.400.field.required": "{field} es obligatorio",
   "error.400.field.unique": "{field} debe ser único",
   "error.400.invalid_ad_id": "ID de anuncio no válido",
+  "error.400.too_many_ids": "Demasiados identificadores: {requested} solicitados, como máximo {limit} por solicitud por lotes",
   "error.400.validation_error": "Error de validación",
   "error.400.verification_failed": "La verificación ha fallado",
   "error.400.verification_invalid_factor": "Este factor de verificación no está disponible",

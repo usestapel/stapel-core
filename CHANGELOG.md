@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.99.1] — 2026-11-20
+
+Patch. No migration.
+
+### Added — `error.400.too_many_ids` is a core key
+
+- A bounded id list on a batch request is generic, so core owns the key:
+  `ERR_400_TOO_MANY_IDS`, en "Too many ids: {requested} requested, at most
+  {limit} per batch request", params `requested`/`limit` typed `integer`,
+  remediation `fix_input`, ru/es shipped. Two packages registered it with
+  different texts, and an instance installing both failed the stale gate.
+  Packages raise core's key with both numbers and do not re-register it; a
+  package repeating this exact text is not an override.
+
 ## [0.99.0] — 2026-11-20
 
 Minor (pre-1.0: read the Changed list). No migration. Found by a native
