@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.99.4] — 2026-11-20
+
+Patch. No migration.
+
+### Added — the session claim (`sid`) and a reader for any service
+
+- `stapel_core.core.jwt_handler.SESSION_CLAIM = "sid"`: the issuer's session
+  id, signed into a token pair like every other claim (stapel-auth mints it
+  from 0.54.0). Absent from tokens minted outside a session and from tokens
+  issued before the claim existed; those keep working unchanged.
+- Mint-from-refresh keeps it. `refresh_access_token` re-reads the account's
+  claims from the database (`load_user_by_uid` or the caller's loader), which
+  knows nothing of sessions, so `sid` used to vanish on every middleware,
+  channels or core-view refresh. It is now copied from the verified refresh
+  token; a loader cannot name a session, and a refresh token without the
+  claim mints an access token without one.
+- `stapel_core.django.jwt.claims.request_session_id(request)` and
+  `request_token_claims(request)`: the verified claims of the access token
+  `request.user` came from (the presented token, or the one the middleware
+  re-minted on this request). Verification is `jwt_provider.validate_token`
+  (signature, expiry, revocation, user ban) and the token's `user_id` must be
+  `request.user`; otherwise `None`. A brick binds rows to the caller's
+  session through it without importing stapel-auth and without trusting a
+  client-sent session id — on the auth service and on a consumer service
+  with mirrored users alike.
+
 ## [0.99.3] — 2026-11-20
 
 Patch. No migration.

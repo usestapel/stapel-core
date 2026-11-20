@@ -26,6 +26,11 @@ from .config import JWTConfig
 
 logger = logging.getLogger(__name__)
 
+#: The claim naming the issuer's session a token pair belongs to (stapel-auth
+#: ``UserSession`` id). Signed like every other claim; absent from tokens
+#: minted outside a session and from tokens issued before the claim existed.
+SESSION_CLAIM = "sid"
+
 
 class JWTHandler:
     """

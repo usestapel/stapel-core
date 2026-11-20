@@ -13,7 +13,7 @@ The CALLER (middleware) decides WHEN to refresh. TokenManager just provides tool
 import logging
 from typing import Dict, Any, Optional, Tuple, Callable, TYPE_CHECKING
 
-from .jwt_handler import JWTHandler
+from .jwt_handler import SESSION_CLAIM, JWTHandler
 from .config import JWTConfig
 
 if TYPE_CHECKING:
@@ -248,7 +248,16 @@ class TokenManager:
             if user_id:
                 fresh_data = load_user_data(user_id)
                 if fresh_data:
-                    user_data = fresh_data
+                    # The account's claims come from the database; the session
+                    # the refresh token belongs to does not change by being
+                    # refreshed, so its claim is carried from the (verified)
+                    # refresh token into the new access token.
+                    sid = user_data.get(SESSION_CLAIM)
+                    user_data = {
+                        k: v for k, v in fresh_data.items() if k != SESSION_CLAIM
+                    }
+                    if sid:
+                        user_data[SESSION_CLAIM] = sid
                 else:
                     logger.warning(f"User not found for refresh token: {user_id}")
                     return None
