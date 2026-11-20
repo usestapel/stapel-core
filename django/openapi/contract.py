@@ -30,6 +30,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import copy
+import dataclasses
 import functools
 import importlib
 import inspect
@@ -44,14 +45,18 @@ __all__ = [
     "BEARER_SCHEME_NAME",
     "CAPTCHA_ATTR",
     "CONTRACT_PROFILE_KEY",
+    "CREDENTIALS_ATTR",
+    "Credential",
     "ERRORS_KEY",
     "RAISES_ATTR",
     "SUPPORTED_PROFILES",
+    "accepts_credentials",
     "admits_anonymous",
     "captcha_contract",
     "collect_error_codes",
     "contract_profile",
     "current_contract_profile",
+    "declared_credentials",
     "raises",
     "registered_error_codes",
 ]
@@ -69,6 +74,8 @@ CAPTCHA_KEY = "x-stapel-captcha"
 RAISES_ATTR = "_stapel_raises"
 #: Attribute ``@captcha_protected`` stores ``{"action": ...}`` under.
 CAPTCHA_ATTR = "_stapel_captcha"
+#: Attribute :func:`accepts_credentials` stores its declaration under.
+CREDENTIALS_ATTR = "_stapel_credentials"
 
 BEARER_SCHEME_NAME = "JWTBearerAuth"
 BEARER_SCHEME = {
@@ -141,6 +148,81 @@ def raises(*codes: str) -> Callable:
         return target
 
     return decorator
+
+
+@dataclasses.dataclass(frozen=True)
+class Credential:
+    """A credential an operation checks in its own body: ``name`` is the
+    ``components.securitySchemes`` key, ``scheme`` the OpenAPI security scheme
+    object (``{"type": "apiKey", "in": "header", "name": "X-Closure-Token"}``)."""
+
+    name: str
+    scheme: dict
+
+
+def accepts_credentials(
+    *credentials: Credential, session: bool = True, anonymous: bool = False
+) -> Callable:
+    """Declare the credentials an operation accepts that no authenticator sees.
+
+    The derived ``security`` knows the session (the JWT cookie, and the bearer
+    under profile 2) and whether the permission stack admits a stranger. A
+    view that is open at the DRF layer and checks another credential in its
+    body (a refresh cookie, a service key, a single-purpose token) reads as
+    either public or session-only, and a generated client sends the wrong
+    thing. With this declaration the operation's ``security`` is::
+
+        [*session alternatives if session, *{c.name: []} per credential, {} if anonymous]
+
+    and every scheme is registered under ``components.securitySchemes``.
+    ``anonymous=True`` keeps the no-credential alternative (a credential the
+    body may carry instead, like a refresh token posted in JSON). Applies in
+    every profile. Usable on a handler or on a view class.
+    """
+    for credential in credentials:
+        if not isinstance(credential, Credential):
+            raise TypeError(f"@accepts_credentials: {credential!r} is not a Credential")
+    declaration = {
+        "credentials": tuple(credentials),
+        "session": bool(session),
+        "anonymous": bool(anonymous),
+    }
+
+    def decorator(target):
+        setattr(target, CREDENTIALS_ATTR, declaration)
+        return target
+
+    return decorator
+
+
+def declared_credentials(view: Any, method: str) -> Optional[dict]:
+    """The :func:`accepts_credentials` declaration for *view*'s *method*, if any."""
+    handler = _handler_of(view, method)
+    return getattr(handler, CREDENTIALS_ATTR, None) or getattr(
+        type(view), CREDENTIALS_ATTR, None
+    )
+
+
+def apply_credentials(auto_schema, auths: list, declaration: dict) -> list:
+    """Rewrite *auths* by a declaration and register its schemes."""
+    from drf_spectacular.plumbing import ResolvedComponent
+
+    out = [a for a in auths if a] if declaration["session"] else []
+    for credential in declaration["credentials"]:
+        auto_schema.registry.register_on_missing(
+            ResolvedComponent(
+                name=credential.name,
+                type=ResolvedComponent.SECURITY_SCHEMA,
+                object=credential.name,
+                schema=dict(credential.scheme),
+            )
+        )
+        requirement = {credential.name: []}
+        if requirement not in out:
+            out.append(requirement)
+    if declaration["anonymous"]:
+        out.append({})
+    return out
 
 
 def registered_error_codes() -> dict[str, int]:

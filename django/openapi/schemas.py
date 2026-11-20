@@ -83,13 +83,21 @@ class PermissionAwareAutoSchema(AutoSchema):
         drf-spectacular adds the anonymous alternative only when it sees
         ``AllowAny`` by class, so a gate that admits strangers under another
         name (an enrolment guard, a header check) reads as auth-required.
-        Profile 1 keeps that historical answer byte-for-byte.
+        Profile 1 keeps that historical answer byte-for-byte. An operation
+        that checks a credential in its own body declares it with
+        ``contract.accepts_credentials``, which rewrites the answer in every
+        profile.
         """
         auths = super().get_auth()
         if current_contract_profile() >= 2:
             from .contract import profile_security
 
             auths = profile_security(self, auths)
+        from .contract import apply_credentials, declared_credentials
+
+        declaration = declared_credentials(self.view, self.method)
+        if declaration is not None:
+            auths = apply_credentials(self, auths, declaration)
         return auths
 
 

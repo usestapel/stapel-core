@@ -386,3 +386,79 @@ def test_flows_hook_binds_registry_steps_and_router_paths():
     # regex route, schema renamed pk -> id: matched by shape
     assert out["paths"]["/keys/{id}"]["post"]["x-stapel-flows"] == ["contract.probe_flow"]
     assert "x-stapel-flows" not in out["paths"]["/elsewhere/"]["post"]
+
+
+# -- credentials checked in the handler body ----------------------------------
+
+from stapel_core.django.openapi.contract import Credential, accepts_credentials  # noqa: E402
+
+PROBE_TOKEN = Credential(
+    "ProbeTokenAuth", {"type": "apiKey", "in": "header", "name": "X-Probe-Token"}
+)
+
+
+class TokenOrSessionView(_Base):
+    """Open at the DRF layer; the body accepts a session or the probe token."""
+
+    permission_classes = [permissions.AllowAny]
+
+    @extend_schema(responses={200: OutSerializer})
+    @accepts_credentials(PROBE_TOKEN)
+    def get(self, request):
+        return StapelResponse({"ok": True})
+
+
+class TokenOnlyView(_Base):
+    permission_classes = [permissions.AllowAny]
+
+    @extend_schema(responses={200: OutSerializer})
+    @accepts_credentials(PROBE_TOKEN, session=False)
+    def get(self, request):
+        return StapelResponse({"ok": True})
+
+
+@accepts_credentials(PROBE_TOKEN, session=False, anonymous=True)
+class TokenOrBodyView(_Base):
+    permission_classes = [permissions.AllowAny]
+
+    @extend_schema(responses={200: OutSerializer})
+    def get(self, request):
+        return StapelResponse({"ok": True})
+
+
+@pytest.mark.parametrize("profile", [1, 2])
+def test_declared_credential_is_a_scheme_and_an_alternative(profile):
+    schema = _schema(TokenOrSessionView, profile)
+    assert schema["components"]["securitySchemes"]["ProbeTokenAuth"] == PROBE_TOKEN.scheme
+    security = _op(schema)["security"]
+    assert {"ProbeTokenAuth": []} in security
+    assert {"JWTCookieAuth": []} in security
+    assert {} not in security
+
+
+def test_inversion_undeclared_open_view_is_public():
+    # The same view without the declaration: profile 2 calls it open.
+    class Undeclared(_Base):
+        permission_classes = [permissions.AllowAny]
+
+        @extend_schema(responses={200: OutSerializer})
+        def get(self, request):
+            return StapelResponse({"ok": True})
+
+    schema = _schema(Undeclared, 2)
+    assert {} in _op(schema)["security"]
+    assert "ProbeTokenAuth" not in schema["components"].get("securitySchemes", {})
+
+
+@pytest.mark.parametrize("profile", [1, 2])
+def test_credential_without_session_is_the_only_requirement(profile):
+    assert _op(_schema(TokenOnlyView, profile))["security"] == [{"ProbeTokenAuth": []}]
+
+
+def test_class_level_declaration_keeps_the_anonymous_alternative():
+    assert _op(_schema(TokenOrBodyView, 2))["security"] == [{"ProbeTokenAuth": []}, {}]
+
+
+def test_accepts_credentials_rejects_a_bare_scheme():
+    with pytest.raises(TypeError):
+        accepts_credentials({"type": "apiKey"})

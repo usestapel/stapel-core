@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.99.5] — 2026-11-20
+
+Patch. No migration.
+
+### Added — credentials an operation checks in its own body
+
+- `stapel_core.django.openapi.contract.accepts_credentials(*Credential,
+  session=True, anonymous=False)` and `Credential(name, scheme)`. A view open
+  at the DRF layer that checks a credential in its body (a refresh cookie, a
+  service key, a single-purpose token) used to be emitted as public (`{}`) or
+  as session-only, so a generated client sent nothing, or the wrong thing.
+  The declaration rewrites the operation's `security` in every profile — the
+  session alternatives unless `session=False`, one requirement per
+  credential, `{}` only with `anonymous=True` — and registers each scheme in
+  `components.securitySchemes`. Operations without it are unchanged.
+
 ## [0.99.4] — 2026-11-20
 
 Patch. No migration.

@@ -1527,6 +1527,15 @@ Reaching DRF's generic lookup (`GenericAPIView.get_object`, the retrieve /
 update / destroy mixins, `get_object_or_404`) binds `error.404.not_found`;
 modules do not declare it with `@raises`.
 
+`@accepts_credentials(Credential(name, scheme), session=True, anonymous=False)`
+(handler or view class) declares a credential the operation checks in its own
+body — one no authenticator sees (a refresh cookie, a service key, a
+single-purpose token). In every profile the operation's `security` becomes the
+session alternatives (dropped with `session=False`), one `{name: []}` per
+credential, and `{}` only with `anonymous=True`; each scheme is registered in
+`components.securitySchemes`. Without it an open-at-DRF view that refuses in
+its body reads as public, or as session-only.
+
 ### Captcha backends & challenge policy — `STAPEL_CAPTCHA` (`captcha/`)
 
 | Key | Default | Semantics | What it customizes |
