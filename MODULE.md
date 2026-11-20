@@ -1096,6 +1096,14 @@ So keys carry an **owner** and the canon is scoped by it:
   fork-free seam is untouched) without taking over its catalog duty. Core
   passes `owner="stapel_core"` explicitly where import order would otherwise
   decide. `error_owners()` / `error_owner(code)` read it back.
+- An **unclaimed reword** — re-registering another owner's key with a
+  different en — leaves the owner's translations behind the en this instance
+  serves. It is recorded (`error_text_overrides()`) and
+  `check_registry_catalog_pairing` (run by `generate_error_keys`) reports
+  **E `stale`** wherever the owner's `.state.json` hash differs from the
+  instance's en. Move the wording to the owner, or claim the key (`owner=`) and
+  translate it. A `remediation`/`param_types` declaration for someone else's
+  key needs no copy of its text (since 0.99.0).
 - The **loader does not change**: `load_app_catalogs` stays a flat later-wins
   merge over `catalog_search_dirs()`, so precedence is still position — a
   client-only owner's catalog, core's catalog, then a module's declared
@@ -1262,7 +1270,8 @@ Three copies are **deliberate divergences and stay local** — do not "unify" th
 
 ### Error registry (`django/api/errors.py`)
 
-`register_service_errors({key: template}, remediation={key: hint})` adds
+`register_service_errors({key: template}, remediation={key: hint},
+param_types={key: {param: type}})` adds
 service-specific error keys to the global registry used by
 `StapelErrorResponse(status, key, params)`. Raise
 `StapelValidationError(key, params)` from serializers or
@@ -1270,6 +1279,16 @@ service-specific error keys to the global registry used by
 by `stapel_exception_handler` (wired as DRF's `EXCEPTION_HANDLER` in the
 common settings). Subclass `ErrorKeysView` and override
 `get_service_errors()` to serve a service's key dictionary.
+
+**Declared params** (since 0.99.0). `errors.json` lists a code's `params` from
+its en template; a template names what the sentence prints, not everything the
+answer carries. `param_types={code: {name: "integer"|"number"|"string"|"boolean"}}`
+adds the names the template leaves out to `params` and emits
+`"param_types"` on the entry (absent when nothing is declared, so other
+entries stay byte-identical) — the field a generated client (stapel-kmp
+codegen) types the params by. Core declares the three params of
+`error_429_rate_limit` (`RETRY_PARAM_TYPES`); `error_param_types()` reads the
+declarations back.
 
 **Every DRF error carries the envelope, including the ones no view raises**
 (since 0.61.0). `NotAuthenticated`/`AuthenticationFailed` (authenticators),

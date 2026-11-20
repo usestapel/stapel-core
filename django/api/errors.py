@@ -69,7 +69,7 @@ COMMON_ERRORS = {
     ERR_422_UNPROCESSABLE_ENTITY: "Unprocessable entity",
     ERR_423_LOCKED: "Resource is locked",
     ERR_429_TOO_MANY_REQUESTS: "Too many requests. Please try again later.",
-    ERR_429_RATE_LIMIT: "Too many attempts. Try again in {retry_after_minutes} minutes.",
+    ERR_429_RATE_LIMIT: "Too many attempts. Try again in {retry_after_display} ({retry_after} s, about {retry_after_minutes} min).",
     # Field-level validation (400)
     ERR_400_VALIDATION_ERROR: "Validation error",
     ERR_400_EXPECTED_LIST: "Expected a list of items",
@@ -197,6 +197,57 @@ REMEDIATION_VOCAB = frozenset(
 _REMEDIATION_REGISTRY: Dict[str, str] = {}
 
 # =============================================================================
+# Declared param types — what a response's ``params`` carry, beyond the template
+# =============================================================================
+#
+# ``errors.json`` lists a code's params from its en template. A template names
+# what a sentence reads, not everything an answer carries: a 429 answer
+# carries ``retry_after`` in seconds whether or not the sentence prints it, and
+# a typed client needs to know it is an integer. A declaration
+# (``register_service_errors(..., param_types=...)``) adds the names the
+# template leaves out and types every name it covers; ``errors.json`` emits
+# them as ``param_types`` (the field a generated client reads).
+
+#: Types a declared param may have (JSON Schema primitive names).
+PARAM_TYPES = frozenset({"string", "integer", "number", "boolean"})
+
+#: code -> {param: type} (explicit declarations only).
+_PARAM_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {}
+
+#: Core's own declarations: the three params ``error_429_rate_limit`` builds.
+RETRY_PARAM_TYPES: Dict[str, str] = {
+    "retry_after": "integer",
+    "retry_after_display": "string",
+    "retry_after_minutes": "integer",
+}
+_PARAM_TYPE_REGISTRY[ERR_429_RATE_LIMIT] = dict(RETRY_PARAM_TYPES)
+
+#: code -> package that re-registered a key another package owns with a
+#: different en text, without claiming it. The owner's translations were made
+#: from the owner's text, so in that instance they lag the source; the
+#: registry/catalog pairing gate (``check_registry_catalog_pairing``) reports
+#: them as stale at every ``generate_error_keys`` emission.
+_TEXT_OVERRIDES: Dict[str, str] = {}
+
+
+def _validate_param_types(code: str, declared) -> Dict[str, str]:
+    if not isinstance(declared, dict) or not declared:
+        raise ValueError(
+            f"param_types for {code!r} must be a non-empty {{param: type}} map"
+        )
+    out: Dict[str, str] = {}
+    for name, kind in declared.items():
+        if not isinstance(name, str) or not name.isidentifier():
+            raise ValueError(f"param_types for {code!r}: {name!r} is not a param name")
+        if kind not in PARAM_TYPES:
+            raise ValueError(
+                f"param_types for {code!r}: {name!r} has type {kind!r} — "
+                f"must be one of {sorted(PARAM_TYPES)}"
+            )
+        out[name] = kind
+    return out
+
+# =============================================================================
 # Ownership registry — who is responsible for a key's canonical text
 # =============================================================================
 #
@@ -249,20 +300,33 @@ def register_service_errors(
     remediation: Optional[dict] = None,
     owner: Optional[str] = None,
     language: Optional[str] = None,
+    param_types: Optional[dict] = None,
 ):
     """Register service-specific errors into the global registry.
 
     ``errors`` is a ``code -> en`` map (same map the runtime ``/error-keys/``
     view serves). ``remediation`` is an optional ``code -> remediation`` map: a
     machine-readable recovery hint from :data:`REMEDIATION_VOCAB`. Every key in
-    ``remediation`` must be present in ``errors`` and carry a value from the
-    vocabulary; keys left undeclared fall back to :func:`default_remediation`.
+    ``remediation`` must be present in ``errors`` (or already registered — a
+    hint for another package's key needs no copy of its text) and carry a
+    value from the vocabulary; keys left undeclared fall back to
+    :func:`default_remediation`.
+
+    ``param_types`` is an optional ``code -> {param: type}`` map declaring what
+    an answer's ``params`` carry (types from :data:`PARAM_TYPES`). Names the
+    template does not mention are added to the code's ``params`` in
+    ``errors.json``; every declared name is typed under ``param_types``. Like
+    ``remediation`` it may name an already-registered key.
 
     ``owner`` names the package responsible for the keys' *translations* (see
     :data:`_OWNER_REGISTRY`). Left unset it is inferred from the caller's
     top-level package and recorded only for keys nobody owns yet, so
     re-registering another package's key overrides its text without taking
     over its catalog obligation. Pass it explicitly to claim a key outright.
+    An unclaimed override with a DIFFERENT text leaves the owner's
+    translations behind the source; it is recorded (:func:`error_text_overrides`)
+    and fails the pairing gate at emission — contribute the wording to the
+    owner, or claim the key and translate it.
 
     ``language`` names the language these templates are WRITTEN in (``"en"``,
     ``"ru"``, …). It becomes the ``error_language`` of every response built
@@ -273,21 +337,45 @@ def register_service_errors(
     defaults to "unknown" and keeps clients translating from
     ``localizable_error``+``params``.
     """
+    claimed = owner or _infer_owner()
+    for code, en in errors.items():
+        if owner is not None:
+            _TEXT_OVERRIDES.pop(code, None)
+            continue
+        current_owner = _OWNER_REGISTRY.get(code)
+        if (
+            current_owner
+            and claimed
+            and current_owner != claimed
+            and code in _GLOBAL_REGISTRY
+            and _GLOBAL_REGISTRY[code] != en
+        ):
+            _TEXT_OVERRIDES[code] = claimed
     _GLOBAL_REGISTRY.update(errors)
     if language is not None:
         for code in errors:
             _LANGUAGE_REGISTRY[code] = language
-    claimed = owner or _infer_owner()
     if claimed:
         for code in errors:
             if owner is not None or code not in _OWNER_REGISTRY:
                 _OWNER_REGISTRY[code] = claimed
+    if param_types:
+        validated = {}
+        for code, declared in param_types.items():
+            if code not in errors and code not in _GLOBAL_REGISTRY:
+                raise ValueError(
+                    f"param_types declared for unknown error key {code!r} "
+                    f"(neither in the accompanying errors map nor registered)"
+                )
+            validated[code] = _validate_param_types(code, declared)
+        for code, declared in validated.items():
+            _PARAM_TYPE_REGISTRY.setdefault(code, {}).update(declared)
     if remediation:
         for code, hint in remediation.items():
-            if code not in errors:
+            if code not in errors and code not in _GLOBAL_REGISTRY:
                 raise ValueError(
                     f"remediation declared for unknown error key {code!r} "
-                    f"(not in the accompanying errors map)"
+                    f"(neither in the accompanying errors map nor registered)"
                 )
             if hint not in REMEDIATION_VOCAB:
                 raise ValueError(
@@ -307,6 +395,17 @@ _LANGUAGE_REGISTRY.update({code: CORE_TEMPLATE_LANGUAGE for code in COMMON_ERROR
 def error_owners() -> Dict[str, str]:
     """``{code: owning package}`` for every key whose owner is known."""
     return dict(_OWNER_REGISTRY)
+
+
+def error_param_types() -> Dict[str, Dict[str, str]]:
+    """``{code: {param: type}}`` for every code that declared param types."""
+    return {code: dict(types) for code, types in _PARAM_TYPE_REGISTRY.items()}
+
+
+def error_text_overrides() -> Dict[str, str]:
+    """``{code: overriding package}`` — unclaimed re-registrations of another
+    package's key with a different en text (its owner's translations lag)."""
+    return dict(_TEXT_OVERRIDES)
 
 
 def error_languages() -> Dict[str, str]:
@@ -401,7 +500,9 @@ def build_error_registry() -> list:
 
     Returns a list of ``{code, status, params, remediation, en, owner}`` dicts,
     sorted by ``code`` (byte-stable for a drift gate). ``status`` is parsed from
-    the key (``error.<status>.<name>``), ``params`` from the ``en`` template,
+    the key (``error.<status>.<name>``), ``params`` from the ``en`` template
+    followed by declared names the template does not mention, ``param_types``
+    (present only when declared) types the declared params,
     ``remediation`` is the explicit declaration or :func:`default_remediation`,
     and ``owner`` is the package responsible for the key's *translations*
     (:data:`_OWNER_REGISTRY`; ``null`` when nobody claimed it).
@@ -419,19 +520,22 @@ def build_error_registry() -> list:
         except (IndexError, ValueError):
             continue  # not an `error.<status>.<name>` key — skip defensively
         params = _params_of(en)
+        declared = _PARAM_TYPE_REGISTRY.get(code) or {}
+        params += [p for p in declared if p not in params]
         remediation = _REMEDIATION_REGISTRY.get(code) or default_remediation(
             code, status, params
         )
-        entries.append(
-            {
-                "code": code,
-                "status": status,
-                "params": params,
-                "remediation": remediation,
-                "en": en,
-                "owner": _OWNER_REGISTRY.get(code),
-            }
-        )
+        entry = {
+            "code": code,
+            "status": status,
+            "params": params,
+            "remediation": remediation,
+            "en": en,
+            "owner": _OWNER_REGISTRY.get(code),
+        }
+        if declared:
+            entry["param_types"] = {p: declared[p] for p in sorted(declared)}
+        entries.append(entry)
     entries.sort(key=lambda e: e["code"])
     return entries
 

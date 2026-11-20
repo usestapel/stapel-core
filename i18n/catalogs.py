@@ -277,6 +277,29 @@ def owner_catalog(owner: str, domain: str, language: str) -> dict[str, str]:
     return merged
 
 
+def owner_source_hashes(owner: str, domain: str, language: str) -> dict[str, str]:
+    """``{key: source hash}`` *owner*'s ``.state.json`` records for a locale.
+
+    The hash of the en text each translation was made from — what the pairing
+    gate compares with the en an instance actually declares, so a key whose
+    source was changed by ANOTHER package (an unclaimed re-registration) shows
+    up as stale in the instance where that happens.
+    """
+    hashes: dict[str, str] = {}
+    try:
+        pairs = _owner_app_dirs()
+    except Exception:
+        return hashes
+    for pkg, app_dir in pairs:
+        if pkg != owner:
+            continue
+        state = StateSidecar(app_dir / CATALOG_DIRNAME / STATE_FILENAME)
+        for key, entry in state.entries(domain, language).items():
+            if isinstance(entry, dict) and isinstance(entry.get("hash"), str):
+                hashes[key] = entry["hash"]
+    return hashes
+
+
 def module_catalog(
     domain: str,
     language: str,
@@ -714,6 +737,7 @@ __all__ = [
     "load_catalog_file",
     "module_catalog",
     "owner_catalog",
+    "owner_source_hashes",
     "owner_languages",
     "owner_of_dir",
     "resolve_catalog_dir",

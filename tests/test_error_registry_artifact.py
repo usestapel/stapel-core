@@ -84,7 +84,8 @@ def test_committed_artifact_shape():
     assert codes == sorted(codes)
     assert len(codes) == len(set(codes))
     for e in entries:
-        assert set(e) == {"code", "status", "params", "remediation", "en", "owner"}
+        assert set(e) - {"param_types"} == {"code", "status", "params", "remediation", "en", "owner"}
+        assert set(e.get("param_types", {})) <= set(e["params"])
         assert e["status"] == int(e["code"].split(".")[1])
         assert e["remediation"] in REMEDIATION_VOCAB
         assert e["owner"] == OWNER  # a core-only instance declares core's keys

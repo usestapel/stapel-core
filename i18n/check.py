@@ -61,6 +61,7 @@ from .catalogs import (
     owner_catalog,
     owner_languages,
     owner_of_dir,
+    owner_source_hashes,
 )
 from .domains import DOMAIN_EXPORTS, params_of, source_owners
 
@@ -277,6 +278,8 @@ def check_registry_catalog_pairing(
     domain: str = "errors",
     languages_of: Callable[[str, str], "set[str]"] | None = None,
     owner_catalogs: Callable[[str, str, str], dict[str, str]] | None = None,
+    owner_hashes: Callable[[str, str, str], dict[str, str]] | None = None,
+    text_overrides: dict[str, str] | None = None,
 ) -> list[CatalogIssue]:
     """Every declared code must be translated wherever its owner translates.
 
@@ -291,6 +294,14 @@ def check_registry_catalog_pairing(
       auth/gdpr incident shape made impossible: an ownership move that strips
       a translation goes red at the next emission of EVERY instance that
       mounts the key, not at a user's screen.
+    * **E** ``stale`` — the owner's catalog carries the code, but its
+      ``.state.json`` records a different en source than the one this registry
+      declares. The owner's own catalog gate cannot see this: it runs where
+      only the owner's text is registered. It happens where another package
+      re-registers the key with new wording without claiming it — the
+      instance that serves the new en with the old translation. Fix it at the
+      owner (adopt the wording, retranslate) or claim the key
+      (``owner=``) and translate it yourself.
     * **W** ``unshipped`` — an owner with declared codes ships no catalog in
       any language while some other package in the instance does: its codes
       render as English fallbacks in an otherwise translated deployment. A
@@ -304,6 +315,13 @@ def check_registry_catalog_pairing(
         languages_of = owner_languages
     if owner_catalogs is None:
         owner_catalogs = owner_catalog
+    if owner_hashes is None:
+        owner_hashes = owner_source_hashes
+    if text_overrides is None:
+        from stapel_core.django.api.errors import error_text_overrides
+
+        text_overrides = error_text_overrides()
+    source = {e["code"]: e.get("en") for e in entries}
 
     by_owner: dict[str, list[str]] = {}
     for entry in entries:
@@ -328,6 +346,7 @@ def check_registry_catalog_pairing(
             continue
         for lang in langs:
             catalog = owner_catalogs(pkg, domain, lang)
+            hashes = owner_hashes(pkg, domain, lang)
             for code in by_owner[pkg]:
                 if code not in catalog:
                     issues.append(CatalogIssue(
@@ -336,6 +355,23 @@ def check_registry_catalog_pairing(
                         f"{pkg!r}, which ships {lang} — but its {lang} catalog "
                         f"does not carry the key; translate it (or the "
                         f"ownership move that stripped it lost a string)",
+                    ))
+                    continue
+                en = source.get(code)
+                recorded = hashes.get(code)
+                if isinstance(en, str) and recorded and recorded != content_hash(en):
+                    by = text_overrides.get(code)
+                    cause = (
+                        f"{by!r} re-registered its en text without claiming it"
+                        if by else "the en text changed after it was translated"
+                    )
+                    issues.append(CatalogIssue(
+                        "error", "stale", lang,
+                        f"{code!r} is owned by {pkg!r}, whose {lang} text was "
+                        f"translated from a different en than this registry "
+                        f"declares ({cause}) — move the wording to {pkg!r} "
+                        f"and retranslate, or claim the key (owner=) and "
+                        f"translate it",
                     ))
     return issues
 

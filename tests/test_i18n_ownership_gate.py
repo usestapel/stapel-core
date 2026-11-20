@@ -15,6 +15,8 @@ Two mechanisms, tested here:
 """
 import pytest
 
+from stapel_core.django.api import errors as core_errors
+
 from stapel_core.django.api.errors import (
     _GLOBAL_REGISTRY,
     _OWNER_REGISTRY,
@@ -352,6 +354,7 @@ def test_re_registering_a_core_key_moves_the_text_but_not_the_ownership():
         assert error_owner(key) == CORE_OWNER
     finally:
         _GLOBAL_REGISTRY[key] = before
+        core_errors._TEXT_OVERRIDES.pop(key, None)
 
 
 def test_first_registrant_owns_an_unclaimed_key():

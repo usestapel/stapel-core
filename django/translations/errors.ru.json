@@ -37,7 +37,7 @@
   "error.422.unprocessable_entity": "Невозможно обработать данные запроса",
   "error.423.locked": "Ресурс заблокирован",
   "error.423.verification_locked": "Слишком много неудачных попыток — подтверждение заблокировано",
-  "error.429.rate_limit": "Слишком много попыток. Повторите попытку через {retry_after_minutes} мин.",
+  "error.429.rate_limit": "Слишком много попыток. Повторите попытку через {retry_after_display} ({retry_after} с, около {retry_after_minutes} мин).",
   "error.429.too_many_requests": "Слишком много запросов. Пожалуйста, повторите попытку позже.",
   "error.500.internal": "Что-то пошло не так",
   "error.503.mandate_unavailable": "Не удалось проверить доступ к рабочему пространству"

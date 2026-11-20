@@ -1,4 +1,4 @@
-# stapel-core 0.98.1
+# stapel-core 0.99.0
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters, the serializer seam and thin-view base) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
@@ -212,7 +212,7 @@ Render `t(code, params)`; branch UX on the remediation. Localized text lives in 
 - error.422.unprocessable_entity [422] wait_and_retry
 - error.423.locked [423] wait_and_retry
 - error.423.verification_locked [423] wait_and_retry
-- error.429.rate_limit [429] wait_and_retry {retry_after_minutes}
+- error.429.rate_limit [429] wait_and_retry {retry_after_display,retry_after,retry_after_minutes}
 - error.429.too_many_requests [429] wait_and_retry
 - error.500.internal [500] contact_support
 - error.503.mandate_unavailable [503] retry

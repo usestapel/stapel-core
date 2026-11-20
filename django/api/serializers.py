@@ -96,7 +96,7 @@ class StapelDataclassSerializer(DataclassSerializer):
             # metadata example takes precedence
             if f.metadata and 'example' in f.metadata:
                 example_value[f.name] = f.metadata['example']
-            elif f.name in parsed['attributes'] and parsed['attributes'][f.name].get('example'):
+            elif 'example' in parsed['attributes'].get(f.name, {}):
                 example_value[f.name] = parsed['attributes'][f.name]['example']
         if example_value:
             _attach_example(cls, dc.__name__, example_value)
@@ -116,7 +116,7 @@ class StapelDataclassSerializer(DataclassSerializer):
             if name in fields:
                 if info.get('help_text'):
                     fields[name].help_text = info['help_text']
-                if info.get('example'):
+                if 'example' in info:
                     _set_field_example(fields[name], info['example'])
 
         # 1.5. A str field whose DEFAULT is the empty string must accept "".

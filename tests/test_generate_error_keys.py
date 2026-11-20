@@ -25,7 +25,8 @@ def test_writes_sorted_valid_artifact(tmp_path):
     codes = [e["code"] for e in entries]
     assert codes == sorted(codes)
     for e in entries:
-        assert set(e) == {"code", "status", "params", "remediation", "en", "owner"}
+        assert set(e) - {"param_types"} == {"code", "status", "params", "remediation", "en", "owner"}
+        assert set(e.get("param_types", {})) <= set(e["params"])
         assert e["owner"] is None or isinstance(e["owner"], str)
 
 

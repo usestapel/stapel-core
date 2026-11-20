@@ -11,8 +11,9 @@ a machine-readable ``remediation`` hint, the canonical English text, and the
 The registry is instance-scoped on purpose (a deployment's codes, like its
 schema paths); ``owner`` is what tells a consumer where each code's catalogs
 live. Emission refuses to write an artifact whose declared codes an owner's
-shipped language does not translate (``check_registry_catalog_pairing``) — the
-two halves of the contract cannot drift apart silently.
+shipped language does not translate, or translated from a different en than
+the instance declares (``check_registry_catalog_pairing``) — the two halves of
+the contract cannot drift apart silently.
 
 Source of truth is the in-process global registry (``register_service_errors``,
 the same map ``/error-keys/`` serves) — Django app loading imports every
@@ -86,8 +87,8 @@ class Command(BaseCommand):
         n_errors, _ = summarize(issues)
         if n_errors:
             raise CommandError(
-                f"{n_errors} declared error code(s) missing from their owner's "
-                f"shipped catalogs — errors.json not written"
+                f"{n_errors} declared error code(s) missing from, or stale in, "
+                f"their owner's shipped catalogs — errors.json not written"
             )
 
         out = Path(options["out"])

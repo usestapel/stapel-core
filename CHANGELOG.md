@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.99.0] — 2026-11-20
+
+Minor (pre-1.0: read the Changed list). No migration. Found by a native
+client's end-to-end run against a scaffolded backend.
+
+### Added — declared error params reach `errors.json`
+
+- `register_service_errors(..., param_types={code: {param: type}})`, types
+  `integer | number | string | boolean`. Declared names the en template does
+  not print are appended to the entry's `params`; the entry gains
+  `"param_types"` (only when declared — every other entry is byte-identical).
+  stapel-kmp's codegen already reads that field to type `params`.
+- `error.429.rate_limit` declares the three params `error_429_rate_limit`
+  builds: `retry_after` (integer seconds), `retry_after_display` (`M:SS`),
+  `retry_after_minutes` (integer, rounded up). `RETRY_PARAM_TYPES`,
+  `error_param_types()`.
+- `remediation` and `param_types` may name an already-registered key — a
+  hint for another package's key no longer needs a copy of its text.
+
+### Changed — the 429 template names all three params
+
+- `error.429.rate_limit` en is now "Too many attempts. Try again in
+  {retry_after_display} ({retry_after} s, about {retry_after_minutes} min).",
+  ru and es retranslated. A package that re-registered it with this wording
+  (stapel-auth 0.53.0) now repeats core's text exactly.
+
+### Fixed — a reworded key can no longer leave its owner's translations behind
+
+- Re-registering another package's key with a different en, without claiming
+  it, served the new en next to translations made from the old one, and no
+  gate saw it: the owner's catalog gate runs where only the owner's text is
+  registered, the rewording package's gate checks only the keys it owns.
+  `check_registry_catalog_pairing` (run by `generate_error_keys` at every
+  emission) now compares each owner's `.state.json` source hash with the en
+  the instance declares: **E `stale`**, naming the package that reworded it
+  (`error_text_overrides()`). A library that rewords a core key without
+  claiming it now fails its own contract emission — move the wording to the
+  owner, or claim the key (`owner=`) and translate it.
+- New `stapel_core.i18n.owner_source_hashes(owner, domain, language)`.
+
+### Fixed — falsy docstring examples reach the schema
+
+- `Example: 0`, `Example: false`, `Example: ""` in a DTO's `Attributes:`
+  section were dropped (a truthiness test) from both the field `example` and
+  the component's attached example, so contract examples missed required
+  fields. Presence now decides. `tests/test_docstring_falsy_examples.py`.
+
 ## [0.98.1] — 2026-11-19
 
 Patch. No consumer edit.

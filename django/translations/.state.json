@@ -153,8 +153,8 @@
       "origin": "seed:stapel-builtin"
     },
     "error.429.rate_limit": {
-      "hash": "4c27e391f537df96",
-      "origin": "seed:stapel-builtin"
+      "hash": "d13a0ec40649c74b",
+      "origin": "llm"
     },
     "error.429.too_many_requests": {
       "hash": "65e299e97186b8cd",
@@ -323,8 +323,8 @@
       "origin": "seed:stapel-builtin"
     },
     "error.429.rate_limit": {
-      "hash": "4c27e391f537df96",
-      "origin": "seed:stapel-builtin"
+      "hash": "d13a0ec40649c74b",
+      "origin": "llm"
     },
     "error.429.too_many_requests": {
       "hash": "65e299e97186b8cd",
