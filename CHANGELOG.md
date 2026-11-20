@@ -14,7 +14,9 @@ Patch. No migration.
   The declaration rewrites the operation's `security` in every profile — the
   session alternatives unless `session=False`, one requirement per
   credential, `{}` only with `anonymous=True` — and registers each scheme in
-  `components.securitySchemes`. Operations without it are unchanged.
+  `components.securitySchemes`. Operations without it are unchanged. A
+  scheme may be a callable resolved at emission (a cookie name the
+  deployment configures).
 
 ## [0.99.4] — 2026-11-20
 

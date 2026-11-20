@@ -154,10 +154,15 @@ def raises(*codes: str) -> Callable:
 class Credential:
     """A credential an operation checks in its own body: ``name`` is the
     ``components.securitySchemes`` key, ``scheme`` the OpenAPI security scheme
-    object (``{"type": "apiKey", "in": "header", "name": "X-Closure-Token"}``)."""
+    object (``{"type": "apiKey", "in": "header", "name": "X-Closure-Token"}``)
+    or a zero-argument callable returning it at emission, for a scheme that
+    names something the deployment configures (a cookie name in settings)."""
 
     name: str
-    scheme: dict
+    scheme: Any
+
+    def definition(self) -> dict:
+        return dict(self.scheme() if callable(self.scheme) else self.scheme)
 
 
 def accepts_credentials(
@@ -214,7 +219,7 @@ def apply_credentials(auto_schema, auths: list, declaration: dict) -> list:
                 name=credential.name,
                 type=ResolvedComponent.SECURITY_SCHEMA,
                 object=credential.name,
-                schema=dict(credential.scheme),
+                schema=credential.definition(),
             )
         )
         requirement = {credential.name: []}

@@ -462,3 +462,20 @@ def test_class_level_declaration_keeps_the_anonymous_alternative():
 def test_accepts_credentials_rejects_a_bare_scheme():
     with pytest.raises(TypeError):
         accepts_credentials({"type": "apiKey"})
+
+
+def test_a_callable_scheme_is_resolved_at_emission():
+    names = iter(["first_cookie", "second_cookie"])
+    lazy = Credential("LazyCookieAuth", lambda: {"type": "apiKey", "in": "cookie", "name": next(names)})
+
+    class LazyView(_Base):
+        permission_classes = [permissions.AllowAny]
+
+        @extend_schema(responses={200: OutSerializer})
+        @accepts_credentials(lazy, session=False)
+        def get(self, request):
+            return StapelResponse({"ok": True})
+
+    first = _schema(LazyView, 2)["components"]["securitySchemes"]["LazyCookieAuth"]["name"]
+    second = _schema(LazyView, 2)["components"]["securitySchemes"]["LazyCookieAuth"]["name"]
+    assert (first, second) == ("first_cookie", "second_cookie")
