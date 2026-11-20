@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.99.2] — 2026-11-20
+
+Patch. No migration.
+
+### Fixed — a paginated list's example documents a page
+
+- Every envelope property of `AnchorPagination` (`next_anchor`,
+  `prev_anchor`, `has_next`, `has_prev`, `count`) and `RevisionPagination`
+  (`pagination.*`, `revisions.*`) carries an `example`. drf-spectacular wraps
+  an item example of a paginated list into the envelope only when it can read
+  one per property; without them it fell back to the bare item, and the
+  operation documented a page that failed its own schema. A subclass that
+  adds an envelope property gives it an `example` too. `Paginated*`
+  components gain these examples — regenerate committed schemas.
+
 ## [0.99.1] — 2026-11-20
 
 Patch. No migration.

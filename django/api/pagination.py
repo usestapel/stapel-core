@@ -329,10 +329,12 @@ class AnchorPagination(BasePagination):
                 'type': self.anchor_type,
                 'nullable': True,
                 'description': description,
+                'example': None,
             }
         return {
             'oneOf': [{'type': 'string'}, {'type': 'integer'}],
             'nullable': True,
+            'example': None,
             'description': (
                 f'{description}. The raw value of the ordering field: a string '
                 'for a datetime anchor, an integer for a sequence one. Set '
@@ -343,6 +345,11 @@ class AnchorPagination(BasePagination):
     def get_paginated_response_schema(self, schema: Dict) -> Dict:
         """
         Return OpenAPI schema for paginated response.
+
+        Every envelope property but ``items`` carries an ``example`` (a page
+        holding the one example item): drf-spectacular wraps an item example
+        of a paginated list into this envelope only when it can read one per
+        property, and otherwise documents the bare item as the page.
         """
         return {
             'type': 'object',
@@ -353,14 +360,17 @@ class AnchorPagination(BasePagination):
                 'has_next': {
                     'type': 'boolean',
                     'description': 'Whether there are more items after this page',
+                    'example': False,
                 },
                 'has_prev': {
                     'type': 'boolean',
                     'description': 'Whether there are items before this page',
+                    'example': False,
                 },
                 'count': {
                     'type': 'integer',
                     'description': 'Number of items in current page',
+                    'example': 1,
                 },
             },
             'required': ['items', 'has_next', 'has_prev', 'count'],
