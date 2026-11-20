@@ -138,6 +138,10 @@
     {
       "select": "functions",
       "path": "django/monitoring/version.py"
+    },
+    {
+      "select": "functions",
+      "path": "background.py"
     }
   ],
   "surface": {
@@ -381,6 +385,13 @@
     },
     "build_info": {
       "intent": "The image identity a Python process cannot derive for itself — commit, image name/tag, build time — from the STAPEL_GIT_SHA / STAPEL_IMAGE_* / STAPEL_BUILD_TIME env the deployment stamps. Unset reports null, never a stale plausible value.",
+      "kind": "factory"
+    },
+    "background_task": {
+      "intent": "Declare a library's background job once: a celery task under a stable name when celery is installed, an inline callable (delay/apply_async run it now) when it is not. Reach for it instead of a hard celery dependency or a hand-written try/except-import shim in each brick.",
+      "instead_of": [
+        "celery.shared_task"
+      ],
       "kind": "factory"
     }
   },

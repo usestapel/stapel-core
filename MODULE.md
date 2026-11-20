@@ -1522,6 +1522,11 @@ of which snapshot it at import time — without that the setting is decorative
 for any project that star-imports `stapel_core.django.settings`. A genuinely
 public API sets `STAPEL_PUBLIC_API_SCHEMA=True`.
 
+Profile 2 (`contract.py`) binds error codes per operation from a static walk.
+Reaching DRF's generic lookup (`GenericAPIView.get_object`, the retrieve /
+update / destroy mixins, `get_object_or_404`) binds `error.404.not_found`;
+modules do not declare it with `@raises`.
+
 ### Captcha backends & challenge policy — `STAPEL_CAPTCHA` (`captcha/`)
 
 | Key | Default | Semantics | What it customizes |
@@ -3368,6 +3373,16 @@ a declaration, not a proof); re-parenting done by a raw SQL migration or a
 signal rather than an action subscriber; an app that holds per-user rows and
 subscribes to *neither* event — nothing in the registry makes that app
 discoverable, and inventing one would mean guessing which FK is "a user".
+
+### Celery-optional jobs — `@background_task` (`background.py`)
+
+A library's background job (thumbnails, exports, sweeps) is declared with
+`@background_task(name=None, **options)`: a celery `shared_task` under
+`<module>.<function>` (or *name*) when celery is importable, an `InlineTask`
+whose `delay`/`apply_async` run the function in the calling process
+otherwise. Libraries keep celery as an optional extra and never write their
+own import shim; `bind=True` works in both faces (inline `self.retry(exc=)`
+raises `exc`).
 
 ### A worker must consume its own default queue — `django/celery_consumer_guard.py`
 

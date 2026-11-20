@@ -53,6 +53,7 @@ LAYERS: dict[str, int] = {
     # L1 kernel
     "<root>": L1,
     "access": L1,
+    "background": L1,
     "bus": L1,
     "comm": L1,
     "core": L1,

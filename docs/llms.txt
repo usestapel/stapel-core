@@ -1,8 +1,8 @@
-# stapel-core 0.99.2
+# stapel-core 0.99.3
 
 The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters, the serializer seam and thin-view base) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.
 
-Contract: surface 57 · extension points 18 · error codes 43.
+Contract: surface 58 · extension points 18 · error codes 43.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Usage surface — call these before writing your own
@@ -86,6 +86,9 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 - unapplied_migrations — stapel_core.django.monitoring.schema_health.unapplied_migrations
   Migrations on disk the database has not applied — the same definition as `manage.py migrate --check`, deliberately, so the boot gate, the deploy gate and the health probe cannot disagree about what 'behind' means. Use it in a management command or a boot gate; do not re-derive the migration plan yourself.
 ### factory
+- background_task — stapel_core.background.background_task
+  instead of: celery.shared_task
+  Declare a library's background job once: a celery task under a stable name when celery is installed, an inline callable (delay/apply_async run it now) when it is not. Reach for it instead of a hard celery dependency or a hand-written try/except-import shim in each brick.
 - build_info — stapel_core.django.monitoring.version.build_info
   The image identity a Python process cannot derive for itself — commit, image name/tag, build time — from the STAPEL_GIT_SHA / STAPEL_IMAGE_* / STAPEL_BUILD_TIME env the deployment stamps. Unset reports null, never a stale plausible value.
 - continue_trace — stapel_core.observability.context.continue_trace

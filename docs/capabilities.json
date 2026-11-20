@@ -1,6 +1,6 @@
 {
   "module": "stapel-core",
-  "version": "0.99.2",
+  "version": "0.99.3",
   "provides": "The Django substrate every Stapel module sits on: comm (Action/Function/Task/Signal/Projection inter-module communication over a transactional outbox), the transport-agnostic bus, AppSettings namespaces, step-up verification, self-documenting flows, i18n catalogs, the media/netintel/eventstore/captcha/secrets seams, the privilege gateway, the staff mandate, DRF API conventions (StapelResponse, error registry, permission classes, presenters, the serializer seam and thin-view base) and the URL-mount + cross-service navigation registries. No HTTP surface of its own worth cataloguing and no CTO-facing feature axes — the core is what the feature modules are made of.",
   "axes": [],
   "extension_points": [
@@ -101,6 +101,15 @@
       "kind": "template",
       "path": "django/templates/admin/base_site.html",
       "intent": "The admin shell that renders the cross-service navigation: STAPEL_SERVICES, the NAV_LINKS sections and the introspection-gated Swagger link. A project that ships its own admin/base_site.html instead of extending this one silently loses all three and gets no error — override blocks, do not replace the file."
+    },
+    {
+      "name": "background_task",
+      "kind": "factory",
+      "path": "stapel_core.background.background_task",
+      "intent": "Declare a library's background job once: a celery task under a stable name when celery is installed, an inline callable (delay/apply_async run it now) when it is not. Reach for it instead of a hard celery dependency or a hand-written try/except-import shim in each brick.",
+      "instead_of": [
+        "celery.shared_task"
+      ]
     },
     {
       "name": "HasWorkspaceMandate",

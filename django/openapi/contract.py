@@ -222,6 +222,34 @@ def _code_status(code: str) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+#: What core's exception handler answers Django's ``Http404`` with.
+GENERIC_NOT_FOUND_CODE = "error.404.not_found"
+
+
+@functools.lru_cache(maxsize=1)
+def _generic_not_found_functions() -> frozenset:
+    """Framework callables that raise ``Http404`` through the generic lookup.
+
+    The walker does not read DRF or Django, so it cannot see that
+    ``GenericAPIView.get_object`` (and every mixin handler that calls it)
+    ends in ``get_object_or_404``. Reaching one of these is reaching
+    :data:`GENERIC_NOT_FOUND_CODE`.
+    """
+    from django import shortcuts
+    from rest_framework import generics, mixins
+
+    candidates = [
+        shortcuts.get_object_or_404,
+        generics.get_object_or_404,
+        generics.GenericAPIView.get_object,
+        mixins.RetrieveModelMixin.retrieve,
+        mixins.UpdateModelMixin.update,
+        mixins.UpdateModelMixin.partial_update,
+        mixins.DestroyModelMixin.destroy,
+    ]
+    return frozenset(getattr(f, "__code__", None) for f in candidates) - {None}
+
+
 class _CodeWalker:
     """Collect error-code strings reachable from a set of callables.
 
@@ -265,6 +293,9 @@ class _CodeWalker:
             return
         self._seen.add(key)
         self._collect_declared(func)
+        if func.__code__ in _generic_not_found_functions():
+            self._see_value(GENERIC_NOT_FOUND_CODE)
+            return
         # A decorator wrapper lives in its decorator's module, which may be
         # outside the allowed set; its closure still leads to the handler.
         for cell_value in self._closure(func).values():
@@ -431,6 +462,14 @@ class _CodeWalker:
                 found, obj = self._resolve_name(base.id, func, local_imports)
                 if not found:
                     return False, None, None
+        elif (
+            isinstance(base, ast.Call)
+            and isinstance(base.func, ast.Name)
+            and base.func.id == "super"
+            and not base.args
+        ):
+            # ``super().method`` — the next definition after *func*'s class.
+            return self._resolve_super(chain, func, owner)
         elif isinstance(base, ast.Call) and isinstance(base.func, ast.Name):
             # ``Service().method`` — follow the class's method.
             found, obj = self._resolve_name(base.func.id, func, local_imports)
@@ -448,6 +487,22 @@ class _CodeWalker:
             except AttributeError:
                 return False, None, None
         return True, obj, holder
+
+    @staticmethod
+    def _resolve_super(chain: list[str], func, owner: Optional[type]):
+        if owner is None or len(chain) != 1:
+            return False, None, None
+        mro = owner.__mro__
+        for index, klass in enumerate(mro):
+            defined = vars(klass).values()
+            if any(getattr(v, "__code__", None) is func.__code__ for v in defined):
+                break
+        else:
+            return False, None, None
+        for klass in mro[index + 1:]:
+            if chain[0] in vars(klass):
+                return True, vars(klass)[chain[0]], owner
+        return False, None, None
 
     def _follow(self, value: Any, owner: Optional[type] = None) -> None:
         if isinstance(value, str):

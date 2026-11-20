@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.99.3] — 2026-11-20
+
+Patch. No migration.
+
+### Added — `stapel_core.background`: celery optional for a library's jobs
+
+- `@background_task(name=None, **options)` declares a background job once:
+  `celery.shared_task(name=..., **options)` when celery is importable, an
+  `InlineTask` otherwise, whose `delay`/`apply_async`/call run the function
+  in the calling process and return its result. The default name is
+  `<module>.<function>`, the name celery gives the task, so adopting the
+  decorator renames nothing. Inline, routing and retry options are ignored;
+  `bind=True` passes the `InlineTask` as `self` and `self.retry(exc=...)`
+  raises `exc` to the caller. Bricks drop their own copies of this shim.
+
+### Fixed — profile 2 binds `error.404.not_found` on the generic lookup
+
+- The error-code walker does not read DRF, so an operation that reaches
+  `GenericAPIView.get_object` (retrieve, update, partial update, destroy, a
+  detail action calling `self.get_object()`, an override calling
+  `super().get_object()`) or `get_object_or_404` had no 404 in its contract
+  unless the module declared `@raises(ERR_404_NOT_FOUND)` by hand. Reaching
+  one of those framework callables now binds `error.404.not_found`, the code
+  core's exception handler answers `Http404` with; collection operations
+  stay unbound. Profile-2 schemas of modules with detail views gain the 404 —
+  regenerate committed `schema.v2.json`.
+
 ## [0.99.2] — 2026-11-20
 
 Patch. No migration.
